@@ -1,0 +1,78 @@
+# Deno Code Interpreter Project Instructions
+
+## Project Overview
+
+This project aims to create a Deno-based code interpreter that mimics the behavior of a Jupyter kernel. It consists of:
+
+1. A kernel manager running in Deno
+2. Direct integration with Pyodide (no WebWorkers)
+3. An event bus interface for communication
+
+## Key Components
+
+### Event Bus
+- Use EventEmitter2 from https://github.com/EventEmitter2/EventEmitter2
+- This replaces the IOPub mechanism of Jupyter kernels
+- Will emit execution results, errors, and display data
+
+### Main Interface
+- Implement a simple interface with an `execute` function
+- Connect the event bus for result communication
+- Handle Pyodide initialization and execution directly
+
+### Pyodide Integration
+- Based on the PyodideKernel from JupyterLite
+- Reference implementation: `resources/pyodide-kernel-main/packages/pyodide-kernel/src/worker.ts`
+- Adapt the implementation to Deno format instead of Node.js
+- Include all necessary Pyodide initialization steps
+- Run Pyodide in the same context as the kernel manager
+
+## Implementation Guidelines
+
+### Pyodide Initialization
+- Follow the pattern from `deno-demo-fs-asgi.js` for loading Pyodide
+- Don't use `indexUrl` and other Node-specific settings
+- Example:
+  ```javascript
+  import pyodideModule from "npm:pyodide/pyodide.js";
+  const pyodide = await pyodideModule.loadPyodide();
+  ```
+
+### Package Installation
+- Install the same packages as the original PyodideKernel:
+  - ssl
+  - sqlite3
+  - ipykernel
+  - comm
+  - pyodide_kernel
+  - jedi
+  - ipython
+
+### Callback Setup
+- Set up all necessary callbacks for:
+  - Execution results
+  - Stream output (stdout/stderr)
+  - Display data
+  - Error handling
+  - Input requests
+
+### Code Execution
+- Implement the execute function to run Python code directly with Pyodide
+- Return results through the event bus
+- Handle execution errors properly
+
+### Simplified Architecture
+- Run Pyodide in the main thread instead of using workers
+- Use a synchronous execution model
+- Consider implementing a queue for code execution if needed
+- Use event bus to emit results back to clients
+
+## File Structure
+- `src/kernel.ts`: Main kernel interface with Pyodide integration
+- `src/events.ts`: Event bus implementation
+- `mod.ts`: Main entry point exposing the public API
+
+## Conversion Notes
+- Replace Node.js imports with Deno equivalents
+- Adapt file system operations to work with Deno's sandbox
+- To find the latest document for deno or other libraries, try to use context7 mcp tool
