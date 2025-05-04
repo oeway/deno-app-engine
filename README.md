@@ -1,135 +1,73 @@
 # Deno Code Interpreter
 
-A Deno-based code interpreter that mimics the behavior of a Jupyter kernel, providing a lightweight and browser-compatible Python execution environment using Pyodide.
+A Deno-based Python code interpreter using Pyodide, designed to mimic the behavior of a Jupyter kernel.
 
-## Overview
+## Features
 
-This project implements a code interpreter that runs Python code in the browser using Deno and Pyodide. It follows a similar architecture to Jupyter kernels but is designed to be more lightweight and browser-native.
-
-### Key Features
-
-- **Deno-based Kernel Manager**: Runs in Deno and manages worker instances
-- **Pyodide Workers**: Spawns WebWorkers running Pyodide for code execution
-- **Event-based Communication**: Uses EventEmitter for message passing
-- **Jupyter-compatible**: Follows similar patterns to Jupyter kernels
-- **Browser-native**: Designed to run entirely in the browser
+- Direct integration with Pyodide (no WebWorkers)
+- Event-based communication interface
+- Support for Python code execution with state preservation
+- Error handling and display of execution results
+- Similar architecture to Jupyter kernels but simplified
 
 ## Architecture
 
-### Components
+The code interpreter consists of the following components:
 
-1. **Kernel Manager**
-   - Manages worker lifecycle
-   - Handles communication between client and workers
-   - Implements EventEmitter for event handling
-
-2. **Worker Interface**
-   - Simple execution interface with `execute()` function
-   - Event bus for output streaming (replacement for Jupyter's IOPub)
-   - Based on Pyodide kernel implementation from JupyterLite
-
-3. **Event System**
-   - Uses EventEmitter for message passing
-   - Replaces Jupyter's IOPub system
-   - Handles:
-     - Code execution status
-     - Output streams (stdout/stderr)
-     - Display data
-     - Execution results
-
-### Core Interfaces
-
-```typescript
-interface ICodeInterpreter {
-  execute(code: string): Promise<ExecutionResult>;
-  // Event emitter interface inherited from EventEmitter
-}
-
-interface ExecutionResult {
-  status: 'ok' | 'error';
-  execution_count: number;
-  data?: any;
-  error?: {
-    ename: string;
-    evalue: string;
-    traceback: string[];
-  };
-}
-```
-
-## Implementation Details
-
-### Worker Setup
-
-The worker implementation follows JupyterLite's Pyodide kernel setup:
-
-1. **Pyodide Initialization**
-   - Loads Pyodide directly from npm
-   - Sets up required Python packages:
-     - ipykernel
-     - comm
-     - pyodide_kernel
-     - jedi
-     - ipython
-
-2. **Callback System**
-   - Implements display callbacks
-   - Handles input requests
-   - Manages comm messages
-
-3. **Event Communication**
-   - Uses EventEmitter for all message passing
-   - Standardized event format for consistency
+1. **Kernel Manager**: Handles the initialization and execution of Python code
+2. **Event Bus**: Uses EventEmitter for communicating execution results
+3. **Pyodide Integration**: Direct integration with Pyodide in the main thread
 
 ## Usage
 
-```javascript
-import { CodeInterpreter } from './code-interpreter.ts';
+```typescript
+import { kernel } from "./mod.ts";
 
-const interpreter = new CodeInterpreter();
+// Initialize the kernel
+await kernel.initialize();
 
-// Execute code
-const result = await interpreter.execute('print("Hello World")');
+// Execute Python code
+const result = await kernel.execute(`
+import numpy as np
+x = np.array([1, 2, 3])
+print(f"Array: {x}")
+`);
 
-// Listen for outputs
-interpreter.on('output', (data) => {
-  console.log('Output:', data);
+// Check execution status
+console.log("Execution success:", result.success);
+
+// Listen for output events
+kernel.on("stream", (data) => {
+  console.log(`${data.name}: ${data.text}`);
 });
 
-// Listen for errors
-interpreter.on('error', (error) => {
-  console.error('Error:', error);
-});
+// Execute more code with the same state
+await kernel.execute(`
+y = x * 2
+print(f"Array * 2 = {y}")
+`);
 ```
 
-## Development
+## Events
 
-### Key Files
+The kernel emits the following events:
 
-- `kernel-manager.ts`: Main kernel manager implementation
-- `worker.ts`: Pyodide worker implementation
-- `event-bus.ts`: Event system implementation
-- `types.ts`: TypeScript type definitions
+- `stream`: Standard output and error streams
+- `execute_result`: Results from code execution
+- `execute_error`: Errors from code execution
+- `display_data`: Rich display data (e.g., plots, HTML, etc.)
+- `input_request`: Requests for user input
 
-### Dependencies
+## Running the Tests
 
-- Deno
-- Pyodide
-- EventEmitter
+```bash
+deno test --allow-all main_test.ts
+```
 
-## Comparison with JupyterLite
+## Requirements
 
-This implementation is inspired by JupyterLite's Pyodide kernel but with key differences:
+- Deno 1.40 or higher
 
-1. **Platform**: Deno-based instead of Node.js
-2. **Communication**: EventEmitter instead of Jupyter's messaging protocol
-3. **Scope**: Focused on code execution rather than full notebook support
-4. **Dependencies**: Simplified dependency management using Deno
+## License
 
-## Future Improvements
-
-- Add support for magic commands
-- Implement variable inspection
-- Add code completion support
-- Support for interactive widgets
-- Add streaming output support
+MIT

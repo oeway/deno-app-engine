@@ -1,13 +1,4 @@
-// Main entry point for the Deno Code Interpreter
-// Exports the public API for the kernel
+// Main export file for the Deno Pyodide kernel
 
-import { kernel, Kernel, KernelEvents } from "./kernel/index.ts";
-
-export {
-  kernel,
-  Kernel,
-  KernelEvents
-};
-
-// Re-export the singleton kernel as default
-export default kernel; 
+// Re-export everything from the kernel implementation
+export * from "./kernel/index.ts"; 
