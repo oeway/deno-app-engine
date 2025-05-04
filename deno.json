@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "lib": ["deno.ns", "dom"],
+    "strict": true
+  },
+  "imports": {
+    "pyodide": "npm:pyodide/pyodide.js",
+    "std/": "https://deno.land/std@0.217.0/",
+    "node:events": "node:events"
+  },
+  "tasks": {
+    "dev": "deno run --watch main.ts",
+    "test": "deno test --allow-net --allow-read kernel/test.ts"
+  },
+  "nodeModulesDir": "auto"
+}
