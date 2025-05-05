@@ -38,7 +38,6 @@ type ListenerWrapper = {
  */
 export class KernelManager extends EventEmitter {
   private kernels: Map<string, IKernelInstance> = new Map();
-  private nextId = 1;
   // Track listeners for each kernel to enable individual removal
   private listeners: Map<string, Map<string, Map<Function, ListenerWrapper>>> = new Map();
   
@@ -54,7 +53,7 @@ export class KernelManager extends EventEmitter {
    * @returns Promise resolving to the kernel instance ID
    */
   public async createKernel(options: IKernelOptions = {}): Promise<string> {
-    const id = options.id || `kernel-${this.nextId++}`;
+    const id = options.id || crypto.randomUUID();
     const mode = options.mode || KernelMode.WORKER;
     
     // Check if kernel with this ID already exists
@@ -359,5 +358,22 @@ export class KernelManager extends EventEmitter {
     
     // Clear the kernel's listener map
     this.listeners.delete(kernelId);
+  }
+  
+  /**
+   * Get all listeners for a specific kernel and event type
+   * @param kernelId Kernel ID
+   * @param eventType Event type
+   * @returns Array of listeners
+   */
+  public getListeners(kernelId: string, eventType: KernelEvents): ((data: any) => void)[] {
+    const kernelMap = this.listeners.get(kernelId);
+    if (!kernelMap) return [];
+    
+    const eventMap = kernelMap.get(eventType);
+    if (!eventMap) return [];
+    
+    // Return all original listeners (not wrapped)
+    return Array.from(eventMap.values()).map(wrapper => wrapper.original);
   }
 } 

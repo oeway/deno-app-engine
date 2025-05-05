@@ -188,9 +188,10 @@ Deno.test({
     assert(id1 !== id2, "Auto-generated IDs should be different");
     
     // Verify they follow the expected pattern
-    assert(id1.startsWith("kernel-"), "ID should start with 'kernel-'");
-    assert(id2.startsWith("kernel-"), "ID should start with 'kernel-'");
-    
+    // Both should be UUIDs, with - in the middle
+    assert(id1.includes("-"), "ID should contain '-'");
+    assert(id2.includes("-"), "ID should contain '-'");
+
     // Clean up
     await manager.destroyKernel(id1);
     await manager.destroyKernel(id2);

@@ -32,6 +32,7 @@ export enum KernelEvents {
 export interface IKernel extends EventEmitter {
   initialize(): Promise<void>;
   execute(code: string, parent?: any): Promise<{ success: boolean, result?: any, error?: Error }>;
+  executeStream(code: string, parent?: any): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void>;
   isInitialized(): boolean;
   inputReply(content: { value: string }): Promise<void>;
   
@@ -655,5 +656,181 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
     );
     
     return this.formatResult(res);
+  }
+
+  /**
+   * Execute Python code with streaming output
+   * @param code The Python code to execute
+   * @param parent Parent message header
+   * @returns AsyncGenerator yielding intermediate outputs and finally the execution result
+   */
+  public async* executeStream(code: string, parent: any = {}): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void> {
+    await this.setup(parent);
+
+    try {
+      // Increment execution count
+      this.executionCount++;
+      
+      // Setup queue for storing events
+      const streamQueue: any[] = [];
+      let executionComplete = false;
+      let executionError: any = null;
+      
+      // Set up event listeners for all event types
+      const listeners = new Map<string, (...args: any[]) => void>();
+      
+      const addListener = (event: string, handler: (...args: any[]) => void) => {
+        listeners.set(event, handler);
+        super.on(event, handler);
+      };
+      
+      // Stream output (stdout/stderr)
+      addListener(KernelEvents.STREAM, (data) => {
+        console.log("Received stream event:", data);
+        streamQueue.push({ type: KernelEvents.STREAM, data });
+      });
+      
+      // Display data
+      addListener(KernelEvents.DISPLAY_DATA, (data) => {
+        console.log("Received display data event");
+        streamQueue.push({ type: KernelEvents.DISPLAY_DATA, data });
+      });
+      
+      // Update display data
+      addListener(KernelEvents.UPDATE_DISPLAY_DATA, (data) => {
+        console.log("Received update display data event");
+        streamQueue.push({ type: KernelEvents.UPDATE_DISPLAY_DATA, data });
+      });
+      
+      // Execution result
+      addListener(KernelEvents.EXECUTE_RESULT, (data) => {
+        console.log("Received execute result event");
+        streamQueue.push({ type: KernelEvents.EXECUTE_RESULT, data });
+      });
+      
+      // Execution error
+      addListener(KernelEvents.EXECUTE_ERROR, (data) => {
+        console.log("Received execute error event:", data);
+        streamQueue.push({ type: KernelEvents.EXECUTE_ERROR, data });
+        executionError = data;
+      });
+      
+      // Clear output
+      addListener(KernelEvents.CLEAR_OUTPUT, (data) => {
+        console.log("Received clear output event");
+        streamQueue.push({ type: KernelEvents.CLEAR_OUTPUT, data });
+      });
+      
+      // Input request
+      addListener(KernelEvents.INPUT_REQUEST, (data) => {
+        console.log("Received input request event:", data);
+        streamQueue.push({ type: KernelEvents.INPUT_REQUEST, data });
+      });
+      
+      // Comm open
+      addListener(KernelEvents.COMM_OPEN, (data) => {
+        console.log("Received comm open event");
+        streamQueue.push({ type: KernelEvents.COMM_OPEN, data });
+      });
+      
+      // Comm message
+      addListener(KernelEvents.COMM_MSG, (data) => {
+        console.log("Received comm msg event");
+        streamQueue.push({ type: KernelEvents.COMM_MSG, data });
+      });
+      
+      // Comm close
+      addListener(KernelEvents.COMM_CLOSE, (data) => {
+        console.log("Received comm close event");
+        streamQueue.push({ type: KernelEvents.COMM_CLOSE, data });
+      });
+
+      // Execute the code using the kernel's run method
+      console.log("Starting execution of code:", code);
+      const executionPromise = this._kernel.run(code);
+
+      // Create a promise that resolves when execution is done
+      const finalResultPromise = executionPromise.then((res: any) => {
+        console.log("Execution completed");
+        executionComplete = true;
+        return this.formatResult(res);
+      }).catch((err: any) => {
+        console.log("Execution failed with error:", err);
+        executionComplete = true;
+        return { status: 'error', error: err };
+      });
+      
+      // Monitor the stream queue and yield results
+      let yieldCount = 0;
+      const startTime = Date.now();
+      const timeout = 10000; // 10 second timeout
+      
+      while ((!executionComplete || streamQueue.length > 0) && 
+             (Date.now() - startTime < timeout)) {
+        // If there are items in the queue, yield them
+        if (streamQueue.length > 0) {
+          const event = streamQueue.shift();
+          console.log(`Yielding event ${yieldCount++}:`, event.type);
+          yield event;
+          continue;
+        }
+        
+        // If no more events but execution is not complete, wait a little
+        if (!executionComplete) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      }
+      
+      // Handle timeout
+      if (!executionComplete && Date.now() - startTime >= timeout) {
+        console.log("Execution timed out");
+        executionComplete = true;
+      }
+      
+      // Clean up all listeners
+      listeners.forEach((handler, event) => {
+        super.removeListener(event, handler);
+      });
+      
+      console.log("All events yielded, waiting for final result");
+      
+      try {
+        // Get the final result
+        const results = await finalResultPromise;
+        console.log("Final result:", results);
+        
+        // If we had an error during execution, return that
+        if (executionError) {
+          return {
+            success: false,
+            error: new Error(`${executionError.ename}: ${executionError.evalue}`),
+            result: executionError
+          };
+        }
+        
+        // Otherwise check the result status
+        if (results['status'] === 'error') {
+          return {
+            success: false,
+            error: new Error(`${results['ename'] || 'Error'}: ${results['evalue'] || 'Unknown error'}`),
+            result: results
+          };
+        }
+        
+        return { success: true, result: results };
+      } catch (err) {
+        console.error("Error getting final result:", err);
+        return { 
+          success: false, 
+          error: err instanceof Error ? err : new Error(String(err)) 
+        };
+      }
+    } catch (error) {
+      console.error("Error executing code with streaming:", error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error : new Error(String(error)) 
+      };
+    }
   }
 }
