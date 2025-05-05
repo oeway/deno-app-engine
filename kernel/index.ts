@@ -679,70 +679,24 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
       // Set up event listeners for all event types
       const listeners = new Map<string, (...args: any[]) => void>();
       
-      const addListener = (event: string, handler: (...args: any[]) => void) => {
-        listeners.set(event, handler);
-        super.on(event, handler);
+      // Create a single event handler for all kernel events
+      const handleEvent = (eventType: string) => {
+        return (data: any) => {
+          console.log(`Received ${eventType} event`, eventType === KernelEvents.EXECUTE_ERROR ? `: ${data}` : '');
+          streamQueue.push({ type: eventType, data });
+          
+          // Special handling for errors
+          if (eventType === KernelEvents.EXECUTE_ERROR) {
+            executionError = data;
+          }
+        };
       };
       
-      // Stream output (stdout/stderr)
-      addListener(KernelEvents.STREAM, (data) => {
-        console.log("Received stream event:", data);
-        streamQueue.push({ type: KernelEvents.STREAM, data });
-      });
-      
-      // Display data
-      addListener(KernelEvents.DISPLAY_DATA, (data) => {
-        console.log("Received display data event");
-        streamQueue.push({ type: KernelEvents.DISPLAY_DATA, data });
-      });
-      
-      // Update display data
-      addListener(KernelEvents.UPDATE_DISPLAY_DATA, (data) => {
-        console.log("Received update display data event");
-        streamQueue.push({ type: KernelEvents.UPDATE_DISPLAY_DATA, data });
-      });
-      
-      // Execution result
-      addListener(KernelEvents.EXECUTE_RESULT, (data) => {
-        console.log("Received execute result event");
-        streamQueue.push({ type: KernelEvents.EXECUTE_RESULT, data });
-      });
-      
-      // Execution error
-      addListener(KernelEvents.EXECUTE_ERROR, (data) => {
-        console.log("Received execute error event:", data);
-        streamQueue.push({ type: KernelEvents.EXECUTE_ERROR, data });
-        executionError = data;
-      });
-      
-      // Clear output
-      addListener(KernelEvents.CLEAR_OUTPUT, (data) => {
-        console.log("Received clear output event");
-        streamQueue.push({ type: KernelEvents.CLEAR_OUTPUT, data });
-      });
-      
-      // Input request
-      addListener(KernelEvents.INPUT_REQUEST, (data) => {
-        console.log("Received input request event:", data);
-        streamQueue.push({ type: KernelEvents.INPUT_REQUEST, data });
-      });
-      
-      // Comm open
-      addListener(KernelEvents.COMM_OPEN, (data) => {
-        console.log("Received comm open event");
-        streamQueue.push({ type: KernelEvents.COMM_OPEN, data });
-      });
-      
-      // Comm message
-      addListener(KernelEvents.COMM_MSG, (data) => {
-        console.log("Received comm msg event");
-        streamQueue.push({ type: KernelEvents.COMM_MSG, data });
-      });
-      
-      // Comm close
-      addListener(KernelEvents.COMM_CLOSE, (data) => {
-        console.log("Received comm close event");
-        streamQueue.push({ type: KernelEvents.COMM_CLOSE, data });
+      // Register the handler for all event types
+      Object.values(KernelEvents).forEach(eventType => {
+        const handler = handleEvent(eventType);
+        listeners.set(eventType, handler);
+        super.on(eventType, handler);
       });
 
       // Execute the code using the kernel's run method
