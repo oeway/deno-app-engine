@@ -957,6 +957,3 @@ except Exception as e:
 `);
   }
 }
-
-// Export a singleton instance
-export const kernel = new Kernel(); 
