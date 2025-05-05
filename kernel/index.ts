@@ -26,15 +26,29 @@ export enum KernelEvents {
   COMM_OPEN = "comm_open",
   COMM_MSG = "comm_msg",
   COMM_CLOSE = "comm_close",
+  ALL = "*", // Add a wildcard event type
+}
+
+// Interface for filesystem mounting options
+export interface IFilesystemMountOptions {
+  enabled?: boolean;
+  root?: string;
+  mountPoint?: string;
+}
+
+// Interface for kernel options
+export interface IKernelOptions {
+  filesystem?: IFilesystemMountOptions;
 }
 
 // Interface for kernel
 export interface IKernel extends EventEmitter {
-  initialize(): Promise<void>;
+  initialize(options?: IKernelOptions): Promise<void>;
   execute(code: string, parent?: any): Promise<{ success: boolean, result?: any, error?: Error }>;
   executeStream(code: string, parent?: any): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void>;
   isInitialized(): boolean;
   inputReply(content: { value: string }): Promise<void>;
+  status: "active" | "busy" | "unknown";
   
   // Optional methods
   complete?(code: string, cursor_pos: number, parent?: any): Promise<any>;
@@ -62,10 +76,23 @@ export interface IMessage {
   ident?: any;
 }
 
+// Event data structure with standardized format
+export interface IEventData {
+  type: string;
+  data: any;
+}
+
 export class Kernel extends EventEmitter implements IKernel {
   private pyodide: any;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+  
+  // Filesystem options
+  private filesystemOptions: IFilesystemMountOptions = {
+    enabled: false,
+    root: ".",
+    mountPoint: "/home/pyodide"
+  };
   
   // Kernel components
   private _kernel: any;
@@ -79,21 +106,37 @@ export class Kernel extends EventEmitter implements IKernel {
   // Execution state
   private _parent_header: any = {};
   private executionCount = 0;
+  private _status: "active" | "busy" | "unknown" = "unknown";
   
   constructor() {
     super();
     super.setMaxListeners(20);
   }
+
+  // Getter for kernel status
+  get status(): "active" | "busy" | "unknown" {
+    return this._status;
+  }
+
   /**
    * Initialize the kernel by loading Pyodide and installing required packages
+   * @param options Kernel initialization options
    */
-  public async initialize(): Promise<void> {
+  public async initialize(options?: IKernelOptions): Promise<void> {
     if (this.initialized) {
       return;
     }
     
     if (this.initPromise) {
       return this.initPromise;
+    }
+
+    // Set filesystem options if provided
+    if (options?.filesystem) {
+      this.filesystemOptions = {
+        ...this.filesystemOptions,
+        ...options.filesystem
+      };
     }
 
     this.initPromise = this._initializeInternal();
@@ -106,15 +149,51 @@ export class Kernel extends EventEmitter implements IKernel {
       // Load Pyodide
       this.pyodide = await pyodideModule.loadPyodide();
       
+      // Mount filesystem if enabled
+      if (this.filesystemOptions.enabled) {
+        await this.mountFilesystem();
+      }
+      
       // Initialize the components in order, following PyodideRemoteKernel
       await this.initPackageManager();
       await this.initKernel();
       await this.initGlobals();
       
       this.initialized = true;
+      this._status = "active";
       console.log("Kernel initialization complete");
     } catch (error) {
       console.error("Error initializing kernel:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Mount the local filesystem to the Pyodide environment
+   */
+  private async mountFilesystem(): Promise<void> {
+    try {
+      console.log(`Mounting filesystem from ${this.filesystemOptions.root} to ${this.filesystemOptions.mountPoint}`);
+      
+      // Use the same approach as in deno-demo-fs-asgi.js for maximum compatibility
+      // Simple and direct mounting of the filesystem
+      await this.pyodide.FS.mount(
+        this.pyodide.FS.filesystems.NODEFS,
+        { root: this.filesystemOptions.root || "." },
+        this.filesystemOptions.mountPoint || "/home/pyodide"
+      );
+      
+      console.log("Filesystem mounted successfully");
+      
+      // Verify the mount by listing the directory
+      try {
+        const mountedFiles = this.pyodide.FS.readdir(this.filesystemOptions.mountPoint || "/home/pyodide");
+        console.log(`Files in ${this.filesystemOptions.mountPoint} directory: ${mountedFiles.join(", ")}`);
+      } catch (error) {
+        console.error(`Error listing mounted directory: ${error}`);
+      }
+    } catch (error) {
+      console.error("Error mounting filesystem:", error);
       throw error;
     }
   }
@@ -368,30 +447,37 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
       return;
     }
 
+    let eventData: any;
+
     switch (msg.type) {
       case 'stream': {
         const bundle = msg.bundle ?? { name: 'stdout', text: '' };
         super.emit(KernelEvents.STREAM, bundle);
+        eventData = bundle;
         break;
       }
       case 'input_request': {
         const content = msg.content ?? { prompt: '', password: false };
         super.emit(KernelEvents.INPUT_REQUEST, content);
+        eventData = content;
         break;
       }
       case 'display_data': {
         const bundle = msg.bundle ?? { data: {}, metadata: {}, transient: {} };
         super.emit(KernelEvents.DISPLAY_DATA, bundle);
+        eventData = bundle;
         break;
       }
       case 'update_display_data': {
         const bundle = msg.bundle ?? { data: {}, metadata: {}, transient: {} };
         super.emit(KernelEvents.UPDATE_DISPLAY_DATA, bundle);
+        eventData = bundle;
         break;
       }
       case 'clear_output': {
         const bundle = msg.bundle ?? { wait: false };
         super.emit(KernelEvents.CLEAR_OUTPUT, bundle);
+        eventData = bundle;
         break;
       }
       case 'execute_result': {
@@ -401,19 +487,35 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
           metadata: {},
         };
         super.emit(KernelEvents.EXECUTE_RESULT, bundle);
+        eventData = bundle;
         break;
       }
       case 'execute_error': {
         const bundle = msg.bundle ?? { ename: '', evalue: '', traceback: [] };
         super.emit(KernelEvents.EXECUTE_ERROR, bundle);
+        eventData = bundle;
         break;
       }
       case 'comm_open':
       case 'comm_msg':
       case 'comm_close': {
-        super.emit(msg.type, msg.content ?? {}, msg.metadata, msg.buffers);
+        const content = msg.content ?? {};
+        super.emit(msg.type, content, msg.metadata, msg.buffers);
+        eventData = {
+          content,
+          metadata: msg.metadata,
+          buffers: msg.buffers
+        };
         break;
       }
+    }
+
+    // Emit the ALL event with standardized format
+    if (eventData) {
+      super.emit(KernelEvents.ALL, {
+        type: msg.type,
+        data: eventData
+      } as IEventData);
     }
   }
   
@@ -433,36 +535,85 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
   }
   
   /**
-   * Execute Python code
-   * @param code The Python code to execute
+   * Execute code in the kernel
+   * 
+   * @param code The code to execute
    * @param parent Parent message header
-   * @returns Result of execution
+   * @returns The result of the execution
    */
   public async execute(code: string, parent: any = {}): Promise<{ success: boolean, result?: any, error?: Error }> {
-    await this.setup(parent);
-    
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
     try {
-      // Increment execution count
-      this.executionCount++;
+      this._status = "busy";
+      console.log("Executing Python code...");
       
-      // Execute the code using the kernel's run method
-      const res = await this._kernel.run(code);
-      const results = this.formatResult(res);
+      // Properly escape code for Python execution
+      const escapedCode = JSON.stringify(code);
       
-      if (results['status'] === 'error') {
-        return {
-          success: false,
-          error: new Error(`${results['ename']}: ${results['evalue']}`),
-          result: results
-        };
+      // Create a wrapper that executes the code safely and captures any errors
+      const wrappedCode = `
+import sys
+import traceback
+
+# Store the code to be executed
+exec_code = ${escapedCode}
+
+try:
+    # Execute the code in the global namespace to maintain state between runs
+    exec(exec_code, globals())
+    success = True
+    error = None
+except Exception as e:
+    error_type = type(e).__name__
+    error_msg = str(e)
+    traceback_str = traceback.format_exc()
+    print(f"Error: {error_type}: {error_msg}")
+    print(traceback_str)
+    success = False
+    error = {
+        "type": error_type,
+        "message": error_msg,
+        "traceback": traceback_str
+    }
+`;
+
+      // Run the Python code
+      await this.pyodide.runPythonAsync(wrappedCode);
+      
+      // Get success and error values from Python scope
+      const success = this.pyodide.globals.get('success');
+      let error = undefined;
+      let result = undefined;
+      
+      if (!success) {
+        error = this.formatResult(this.pyodide.globals.get('error'));
+        console.error("Execution error:", error);
+      } else {
+        // Try to get the result variable if it exists
+        try {
+          if (this.pyodide.globals.has('result')) {
+            result = this.formatResult(this.pyodide.globals.get('result'));
+          }
+        } catch (e) {
+          console.log("No result variable found in globals");
+        }
       }
       
-      return { success: true, result: results };
+      this._status = "active";
+      return {
+        success,
+        result,
+        error
+      };
     } catch (error) {
-      console.error("Error executing code:", error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error : new Error(String(error)) 
+      console.error("JavaScript error during execution:", error);
+      this._status = "active";
+      return {
+        success: false,
+        error: error instanceof Error ? error : new Error(String(error))
       };
     }
   }
@@ -665,125 +816,41 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
    * @returns AsyncGenerator yielding intermediate outputs and finally the execution result
    */
   public async* executeStream(code: string, parent: any = {}): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void> {
-    await this.setup(parent);
-
     try {
-      // Increment execution count
-      this.executionCount++;
+      await this.initialize();
+      await this.setup(parent);
       
-      // Setup queue for storing events
-      const streamQueue: any[] = [];
-      let executionComplete = false;
-      let executionError: any = null;
+      this._status = "busy";
       
-      // Set up event listeners for all event types
-      const listeners = new Map<string, (...args: any[]) => void>();
+      // Create event listeners
+      const eventQueue: IEventData[] = [];
       
-      // Create a single event handler for all kernel events
-      const handleEvent = (eventType: string) => {
-        return (data: any) => {
-          console.log(`Received ${eventType} event`, eventType === KernelEvents.EXECUTE_ERROR ? `: ${data}` : '');
-          streamQueue.push({ type: eventType, data });
-          
-          // Special handling for errors
-          if (eventType === KernelEvents.EXECUTE_ERROR) {
-            executionError = data;
-          }
-        };
+      const handleAllEvents = (eventData: IEventData) => {
+        eventQueue.push(eventData);
       };
       
-      // Register the handler for all event types
-      Object.values(KernelEvents).forEach(eventType => {
-        const handler = handleEvent(eventType);
-        listeners.set(eventType, handler);
-        super.on(eventType, handler);
-      });
-
-      // Execute the code using the kernel's run method
-      console.log("Starting execution of code:", code);
-      const executionPromise = this._kernel.run(code);
-
-      // Create a promise that resolves when execution is done
-      const finalResultPromise = executionPromise.then((res: any) => {
-        console.log("Execution completed");
-        executionComplete = true;
-        return this.formatResult(res);
-      }).catch((err: any) => {
-        console.log("Execution failed with error:", err);
-        executionComplete = true;
-        return { status: 'error', error: err };
-      });
+      // Listen for all events
+      super.on(KernelEvents.ALL, handleAllEvents);
       
-      // Monitor the stream queue and yield results
-      let yieldCount = 0;
-      const startTime = Date.now();
-      const timeout = 10000; // 10 second timeout
+      // Execute code as normal
+      const result = await this.execute(code, parent);
       
-      while ((!executionComplete || streamQueue.length > 0) && 
-             (Date.now() - startTime < timeout)) {
-        // If there are items in the queue, yield them
-        if (streamQueue.length > 0) {
-          const event = streamQueue.shift();
-          console.log(`Yielding event ${yieldCount++}:`, event.type);
-          yield event;
-          continue;
-        }
-        
-        // If no more events but execution is not complete, wait a little
-        if (!executionComplete) {
-          await new Promise(resolve => setTimeout(resolve, 10));
-        }
+      // Forward captured events
+      while (eventQueue.length > 0) {
+        yield eventQueue.shift();
       }
       
-      // Handle timeout
-      if (!executionComplete && Date.now() - startTime >= timeout) {
-        console.log("Execution timed out");
-        executionComplete = true;
-      }
+      // Clean up listener
+      super.off(KernelEvents.ALL, handleAllEvents);
       
-      // Clean up all listeners
-      listeners.forEach((handler, event) => {
-        super.removeListener(event, handler);
-      });
-      
-      console.log("All events yielded, waiting for final result");
-      
-      try {
-        // Get the final result
-        const results = await finalResultPromise;
-        console.log("Final result:", results);
-        
-        // If we had an error during execution, return that
-        if (executionError) {
-          return {
-            success: false,
-            error: new Error(`${executionError.ename}: ${executionError.evalue}`),
-            result: executionError
-          };
-        }
-        
-        // Otherwise check the result status
-        if (results['status'] === 'error') {
-          return {
-            success: false,
-            error: new Error(`${results['ename'] || 'Error'}: ${results['evalue'] || 'Unknown error'}`),
-            result: results
-          };
-        }
-        
-        return { success: true, result: results };
-      } catch (err) {
-        console.error("Error getting final result:", err);
-        return { 
-          success: false, 
-          error: err instanceof Error ? err : new Error(String(err)) 
-        };
-      }
+      this._status = "active";
+      return result;
     } catch (error) {
-      console.error("Error executing code with streaming:", error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error : new Error(String(error)) 
+      this._status = "active";
+      console.error("Error in executeStream:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error : new Error(String(error))
       };
     }
   }

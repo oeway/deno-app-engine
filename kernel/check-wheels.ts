@@ -33,25 +33,25 @@ export async function ensureWheelsExist() {
         await Deno.mkdir(pypiDir, { recursive: true });
       }
       
-      // Run the wheel generation script
-      const process = Deno.run({
-        cmd: ["python3", "generate-wheels-js.py"],
+      // Run the wheel generation script using the newer Deno.Command API
+      const command = new Deno.Command("python3", {
+        args: ["generate-wheels-js.py"],
         cwd: join(Deno.cwd(), "kernel"),
         stdout: "piped",
         stderr: "piped",
       });
       
-      const status = await process.status();
-      if (!status.success) {
-        const stderr = new TextDecoder().decode(await process.stderrOutput());
-        console.error("Error generating wheels:", stderr);
+      const { code, stdout, stderr } = await command.output();
+      
+      if (code !== 0) {
+        const errorOutput = new TextDecoder().decode(stderr);
+        console.error("Error generating wheels:", errorOutput);
         throw new Error("Failed to generate wheels");
       }
       
-      const stdout = new TextDecoder().decode(await process.output());
-      console.log(stdout);
+      const output = new TextDecoder().decode(stdout);
+      console.log(output);
       
-      process.close();
       console.log("Wheels generated successfully");
     } else {
       console.log("Wheels already exist");

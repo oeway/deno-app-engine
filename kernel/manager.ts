@@ -3,12 +3,22 @@
 
 import * as Comlink from "comlink";
 import { EventEmitter } from 'node:events';
-import { Kernel, KernelEvents, IKernel } from "./index.ts";
+// import EventEmitter from "https://deno.land/x/events@v1.0.0/mod.ts";
+import { Kernel, KernelEvents, IKernel, IKernelOptions, IFilesystemMountOptions } from "./index.ts";
 
 // Execution mode enum
 export enum KernelMode {
   MAIN_THREAD = "main_thread",
   WORKER = "worker"
+}
+
+// Extended WorkerOptions interface to include Deno permissions
+interface WorkerOptions {
+  type?: "classic" | "module";
+  name?: string;
+  deno?: {
+    permissions?: IDenoPermissions;
+  };
 }
 
 // Interface for kernel instance
@@ -17,13 +27,30 @@ export interface IKernelInstance {
   kernel: IKernel;
   mode: KernelMode;
   worker?: Worker;
+  created: Date;
+  options: IManagerKernelOptions;
   destroy(): Promise<void>;
 }
 
+// Interface for Deno worker permissions
+export interface IDenoPermissions {
+  read?: (string | URL)[];
+  write?: (string | URL)[];
+  net?: string[];
+  env?: string[];
+  run?: string[];
+  ffi?: string[];
+  hrtime?: boolean;
+}
+
 // Interface for kernel creation options
-export interface IKernelOptions {
+export interface IManagerKernelOptions {
   id?: string;
   mode?: KernelMode;
+  deno?: {
+    permissions?: IDenoPermissions;
+  };
+  filesystem?: IFilesystemMountOptions;
 }
 
 // Helper type for listener management
@@ -39,7 +66,7 @@ type ListenerWrapper = {
 export class KernelManager extends EventEmitter {
   private kernels: Map<string, IKernelInstance> = new Map();
   // Track listeners for each kernel to enable individual removal
-  private listeners: Map<string, Map<string, Map<Function, ListenerWrapper>>> = new Map();
+  private listenerWrappers: Map<string, Map<string, Map<Function, ListenerWrapper>>> = new Map();
   
   constructor() {
     super();
@@ -50,9 +77,13 @@ export class KernelManager extends EventEmitter {
   /**
    * Create a new kernel instance
    * @param options Options for creating the kernel
+   * @param options.id Optional custom ID for the kernel
+   * @param options.mode Optional kernel mode (main_thread or worker)
+   * @param options.deno.permissions Optional Deno permissions for worker mode
+   * @param options.filesystem Optional filesystem mounting options
    * @returns Promise resolving to the kernel instance ID
    */
-  public async createKernel(options: IKernelOptions = {}): Promise<string> {
+  public async createKernel(options: IManagerKernelOptions = {}): Promise<string> {
     const id = options.id || crypto.randomUUID();
     const mode = options.mode || KernelMode.WORKER;
     
@@ -60,6 +91,14 @@ export class KernelManager extends EventEmitter {
     if (this.kernels.has(id)) {
       throw new Error(`Kernel with ID ${id} already exists`);
     }
+    
+    // Store options temporarily to be used in createWorkerKernel
+    const tempInstance = {
+      id,
+      options,
+      mode
+    };
+    this.kernels.set(id, tempInstance as unknown as IKernelInstance);
     
     // Create the appropriate kernel instance
     let instance: IKernelInstance;
@@ -86,17 +125,32 @@ export class KernelManager extends EventEmitter {
    */
   private async createMainThreadKernel(id: string): Promise<IKernelInstance> {
     const kernel = new Kernel();
+    // Get options from the temporary instance
+    const options = this.kernels.get(id)?.options || {};
     
     // Create the kernel instance
     const instance: IKernelInstance = {
       id,
       kernel,
       mode: KernelMode.MAIN_THREAD,
+      created: new Date(),
+      options,
       destroy: async () => {
         // Nothing special to do for main thread kernel
         return Promise.resolve();
       }
     };
+    
+    // Initialize the kernel with filesystem options
+    const kernelOptions: IKernelOptions = {};
+    
+    // Add filesystem options if provided
+    if (options.filesystem) {
+      kernelOptions.filesystem = options.filesystem;
+    }
+    
+    // Initialize the kernel
+    await kernel.initialize(kernelOptions);
     
     return instance;
   }
@@ -107,10 +161,32 @@ export class KernelManager extends EventEmitter {
    * @returns Kernel instance
    */
   private async createWorkerKernel(id: string): Promise<IKernelInstance> {
-    // Create a new worker
-    const worker = new Worker(new URL("./worker.ts", import.meta.url).href, {
+    // Get permissions from options when creating the kernel
+    const options = this.kernels.get(id)?.options || {};
+    
+    // Create a new worker with optional permissions
+    const workerOptions: WorkerOptions = {
       type: "module",
-    });
+    };
+    
+    // If Deno permissions are provided, use them.
+    // Otherwise don't specify Deno permissions at all to inherit from host script
+    if (options.deno?.permissions) {
+      workerOptions.deno = {
+        permissions: options.deno.permissions
+      };
+      
+      console.log(`Creating worker with custom permissions: ${JSON.stringify(options.deno.permissions)}`);
+    } else {
+      // Don't set any deno options to inherit host permissions
+      console.log("Creating worker with inherited host permissions");
+    }
+    
+    // Create worker with permissions
+    const worker = new Worker(
+      new URL("./worker.ts", import.meta.url).href,
+      workerOptions
+    );
     
     // Create a message channel for events
     const { port1, port2 } = new MessageChannel();
@@ -126,6 +202,7 @@ export class KernelManager extends EventEmitter {
     const eventHandler = (event: MessageEvent) => {
       if (event.data && event.data.type) {
         // Emit the event from the manager with kernel ID
+        // This structure matches the setupEventForwarding method for main thread kernels
         super.emit(event.data.type, {
           kernelId: id,
           data: event.data.data
@@ -137,12 +214,23 @@ export class KernelManager extends EventEmitter {
     port1.addEventListener('message', eventHandler);
     port1.start();
     
+    // Initialize the kernel with filesystem options
+    // We need to pass these options to the worker
+    worker.postMessage({
+      type: "INITIALIZE_KERNEL",
+      options: {
+        filesystem: options.filesystem
+      }
+    });
+    
     // Create the kernel instance
     const instance: IKernelInstance = {
       id,
       kernel: kernelProxy as unknown as IKernel, // Cast to IKernel
       mode: KernelMode.WORKER,
       worker,
+      created: new Date(),
+      options, // Store the options for reference
       destroy: async () => {
         // Clean up the worker and event listeners
         port1.removeEventListener('message', eventHandler);
@@ -164,7 +252,11 @@ export class KernelManager extends EventEmitter {
     if (instance.mode === KernelMode.MAIN_THREAD) {
       // Forward all kernel events to the manager with kernel ID
       Object.values(KernelEvents).forEach((eventType) => {
-        (instance.kernel as EventEmitter).on(eventType, (data: any) => {
+        // Access the kernel as a Kernel instance which extends EventEmitter
+        const kernelEmitter = instance.kernel as unknown as EventEmitter;
+        
+        // Add event listener to forward events
+        kernelEmitter.on(eventType, (data: any) => {
           super.emit(eventType, {
             kernelId: instance.id,
             data
@@ -189,6 +281,30 @@ export class KernelManager extends EventEmitter {
    */
   public getKernelIds(): string[] {
     return Array.from(this.kernels.keys());
+  }
+  
+  /**
+   * Get a list of all kernels with their details
+   * @returns Array of kernel information objects
+   */
+  public listKernels(): Array<{
+    id: string;
+    mode: KernelMode;
+    status: "active" | "busy" | "unknown";
+    created: Date;
+    deno?: {
+      permissions?: IDenoPermissions;
+    };
+  }> {
+    return Array.from(this.kernels.entries()).map(([id, instance]) => {
+      return {
+        id,
+        mode: instance.mode,
+        status: instance.kernel.status || "unknown",
+        created: instance.created || new Date(),
+        deno: instance.options?.deno
+      };
+    });
   }
   
   /**
@@ -241,6 +357,8 @@ export class KernelManager extends EventEmitter {
       original: listener,
       wrapped: (event: { kernelId: string, data: any }) => {
         if (event.kernelId === kernelId) {
+          // Pass just the data to the listener
+          // The data structure is consistent across main thread and worker modes
           listener(event.data);
         }
       }
@@ -281,10 +399,10 @@ export class KernelManager extends EventEmitter {
     wrapper: ListenerWrapper
   ): void {
     // Get or create kernel map
-    if (!this.listeners.has(kernelId)) {
-      this.listeners.set(kernelId, new Map());
+    if (!this.listenerWrappers.has(kernelId)) {
+      this.listenerWrappers.set(kernelId, new Map());
     }
-    const kernelMap = this.listeners.get(kernelId)!;
+    const kernelMap = this.listenerWrappers.get(kernelId)!;
     
     // Get or create event type map
     if (!kernelMap.has(eventType)) {
@@ -304,7 +422,7 @@ export class KernelManager extends EventEmitter {
     eventType: string, 
     original: Function
   ): ListenerWrapper | undefined {
-    const kernelMap = this.listeners.get(kernelId);
+    const kernelMap = this.listenerWrappers.get(kernelId);
     if (!kernelMap) return undefined;
     
     const eventMap = kernelMap.get(eventType);
@@ -321,7 +439,7 @@ export class KernelManager extends EventEmitter {
     eventType: string, 
     original: Function
   ): void {
-    const kernelMap = this.listeners.get(kernelId);
+    const kernelMap = this.listenerWrappers.get(kernelId);
     if (!kernelMap) return;
     
     const eventMap = kernelMap.get(eventType);
@@ -336,7 +454,7 @@ export class KernelManager extends EventEmitter {
     }
     
     if (kernelMap.size === 0) {
-      this.listeners.delete(kernelId);
+      this.listenerWrappers.delete(kernelId);
     }
   }
   
@@ -344,7 +462,7 @@ export class KernelManager extends EventEmitter {
    * Remove all listeners for a specific kernel
    */
   private removeAllKernelListeners(kernelId: string): void {
-    const kernelMap = this.listeners.get(kernelId);
+    const kernelMap = this.listenerWrappers.get(kernelId);
     if (!kernelMap) return;
     
     // For each event type
@@ -357,7 +475,7 @@ export class KernelManager extends EventEmitter {
     }
     
     // Clear the kernel's listener map
-    this.listeners.delete(kernelId);
+    this.listenerWrappers.delete(kernelId);
   }
   
   /**
@@ -367,13 +485,182 @@ export class KernelManager extends EventEmitter {
    * @returns Array of listeners
    */
   public getListeners(kernelId: string, eventType: KernelEvents): ((data: any) => void)[] {
-    const kernelMap = this.listeners.get(kernelId);
-    if (!kernelMap) return [];
+    const kernelListeners = this.listenerWrappers.get(kernelId);
+    if (!kernelListeners) {
+      return [];
+    }
     
-    const eventMap = kernelMap.get(eventType);
-    if (!eventMap) return [];
+    const eventListeners = kernelListeners.get(eventType);
+    if (!eventListeners) {
+      return [];
+    }
     
-    // Return all original listeners (not wrapped)
-    return Array.from(eventMap.values()).map(wrapper => wrapper.original);
+    return Array.from(eventListeners.keys()) as ((data: any) => void)[];
+  }
+
+  /**
+   * Execute Python code with streaming output
+   * This method works in both main thread and worker modes
+   * @param kernelId ID of the kernel to use
+   * @param code The Python code to execute
+   * @param parent Optional parent message header
+   * @returns AsyncGenerator yielding intermediate outputs
+   */
+  public async* executeStream(
+    kernelId: string, 
+    code: string, 
+    parent: any = {}
+  ): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void> {
+    const instance = this.getKernel(kernelId);
+    
+    if (!instance) {
+      throw new Error(`Kernel with ID ${kernelId} not found`);
+    }
+    
+    // For main thread kernels, we can use the executeStream method directly
+    if (instance.mode === KernelMode.MAIN_THREAD) {
+      const kernel = instance.kernel as unknown as { 
+        executeStream: (code: string, parent: any) => AsyncGenerator<any, any, void> 
+      };
+      
+      // Forward to the kernel's executeStream method
+      if (typeof kernel.executeStream === 'function') {
+        yield* kernel.executeStream(code, parent);
+        return { success: true };
+      }
+    }
+    
+    // For worker mode, we need to implement streaming via events
+    try {
+      // Setup queue for storing events
+      const streamQueue: any[] = [];
+      let executionComplete = false;
+      let executionResult: { success: boolean, result?: any, error?: Error } | null = null;
+      
+      // Set up a promise that will resolve when execution completes
+      const executionPromise = new Promise<{ success: boolean, result?: any, error?: Error }>((resolve) => {
+        // Create event handlers
+        const handleStreamEvent = (event: { kernelId: string, data: any }) => {
+          if (event.kernelId === kernelId) {
+            streamQueue.push({
+              type: 'stream',
+              data: event.data
+            });
+          }
+        };
+        
+        const handleDisplayEvent = (event: { kernelId: string, data: any }) => {
+          if (event.kernelId === kernelId) {
+            streamQueue.push({
+              type: 'display_data',
+              data: event.data
+            });
+          }
+        };
+        
+        const handleResultEvent = (event: { kernelId: string, data: any }) => {
+          if (event.kernelId === kernelId) {
+            streamQueue.push({
+              type: 'execute_result',
+              data: event.data
+            });
+          }
+        };
+        
+        const handleErrorEvent = (event: { kernelId: string, data: any }) => {
+          if (event.kernelId === kernelId) {
+            streamQueue.push({
+              type: 'execute_error',
+              data: event.data
+            });
+            
+            // Store the error for the final result
+            executionResult = {
+              success: false,
+              error: new Error(`${event.data.ename}: ${event.data.evalue}`),
+              result: event.data
+            };
+          }
+        };
+        
+        // Register all the event handlers
+        super.on(KernelEvents.STREAM, handleStreamEvent);
+        super.on(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+        super.on(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
+        super.on(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+        super.on(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+        
+        // Execute the code
+        // We need to wait for the execution to complete before returning the result
+        instance.kernel.execute(code, parent).then((result) => {
+          executionComplete = true;
+          executionResult = result;
+          
+          // Cleanup event handlers
+          super.off(KernelEvents.STREAM, handleStreamEvent);
+          super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+          super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
+          super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+          super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+          
+          resolve(result);
+        }).catch((error) => {
+          executionComplete = true;
+          const errorResult = {
+            success: false,
+            error: error instanceof Error ? error : new Error(String(error))
+          };
+          executionResult = errorResult;
+          
+          // Cleanup event handlers
+          super.off(KernelEvents.STREAM, handleStreamEvent);
+          super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+          super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
+          super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+          super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+          
+          resolve(errorResult);
+        });
+      });
+      
+      // Setup timeout
+      const startTime = Date.now();
+      const timeout = 60000; // 60 second timeout
+      
+      // Monitor the stream queue and yield results
+      while ((!executionComplete || streamQueue.length > 0) && 
+             (Date.now() - startTime < timeout)) {
+        // If there are items in the queue, yield them
+        if (streamQueue.length > 0) {
+          const event = streamQueue.shift();
+          yield event;
+          continue;
+        }
+        
+        // If no more events but execution is not complete, wait a little
+        if (!executionComplete) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      }
+      
+      // Handle timeout
+      if (!executionComplete && Date.now() - startTime >= timeout) {
+        console.log("Execution timed out");
+        return {
+          success: false,
+          error: new Error("Execution timed out")
+        };
+      }
+      
+      // Wait for the final result
+      const result = await executionPromise;
+      return result;
+    } catch (error) {
+      console.error("Error in executeStream:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
   }
 } 

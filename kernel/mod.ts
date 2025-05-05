@@ -2,14 +2,13 @@
 // This file exports the public API
 
 // Export the kernel core components
-export { Kernel, KernelEvents } from "./index.ts";
+export { Kernel, KernelEvents, type IEventData, type IKernelOptions } from "./index.ts";
 
 // Export the kernel manager and related types
 export { 
   KernelManager, 
   KernelMode,
-  type IKernelInstance,
-  type IKernelOptions
+  type IKernelInstance
 } from "./manager.ts";
 
 // Export other interfaces
