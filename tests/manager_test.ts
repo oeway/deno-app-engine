@@ -689,27 +689,32 @@ Deno.test({
     await writeTestFile(tempDir, testFileName, testContent);
     
     // Get the Deno cache directory directly
-    const denoDir = Deno.env.get("DENO_DIR") || "./.cache/deno";
+    const denoDir = Deno.env.get("DENO_DIR");
     
-    // We also need the npm cache directory which contains Pyodide WASM files
+    // Get the npm cache directory which contains Pyodide WASM files
     // Handle different OS paths for the npm cache
-    const userHomeDir = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
-    let denoNpmCache = "";
+    let denoCache = "";
     
-    if (Deno.build.os === "darwin") {
-      denoNpmCache = `${userHomeDir}/Library/Caches/deno/npm`;
-    } else if (Deno.build.os === "windows") {
-      denoNpmCache = `${userHomeDir}\\AppData\\Local\\deno\\npm`;
+    if (denoDir) {
+      denoCache = `${denoDir}`;
     } else {
-      // Linux and others
-      denoNpmCache = `${userHomeDir}/.cache/deno/npm`;
+      const userHomeDir = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
+      if (Deno.build.os === "darwin") {
+        denoCache = `${userHomeDir}/Library/Caches/deno`;
+      } else if (Deno.build.os === "windows") {
+        const localAppData = Deno.env.get("LocalAppData") || "";
+        denoCache = `${localAppData}\\deno`;
+      } else {
+        // Linux and others
+        denoCache = `${userHomeDir}/.cache/deno`;
+      }
     }
     
     // Get the kernel directory (for wheel files)
     const kernelDir = join(Deno.cwd(), "kernel");
     
-    console.log(`Using Deno cache directory: ${denoDir}`);
-    console.log(`Using Deno npm cache directory: ${denoNpmCache}`);
+    console.log(`Using Deno directory: ${denoDir}`);
+    console.log(`Using Deno npm cache directory: ${denoCache}`);
     console.log(`Using kernel directory: ${kernelDir}`);
     
     try {
@@ -721,7 +726,7 @@ Deno.test({
         deno: {
           permissions: {
             env: ["DENO_DIR", "HOME", "USERPROFILE"],  // Allow access to specific env variables
-            read: [tempDir, denoDir, kernelDir, denoNpmCache],
+            read: [tempDir, kernelDir, denoCache],
             write: [tempDir],
             net: ["pypi.org:443", "cdn.jsdelivr.net:443", "files.pythonhosted.org:443"] // Allow network access for Python packages
           }

@@ -18,6 +18,7 @@
   "assets": [
     "kernel/pypi/**/*"
   ],
+  "unstable": ["worker-options", "webgpu"],
   "compilerOptions": {
     "allowJs": true,
     "lib": ["deno.ns", "dom", "esnext"]
