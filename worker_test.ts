@@ -2,13 +2,13 @@
 // This demonstrates using the kernel in a web worker via Comlink
 
 import * as Comlink from "comlink";
-import { KernelEvents } from "./mod.ts";
-import type { Kernel } from "./mod.ts";
+import { KernelEvents } from "./kernel/index.ts";
+import type { Kernel } from "./kernel/index.ts";
 
 // Function to create the worker proxy
 async function createKernelWorker() {
   // Create a new worker with the worker.ts file
-  const worker = new Worker(new URL("./worker.ts", import.meta.url).href, {
+  const worker = new Worker(new URL("./kernel/worker.ts", import.meta.url).href, {
     type: "module",
   });
 

@@ -1,7 +1,7 @@
 // Deno Code Interpreter - Main Entry Point
 // This demonstrates a simple example of using the kernel to execute Python code
 
-import { Kernel, KernelEvents } from "./mod.ts";
+import { Kernel, KernelEvents } from "./kernel/index.ts";
 
 const kernel = new Kernel();
 // Set up event listeners

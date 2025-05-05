@@ -1,6 +1,6 @@
 // @ts-ignore Import from Deno standard library
 import { assert, assertEquals, assertExists } from "https://deno.land/std@0.195.0/testing/asserts.ts";
-import { Kernel, KernelEvents } from "./mod.ts";
+import { Kernel, KernelEvents } from "./kernel/index.ts";
 
 const kernel = new Kernel();
 // @ts-ignore Deno is available in Deno runtime

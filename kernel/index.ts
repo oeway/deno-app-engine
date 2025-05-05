@@ -1,7 +1,8 @@
 // Kernel implementation for Deno using Pyodide directly
 // Based on the PyodideKernel but simplified to run directly in the main thread
 
-import { EventEmitter } from "node:events";
+import { EventEmitter } from 'node:events';
+
 // @ts-ignore Importing from npm
 import pyodideModule from "npm:pyodide/pyodide.js";
 
