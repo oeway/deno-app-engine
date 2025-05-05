@@ -28,10 +28,21 @@ export enum KernelEvents {
   COMM_CLOSE = "comm_close",
 }
 
-export interface IKernel {
+// Interface for kernel
+export interface IKernel extends EventEmitter {
   initialize(): Promise<void>;
   execute(code: string, parent?: any): Promise<{ success: boolean, result?: any, error?: Error }>;
   isInitialized(): boolean;
+  inputReply(content: { value: string }): Promise<void>;
+  
+  // Optional methods
+  complete?(code: string, cursor_pos: number, parent?: any): Promise<any>;
+  inspect?(code: string, cursor_pos: number, detail_level: 0 | 1, parent?: any): Promise<any>;
+  isComplete?(code: string, parent?: any): Promise<any>;
+  commInfo?(target_name: string | null, parent?: any): Promise<any>;
+  commOpen?(content: any, parent?: any): Promise<void>;
+  commMsg?(content: any, parent?: any): Promise<void>;
+  commClose?(content: any, parent?: any): Promise<void>;
 }
 
 export interface IKernelExecuteOptions {
@@ -70,9 +81,8 @@ export class Kernel extends EventEmitter implements IKernel {
   
   constructor() {
     super();
-    this.setMaxListeners(20);
+    super.setMaxListeners(20);
   }
-
   /**
    * Initialize the kernel by loading Pyodide and installing required packages
    */
@@ -360,27 +370,27 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
     switch (msg.type) {
       case 'stream': {
         const bundle = msg.bundle ?? { name: 'stdout', text: '' };
-        this.emit(KernelEvents.STREAM, bundle);
+        super.emit(KernelEvents.STREAM, bundle);
         break;
       }
       case 'input_request': {
         const content = msg.content ?? { prompt: '', password: false };
-        this.emit(KernelEvents.INPUT_REQUEST, content);
+        super.emit(KernelEvents.INPUT_REQUEST, content);
         break;
       }
       case 'display_data': {
         const bundle = msg.bundle ?? { data: {}, metadata: {}, transient: {} };
-        this.emit(KernelEvents.DISPLAY_DATA, bundle);
+        super.emit(KernelEvents.DISPLAY_DATA, bundle);
         break;
       }
       case 'update_display_data': {
         const bundle = msg.bundle ?? { data: {}, metadata: {}, transient: {} };
-        this.emit(KernelEvents.UPDATE_DISPLAY_DATA, bundle);
+        super.emit(KernelEvents.UPDATE_DISPLAY_DATA, bundle);
         break;
       }
       case 'clear_output': {
         const bundle = msg.bundle ?? { wait: false };
-        this.emit(KernelEvents.CLEAR_OUTPUT, bundle);
+        super.emit(KernelEvents.CLEAR_OUTPUT, bundle);
         break;
       }
       case 'execute_result': {
@@ -389,18 +399,18 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
           data: {},
           metadata: {},
         };
-        this.emit(KernelEvents.EXECUTE_RESULT, bundle);
+        super.emit(KernelEvents.EXECUTE_RESULT, bundle);
         break;
       }
       case 'execute_error': {
         const bundle = msg.bundle ?? { ename: '', evalue: '', traceback: [] };
-        this.emit(KernelEvents.EXECUTE_ERROR, bundle);
+        super.emit(KernelEvents.EXECUTE_ERROR, bundle);
         break;
       }
       case 'comm_open':
       case 'comm_msg':
       case 'comm_close': {
-        this.emit(msg.type, msg.content ?? {}, msg.metadata, msg.buffers);
+        super.emit(msg.type, msg.content ?? {}, msg.metadata, msg.buffers);
         break;
       }
     }

@@ -2,7 +2,8 @@
   "version": "4",
   "specifiers": {
     "npm:@types/node@*": "22.12.0",
-    "npm:comlink@^4.4.2": "4.4.2"
+    "npm:pyodide@*": "0.27.5",
+    "npm:pyodide@0.27.5": "0.27.5"
   },
   "npm": {
     "@types/node@22.12.0": {
@@ -11,16 +12,24 @@
         "undici-types"
       ]
     },
-    "comlink@4.4.2": {
-      "integrity": "sha512-OxGdvBmJuNKSCMO4NTl1L47VRp6xn2wG4F/2hYzB6tiCb709otOxtEYCSvK80PtjODfXXZu8ds+Nw5kVCjqd2g=="
+    "pyodide@0.27.5": {
+      "integrity": "sha512-nXErpLzEdtQolt+sNQ/5mKuN9XTUwhxR2MRhRhZ6oDRGpYLXrOp5+kkTPGEwK+wn1ZA8+poNmoxKTj2sq/p9og==",
+      "dependencies": [
+        "ws"
+      ]
     },
     "undici-types@6.20.0": {
       "integrity": "sha512-Ny6QZ2Nju20vw1SRHe3d9jVu6gJ+4e3+MMpqu7pqE5HT6WsTSlce++GQmK5UXS8mzV8DSYHrQH+Xrf2jVcuKNg=="
+    },
+    "ws@8.18.2": {
+      "integrity": "sha512-DMricUmwGZUVr++AEAe2uiVM7UoO9MAVZMDu05UQOaUII0lp+zOzLLU4Xqh/JvTqklB1T4uELaaPBKyjE1r4fQ=="
     }
   },
   "redirects": {
+    "https://deno.land/std": "https://deno.land/std@0.224.0",
     "https://deno.land/std/assert/mod.ts": "https://deno.land/std@0.224.0/assert/mod.ts",
     "https://deno.land/std/fs/mod.ts": "https://deno.land/std@0.224.0/fs/mod.ts",
+    "https://deno.land/std/node/events.ts": "https://deno.land/std@0.224.0/node/events.ts",
     "https://deno.land/std/path/mod.ts": "https://deno.land/std@0.224.0/path/mod.ts",
     "https://deno.land/x/deno/types/stable.d.ts": "https://deno.land/x/deno@v2.2.12/types/stable.d.ts",
     "https://esm.sh/bufferutil@^4.0.1?target=denonext": "https://esm.sh/bufferutil@4.0.9?target=denonext",
@@ -324,11 +333,6 @@
   "workspace": {
     "dependencies": [
       "npm:pyodide@0.27.5"
-    ],
-    "packageJson": {
-      "dependencies": [
-        "npm:comlink@^4.4.2"
-      ]
-    }
+    ]
   }
 }
