@@ -2,6 +2,7 @@
   "version": "4",
   "specifiers": {
     "npm:@types/node@*": "22.12.0",
+    "npm:comlink@^4.4.2": "4.4.2",
     "npm:pyodide@*": "0.27.5",
     "npm:pyodide@0.27.5": "0.27.5"
   },
@@ -11,6 +12,9 @@
       "dependencies": [
         "undici-types"
       ]
+    },
+    "comlink@4.4.2": {
+      "integrity": "sha512-OxGdvBmJuNKSCMO4NTl1L47VRp6xn2wG4F/2hYzB6tiCb709otOxtEYCSvK80PtjODfXXZu8ds+Nw5kVCjqd2g=="
     },
     "pyodide@0.27.5": {
       "integrity": "sha512-nXErpLzEdtQolt+sNQ/5mKuN9XTUwhxR2MRhRhZ6oDRGpYLXrOp5+kkTPGEwK+wn1ZA8+poNmoxKTj2sq/p9og==",
@@ -161,6 +165,9 @@
     "https://deno.land/std@0.220.1/assert/unimplemented.ts": "47ca67d1c6dc53abd0bd729b71a31e0825fc452dbcd4fde4ca06789d5644e7fd",
     "https://deno.land/std@0.220.1/assert/unreachable.ts": "3670816a4ab3214349acb6730e3e6f5299021234657eefe05b48092f3848c270",
     "https://deno.land/std@0.220.1/fmt/colors.ts": "d239d84620b921ea520125d778947881f62c50e78deef2657073840b8af9559a",
+    "https://deno.land/x/comlink@4.4.1/mod.ts": "50467f0d8eeb5afdb7ec54979fb4e0ba5665f2a964eb7b5cb7efe8ad9e0d0016",
+    "https://deno.land/x/comlink@4.4.1/src/comlink.ts": "7cec5923630211cb354d0d4b7250bd179524162e8ef05d366493a0ca5f0240b8",
+    "https://deno.land/x/comlink@4.4.1/src/protocol.ts": "fc575e543ba8f509afea6fe524eb1f59ae71e1ee29108149d83b5de5e3a92d02",
     "https://esm.sh/bufferutil@4.0.9/denonext/bufferutil.mjs": "13dca4d5bb2c68cbe119f880fa3bd785b9a81a8e02e0834dae604b4b85295cd8",
     "https://esm.sh/bufferutil@4.0.9?target=denonext": "e32574569ab438facfcc3f412c659b0719bbf05477136ca176938c9a3ac45125",
     "https://esm.sh/node-gyp-build@4.8.4/denonext/node-gyp-build.mjs": "9a86f2d044fc77bd60aaa3d697c2ba1b818da5fb1b9aaeedec59a40b8e908803",
@@ -175,6 +182,11 @@
   "workspace": {
     "dependencies": [
       "npm:pyodide@*"
-    ]
+    ],
+    "packageJson": {
+      "dependencies": [
+        "npm:comlink@^4.4.2"
+      ]
+    }
   }
 }

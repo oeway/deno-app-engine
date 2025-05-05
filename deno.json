@@ -6,11 +6,13 @@
   "imports": {
     "pyodide": "npm:pyodide/pyodide.js",
     "std/": "https://deno.land/std@0.217.0/",
-    "node:events": "node:events"
+    "node:events": "node:events",
+    "comlink": "https://deno.land/x/comlink@4.4.1/mod.ts"
   },
   "tasks": {
     "dev": "deno run --watch main.ts",
-    "test": "deno test --allow-net --allow-read kernel/test.ts"
+    "test": "deno test --allow-net --allow-read kernel/test.ts",
+    "worker:test": "deno run --allow-net --allow-read --allow-hrtime --allow-env --allow-ffi worker_test.ts"
   },
   "nodeModulesDir": "auto"
 }
