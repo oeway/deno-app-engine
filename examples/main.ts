@@ -1,9 +1,11 @@
 // Simple example demonstrating the Deno Code Interpreter
-import { Kernel, KernelEvents } from "../mod.ts";
+import { createKernel, KernelEvents } from "../mod.ts";
 
 async function main() {
-  // Create a new kernel instance
-  const kernel = new Kernel();
+  console.log("Creating kernel with automatic wheel checking...");
+  
+  // Create a new kernel instance with wheel checking
+  const kernel = await createKernel(true);
   
   // Set up event listeners
   kernel.on(KernelEvents.STREAM, (data) => {

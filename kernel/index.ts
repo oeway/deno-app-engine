@@ -115,21 +115,66 @@ export class Kernel extends EventEmitter implements IKernel {
   private async initPackageManager(): Promise<void> {
     console.log("Initializing package manager...");
     
-    // Load micropip
-    await this.pyodide.loadPackage(['micropip']);
-    
-    // Install piplite via micropip
-    await this.pyodide.runPythonAsync(`
-      import micropip
-      await micropip.install('${pipliteWheelUrl}', keep_going=True)
-    `);
-    
-    // Configure piplite settings
-    await this.pyodide.runPythonAsync(`
-      import piplite.piplite
-      piplite.piplite._PIPLITE_DISABLE_PYPI = False
-      piplite.piplite._PIPLITE_URLS = ${JSON.stringify([allJSONUrl])}
-    `);
+    try {
+      // Load micropip
+      console.log("Loading micropip, packaging");
+      await this.pyodide.loadPackage(['micropip', 'packaging']);
+      console.log("Loaded micropip, packaging");
+      
+      // Use import.meta.url to get the base URL
+      const baseUrl = new URL(".", import.meta.url).href;
+      const allJsonPath = new URL(allJSONUrl, baseUrl).href;
+      const wheelFiles = [
+        new URL(pipliteWheelUrl, baseUrl).href,
+        new URL(pyodide_kernelWheelUrl, baseUrl).href,
+        new URL(ipykernelWheelUrl, baseUrl).href
+      ];
+      
+      console.log(`Loading wheels from: ${baseUrl}`);
+      console.log(`allJsonPath: ${allJsonPath}`);
+      console.log(`wheelFiles: ${wheelFiles.join(", ")}`);
+      
+      // Install the packages using micropip directly with local file URLs
+      // First make our URLs available to Python
+      this.pyodide.globals.set("piplite_wheel_url", wheelFiles[0]);
+      this.pyodide.globals.set("pyodide_kernel_wheel_url", wheelFiles[1]);
+      this.pyodide.globals.set("ipykernel_wheel_url", wheelFiles[2]);
+      this.pyodide.globals.set("all_json_url", allJsonPath);
+      
+      await this.pyodide.runPythonAsync(`
+import micropip
+import sys
+
+# Get the URLs from the globals
+piplite_url = piplite_wheel_url
+pyodide_kernel_url = pyodide_kernel_wheel_url
+ipykernel_url = ipykernel_wheel_url
+all_json_url = all_json_url
+
+# Install piplite first (wheel needs to be available at a URL)
+print(f"Installing piplite from {piplite_url}")
+await micropip.install(piplite_url)
+
+# Now import piplite and use it
+import piplite
+
+# Set the all.json URL
+piplite.piplite._PIPLITE_URLS = [all_json_url]
+
+# Install other packages directly from wheel URLs
+print(f"Installing pyodide_kernel from {pyodide_kernel_url}")
+await micropip.install(pyodide_kernel_url)
+
+print(f"Installing ipykernel from {ipykernel_url}")
+await micropip.install(ipykernel_url)
+
+# Print status
+print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
+`);
+    } catch (error) {
+      console.error("Error in initPackageManager:", error);
+      throw error;
+    }
   }
 
   /**
@@ -152,7 +197,7 @@ export class Kernel extends EventEmitter implements IKernel {
 
     // Use piplite to install required packages
     const scriptLines: string[] = [];
-    
+
     for (const pkgName of toLoad) {
       scriptLines.push(`await piplite.install('${pkgName}', keep_going=True)`);
     }
@@ -163,7 +208,7 @@ export class Kernel extends EventEmitter implements IKernel {
     // Execute the installation
     await this.pyodide.runPythonAsync(scriptLines.join('\n'));
   }
-
+  
   /**
    * Initialize global objects from the pyodide_kernel package
    * Based on the PyodideRemoteKernel implementation
@@ -221,7 +266,7 @@ export class Kernel extends EventEmitter implements IKernel {
       this._sendMessage({
         parentHeader: this.formatResult(this._parent_header)['header'],
         bundle,
-        type: 'execute_error',
+          type: 'execute_error',
       });
     };
 
@@ -234,7 +279,7 @@ export class Kernel extends EventEmitter implements IKernel {
       this._sendMessage({
         parentHeader: this.formatResult(this._parent_header)['header'],
         bundle,
-        type: 'clear_output',
+          type: 'clear_output',
       });
     };
 

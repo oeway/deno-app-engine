@@ -1,0 +1,14 @@
+{
+  "name": "deno-code-interpreter",
+  "version": "0.1.0",
+  "description": "A Deno-based code interpreter with Pyodide",
+  "pypi-packages": {
+    "packages": {
+      "py/pyodide-kernel": "0.5.2",
+      "py/piplite": "0.5.2",
+      "py/ipykernel": "6.9.2",
+      "py/widgetsnbextension3/widgetsnbextension": "3.6.999",
+      "py/widgetsnbextension4/widgetsnbextension": "4.0.999"
+    }
+  }
+} 

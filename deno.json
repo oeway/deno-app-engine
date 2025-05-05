@@ -1,18 +1,25 @@
 {
-  "compilerOptions": {
-    "lib": ["deno.ns", "dom"],
-    "strict": true
+  "name": "deno-code-interpreter",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./mod.ts"
   },
   "imports": {
-    "pyodide": "npm:pyodide/pyodide.js",
-    "std/": "https://deno.land/std@0.217.0/",
-    "node:events": "node:events",
-    "comlink": "https://deno.land/x/comlink@4.4.1/mod.ts"
+    "pyodide": "npm:pyodide@0.27.5",
+    "node:events": "https://deno.land/std@0.177.0/node/events.ts",
+    "comlink": "https://esm.sh/comlink@4.3.1"
   },
   "tasks": {
-    "dev": "deno run --watch main.ts",
-    "test": "deno test --allow-net --allow-read kernel/test.ts",
-    "worker:test": "deno run --allow-net --allow-read --allow-hrtime --allow-env --allow-ffi worker_test.ts"
+    "test": "deno test -A --no-check main_test.ts worker_test.ts",
+    "example": "deno run -A examples/main.ts",
+    "generate-wheels": "cd kernel && python3 generate-wheels-js.py",
+    "build": "deno task generate-wheels && deno task test"
   },
-  "nodeModulesDir": "auto"
+  "assets": [
+    "kernel/pypi/**/*"
+  ],
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": ["deno.ns", "dom", "esnext"]
+  }
 }
