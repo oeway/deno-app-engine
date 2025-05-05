@@ -1,12 +1,13 @@
-// Deno Code Interpreter - Main Module
-// Exports the Kernel API for use in other projects
+// Deno Code Interpreter - Main module exports
+// This file exports the public API for the Deno Code Interpreter
 
-import { Kernel, KernelEvents, IKernel, IKernelExecuteOptions, IMessage } from "./kernel/index.ts";
+import { Kernel, KernelEvents } from './kernel/index.ts';
+import type { IKernel, IKernelExecuteOptions, IMessage } from './kernel/index.ts';
 
-// Re-export the implementations
+// Export the implementations
 export { Kernel, KernelEvents };
 
-// Re-export the types
+// Export the types
 export type { IKernel, IKernelExecuteOptions, IMessage };
 
 // Export a simple factory function for easier kernel instantiation

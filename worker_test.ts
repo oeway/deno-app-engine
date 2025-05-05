@@ -4,6 +4,12 @@
 import * as Comlink from "comlink";
 import { KernelEvents } from "./kernel/index.ts";
 import type { Kernel } from "./kernel/index.ts";
+import { assertEquals } from "https://deno.land/std/assert/mod.ts";
+
+// Print header for the test
+console.log("Deno Code Interpreter (Worker Test)");
+console.log("-----------------------------------");
+console.log("Initializing Python kernel in worker...");
 
 // Function to create the worker proxy
 async function createKernelWorker() {
@@ -17,49 +23,13 @@ async function createKernelWorker() {
   return { kernel, worker };
 }
 
-// Set up event forwarding from worker to main thread
-function setupEventForwarding(kernel: any, worker: Worker) {
-  // Create a message channel for events
-  const { port1, port2 } = new MessageChannel();
-
-  // Set up event listeners
-  port1.onmessage = (event) => {
-    const { type, data } = event.data;
-    switch (type) {
-      case KernelEvents.EXECUTE_RESULT:
-        console.log("\nResult:", data.data["text/plain"]);
-        break;
-      case KernelEvents.STREAM:
-        if (data.name === "stdout") {
-          console.log(data.text);
-        } else if (data.name === "stderr") {
-          console.error(data.text);
-        }
-        break;
-      case KernelEvents.EXECUTE_ERROR:
-        console.error(`\nError (${data.ename}): ${data.evalue}`);
-        break;
-      default:
-        console.log(`Event: ${type}`, data);
-    }
-  };
-
-  // Transfer port2 to the worker
-  worker.postMessage({ type: "SET_EVENT_PORT", port: port2 }, [port2]);
-}
-
 // Function to cleanly terminate worker
 function terminateWorker(worker: Worker) {
-  console.log("Terminating worker...");
   worker.terminate();
-  console.log("Worker terminated.");
 }
 
-async function main() {
-  console.log("Deno Code Interpreter (Worker Test)");
-  console.log("-----------------------------------");
-  console.log("Initializing Python kernel in worker...");
-  
+// Simple test that just checks if the kernel initializes and can execute code
+Deno.test("Worker: Kernel basic functionality", async () => {
   let worker: Worker | null = null;
   
   try {
@@ -67,38 +37,43 @@ async function main() {
     const result = await createKernelWorker();
     const kernel = result.kernel;
     worker = result.worker;
-
-    // Set up event forwarding
-    setupEventForwarding(kernel, worker);
     
     // Initialize the kernel
     await kernel.initialize();
-    console.log("Kernel initialized successfully!");
     
-    // Run some basic Python examples
-    console.log("\nExample 1: Basic calculation");
-    await kernel.execute("2 + 3");
+    // Verify initialization
+    const initialized = await kernel.isInitialized();
+    assertEquals(initialized, true, "Kernel should be initialized");
     
-    console.log("\nExample 2: Variable assignment and reuse");
-    await kernel.execute(`
-x = 42
-y = "hello"
-print(f"{y}, the answer is {x}")
-`);
+    // Execute a simple piece of code
+    const execResult = await kernel.execute("2 + 2");
     
-    console.log("\nExample 3: Handling errors");
-    await kernel.execute("1/0");
+    // Verify the execution was successful
+    assertEquals(execResult.success, true, "Execution should succeed");
     
-    console.log("\nDeno Code Interpreter worker test complete!");
-  } catch (error) {
-    console.error("Failed to initialize the kernel:", error);
+    // Define a variable and use it in a subsequent execution
+    await kernel.execute("x = 42");
+    const varResult = await kernel.execute("x + 8");
+    
+    // Verify the execution was successful
+    assertEquals(varResult.success, true, "Variable execution should succeed");
+    
+    // Test error handling
+    const errorResult = await kernel.execute("1/0");
+    
+    // Verify the execution failed
+    assertEquals(errorResult.success, false, "Division by zero should fail");
+    assertEquals(
+      errorResult.error?.message.includes("ZeroDivisionError"), 
+      true, 
+      "Error should be ZeroDivisionError"
+    );
+    
+    console.log("Worker tests completed successfully");
   } finally {
-    // Make sure to terminate the worker when done
+    // Clean up
     if (worker) {
       terminateWorker(worker);
     }
   }
-}
-
-// Run the main function when this file is run directly
-main().catch(console.error); 
+}); 
