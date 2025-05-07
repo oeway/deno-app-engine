@@ -59,19 +59,16 @@ function App() {
     try {
       setLoading(true);
       setMessage('Creating kernel...');
-      
       const response = await fetch('/api/kernels', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         }
       });
-      
       const data = await response.json();
-      
       if (response.ok) {
-        setKernelId(data.kernelId);
-        setMessage(`Kernel created: ${data.kernelId}`);
+        setKernelId(data.id);
+        setMessage(`Kernel created: ${data.id}`);
       } else {
         setMessage(`Error creating kernel: ${data.error}`);
       }
@@ -93,85 +90,15 @@ function App() {
     }
   };
   
-  // Connect to kernel events WebSocket
-  const connectToKernelEvents = (id, cellId = null) => {
-    // Close any existing connection
-    if (websocketRef.current) {
-      websocketRef.current.close();
-    }
-    
-    // Create a new WebSocket connection
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/kernels/${id}/events`;
-    
-    // Add cellId as a query parameter if provided
-    const wsUrlWithParams = cellId ? `${wsUrl}?cellId=${encodeURIComponent(cellId)}` : wsUrl;
-    
-    const ws = new WebSocket(wsUrlWithParams);
-    
-    ws.onopen = () => {
-      console.log('WebSocket connection established');
-    };
-    
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        
-        // Handle different event types
-        switch (message.type) {
-          case 'stream':
-            // Handle stream output from kernel
-            handleStreamOutput(message.data);
-            break;
-          case 'execute_result':
-            // Handle execution result
-            handleExecuteResult(message.data);
-            break;
-          case 'execute_error':
-            // Handle execution error
-            handleExecuteError(message.data);
-            setKernelStatus('error');
-            break;
-          case 'display_data':
-            // Handle display data
-            handleDisplayData(message.data);
-            break;
-          case 'input_request':
-            // Handle input request
-            handleInputRequest(message.data);
-            break;
-        }
-      } catch (error) {
-        console.error('Error handling WebSocket message:', error);
-      }
-    };
-    
-    ws.onclose = () => {
-      console.log('WebSocket connection closed');
-    };
-    
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setMessage('WebSocket connection error');
-    };
-    
-    websocketRef.current = ws;
-    
-    // Return the WebSocket for direct manipulation
-    return ws;
-  };
-  
   // Event handlers
-  const handleStreamOutput = (data) => {
+  const handleStreamOutput = (data, cellId) => {
     // Add the stream output to the executing cell
-    console.log('Stream output:', data);
-    
-    if (data.name && (data.name === 'stdout' || data.name === 'stderr') && data.text && data.cell_id) {
+    if (data.name && (data.name === 'stdout' || data.name === 'stderr') && data.text) {
       setNotebook(prevNotebook => {
         return {
           ...prevNotebook,
           cells: prevNotebook.cells.map(cell => {
-            if (cell.id === data.cell_id) {
+            if (cell.id === cellId) {
               return {
                 ...cell,
                 outputs: [...(cell.outputs || []), {
@@ -187,16 +114,13 @@ function App() {
     }
   };
   
-  const handleExecuteResult = (data) => {
-    // Add the execution result to the cell
-    console.log('Execute result:', data);
-    
-    if (data.cell_id && data.data) {
+  const handleExecuteResult = (data, cellId) => {
+    if (data && data.data) {
       setNotebook(prevNotebook => {
         return {
           ...prevNotebook,
           cells: prevNotebook.cells.map(cell => {
-            if (cell.id === data.cell_id) {
+            if (cell.id === cellId) {
               return {
                 ...cell,
                 outputs: [...(cell.outputs || []), {
@@ -209,20 +133,16 @@ function App() {
         };
       });
     }
-    
     setKernelStatus('idle');
   };
   
-  const handleExecuteError = (data) => {
-    // Add the error to the cell
-    console.error('Execute error:', data);
-    
-    if (data.cell_id) {
+  const handleExecuteError = (data, cellId) => {
+    if (cellId) {
       setNotebook(prevNotebook => {
         return {
           ...prevNotebook,
           cells: prevNotebook.cells.map(cell => {
-            if (cell.id === data.cell_id) {
+            if (cell.id === cellId) {
               return {
                 ...cell,
                 executing: false,
@@ -234,20 +154,16 @@ function App() {
         };
       });
     }
-    
     setKernelStatus('error');
   };
   
-  const handleDisplayData = (data) => {
-    // Add the display data to the cell
-    console.log('Display data:', data);
-    
-    if (data.cell_id && data.data) {
+  const handleDisplayData = (data, cellId) => {
+    if (data && data.data) {
       setNotebook(prevNotebook => {
         return {
           ...prevNotebook,
           cells: prevNotebook.cells.map(cell => {
-            if (cell.id === data.cell_id) {
+            if (cell.id === cellId) {
               return {
                 ...cell,
                 outputs: [...(cell.outputs || []), {
@@ -267,12 +183,11 @@ function App() {
     console.log('Input request:', data);
   };
   
-  // Execute code in the kernel
+  // Execute code using SSE streaming API
   const executeCode = async (code, cellId) => {
     try {
       setKernelStatus('busy');
-      
-      // Update the UI to show that the cell is executing
+      // Mark cell as executing
       setNotebook(prevNotebook => {
         return {
           ...prevNotebook,
@@ -288,25 +203,45 @@ function App() {
           })
         };
       });
-      
-      // Connect to WebSocket with the current cell ID
-      const ws = connectToKernelEvents(kernelId, cellId);
-      
-      // Execute the code in the kernel
-      const response = await fetch(`/api/kernels/${kernelId}/execute`, {
+      // Use SSE for streaming output
+      const response = await fetch(`/api/kernels/${kernelId}/execute/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ 
-          code,
-          cellId // Include the cellId in the request
-        })
+        body: JSON.stringify({ code }) // CHANGED: only send code
       });
-      
-      const result = await response.json();
-      
-      // Update the cell with the result
+      if (!response.body) throw new Error('No response body for SSE');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let lines = buffer.split('\n\n');
+        buffer = lines.pop(); // last incomplete event
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const event = JSON.parse(line.slice(6));
+            switch (event.type) {
+              case 'stream':
+                handleStreamOutput(event.data, cellId);
+                break;
+              case 'execute_result':
+                handleExecuteResult(event.data, cellId);
+                break;
+              case 'error':
+                handleExecuteError(event.data, cellId);
+                break;
+              case 'display_data':
+                handleDisplayData(event.data, cellId);
+                break;
+            }
+          }
+        }
+      }
+      // Mark cell as done executing
       setNotebook(prevNotebook => {
         return {
           ...prevNotebook,
@@ -315,22 +250,17 @@ function App() {
               return {
                 ...cell,
                 executing: false,
-                outputs: cell.outputs || [] // Keep existing outputs (from stream events)
+                outputs: cell.outputs || []
               };
             }
             return cell;
           })
         };
       });
-      
       setKernelStatus('idle');
-      
-      return result;
+      return { success: true };
     } catch (error) {
-      console.error('Error executing code:', error);
       setKernelStatus('error');
-      
-      // Update the cell to show the error
       setNotebook(prevNotebook => {
         return {
           ...prevNotebook,
@@ -346,7 +276,6 @@ function App() {
           })
         };
       });
-      
       return { success: false, error: error.toString() };
     }
   };

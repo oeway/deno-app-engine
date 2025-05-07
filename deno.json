@@ -13,14 +13,14 @@
     "test": "deno test -A --no-check main_test.ts worker_test.ts",
     "example": "deno run -A examples/main.ts",
     "generate-wheels": "cd kernel && python3 generate-wheels-js.py",
-    "build": "deno task generate-wheels && deno task test"
+    "build": "deno task generate-wheels && deno task test",
+    "compile": "deno compile -A --output dist/deno-code-interpreter mod.ts"
   },
   "assets": [
     "kernel/pypi/**/*"
   ],
   "unstable": ["worker-options", "webgpu"],
   "compilerOptions": {
-    "allowJs": true,
     "lib": ["deno.ns", "dom", "esnext"]
   }
 }

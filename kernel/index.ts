@@ -550,63 +550,32 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
       this._status = "busy";
       console.log("Executing Python code...");
       
-      // Properly escape code for Python execution
-      const escapedCode = JSON.stringify(code);
+      // Set up parent header for message callbacks
+      await this.setup(parent);
       
-      // Create a wrapper that executes the code safely and captures any errors
-      const wrappedCode = `
-import sys
-import traceback
-
-# Store the code to be executed
-exec_code = ${escapedCode}
-
-try:
-    # Execute the code in the global namespace to maintain state between runs
-    exec(exec_code, globals())
-    success = True
-    error = None
-except Exception as e:
-    error_type = type(e).__name__
-    error_msg = str(e)
-    traceback_str = traceback.format_exc()
-    print(f"Error: {error_type}: {error_msg}")
-    print(traceback_str)
-    success = False
-    error = {
-        "type": error_type,
-        "message": error_msg,
-        "traceback": traceback_str
-    }
-`;
-
-      // Run the Python code
-      await this.pyodide.runPythonAsync(wrappedCode);
+      // Execute the code using the IPython interpreter
+      const result = await this._kernel.run(code);
       
-      // Get success and error values from Python scope
-      const success = this.pyodide.globals.get('success');
-      let error = undefined;
-      let result = undefined;
-      
-      if (!success) {
-        error = this.formatResult(this.pyodide.globals.get('error'));
-        console.error("Execution error:", error);
-      } else {
-        // Try to get the result variable if it exists
-        try {
-          if (this.pyodide.globals.has('result')) {
-            result = this.formatResult(this.pyodide.globals.get('result'));
-          }
-        } catch (e) {
-          console.log("No result variable found in globals");
+      // Get the last expression value if available
+      const lastExpr = this.pyodide.globals.get('_');
+      if (lastExpr !== undefined && lastExpr !== null && String(lastExpr) !== 'None') {
+        const value = this.formatResult(lastExpr);
+        if (value !== undefined && value !== null && String(value) !== 'None') {
+          this._sendMessage({
+            type: 'execute_result',
+            bundle: {
+              execution_count: this.executionCount++,
+              data: { 'text/plain': String(value) },
+              metadata: {}
+            }
+          });
         }
       }
       
       this._status = "active";
       return {
-        success,
-        result,
-        error
+        success: true,
+        result: this.formatResult(result)
       };
     } catch (error) {
       console.error("JavaScript error during execution:", error);
@@ -829,22 +798,24 @@ except Exception as e:
         eventQueue.push(eventData);
       };
       
-      // Listen for all events
+      // Listen for all events BEFORE executing code
       super.on(KernelEvents.ALL, handleAllEvents);
       
-      // Execute code as normal
-      const result = await this.execute(code, parent);
-      
-      // Forward captured events
-      while (eventQueue.length > 0) {
-        yield eventQueue.shift();
+      try {
+        // Execute code as normal
+        const result = await this.execute(code, parent);
+        
+        // Forward captured events
+        while (eventQueue.length > 0) {
+          yield eventQueue.shift();
+        }
+        
+        this._status = "active";
+        return result;
+      } finally {
+        // Clean up listener in finally block to ensure it's always removed
+        super.off(KernelEvents.ALL, handleAllEvents);
       }
-      
-      // Clean up listener
-      super.off(KernelEvents.ALL, handleAllEvents);
-      
-      this._status = "active";
-      return result;
     } catch (error) {
       this._status = "active";
       console.error("Error in executeStream:", error);

@@ -191,6 +191,22 @@ export class KernelManager extends EventEmitter {
     // Create a message channel for events
     const { port1, port2 } = new MessageChannel();
     
+    // Create a promise that will resolve when the kernel is initialized
+    const initPromise = new Promise<void>((resolve, reject) => {
+      const initHandler = (event: MessageEvent) => {
+        if (event.data?.type === "KERNEL_INITIALIZED") {
+          if (event.data.data.success) {
+            port1.removeEventListener('message', initHandler);
+            resolve();
+          } else {
+            port1.removeEventListener('message', initHandler);
+            reject(new Error("Kernel initialization failed"));
+          }
+        }
+      };
+      port1.addEventListener('message', initHandler);
+    });
+    
     // Send the port to the worker
     worker.postMessage({ type: "SET_EVENT_PORT", port: port2 }, [port2]);
     
@@ -222,6 +238,9 @@ export class KernelManager extends EventEmitter {
         filesystem: options.filesystem
       }
     });
+    
+    // Wait for kernel initialization
+    await initPromise;
     
     // Create the kernel instance
     const instance: IKernelInstance = {
@@ -562,7 +581,11 @@ export class KernelManager extends EventEmitter {
           if (event.kernelId === kernelId) {
             streamQueue.push({
               type: 'execute_result',
-              data: event.data
+              data: {
+                execution_count: event.data.execution_count,
+                data: event.data.data,
+                metadata: event.data.metadata
+              }
             });
           }
         };

@@ -124,9 +124,31 @@ The main class for managing kernel instances.
 
 ### Running Tests
 
+To run all tests (including worker and server tests):
+
 ```bash
-deno test tests/manager_test.ts -A --unstable-worker-options
+deno test -A --unstable-worker-options
 ```
+
+To run a specific test file (e.g., the server test):
+
+```bash
+deno test --allow-net --allow-read tests/server_test.ts
+```
+
+- `-A` grants all permissions (required for filesystem/network tests).
+- `--unstable-worker-options` is needed for custom worker permissions.
+
+### Common Commands
+
+- **Run all tests:**  
+  `deno test -A --unstable-worker-options`
+- **Run a single test file:**  
+  `deno test --allow-net --allow-read tests/server_test.ts`
+- **Format code:**  
+  `deno fmt`
+- **Check for lint errors:**  
+  `deno lint`
 
 ### Project Structure
 
