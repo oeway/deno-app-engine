@@ -395,9 +395,9 @@ except Exception as e:
   sanitizeOps: false
 });
 
-// Test creating and using multiple kernels (main thread and worker)
+// Test creating and using multiple kernels (main thread and worker) with namespaces
 Deno.test({
-  name: "3. Create and use multiple kernels (main thread and worker)",
+  name: "3. Create and use multiple kernels (main thread and worker) with namespaces",
   async fn() {
     // Create a temporary directory with test files
     const tempDir = await createTempDir();
@@ -407,8 +407,9 @@ Deno.test({
     const workerContent = "Hello from worker kernel!";
     
     try {
-      // Create main thread kernel with filesystem mounting
+      // Create main thread kernel with filesystem mounting and namespace
       const mainKernelId = await manager.createKernel({
+        namespace: "test-multi",
         id: "main-multi-test",
         mode: KernelMode.MAIN_THREAD,
         filesystem: {
@@ -418,9 +419,9 @@ Deno.test({
         }
       });
       
-      // Create worker kernel with filesystem mounting
-      // No explicit Deno permissions to inherit from host
+      // Create worker kernel with filesystem mounting and same namespace
       const workerKernelId = await manager.createKernel({
+        namespace: "test-multi",
         id: "worker-multi-test",
         mode: KernelMode.WORKER,
         filesystem: {
@@ -434,10 +435,17 @@ Deno.test({
       const mainInstance = manager.getKernel(mainKernelId);
       const workerInstance = manager.getKernel(workerKernelId);
       
-      // Verify both kernels were created
+      // Verify both kernels were created with correct namespace
       assert(mainInstance, "Main kernel instance should exist");
       assert(workerInstance, "Worker kernel instance should exist");
-      
+      assert(mainKernelId.startsWith("test-multi:"), "Main kernel ID should have namespace prefix");
+      assert(workerKernelId.startsWith("test-multi:"), "Worker kernel ID should have namespace prefix");
+
+      // List kernels in the namespace
+      const namespaceKernels = manager.listKernels("test-multi");
+      assertEquals(namespaceKernels.length, 2, "Should have 2 kernels in test-multi namespace");
+      assert(namespaceKernels.every(k => k.namespace === "test-multi"), "All kernels should have test-multi namespace");
+
       // Wait for initialization to complete
       await new Promise(resolve => setTimeout(resolve, 2000));
       
@@ -531,13 +539,13 @@ except Exception as e:
       assert(kernelIds.includes(mainKernelId), "Main kernel ID should be listed");
       assert(kernelIds.includes(workerKernelId), "Worker kernel ID should be listed");
       
-      // Destroy kernels
-      await manager.destroyKernel(mainKernelId);
-      await manager.destroyKernel(workerKernelId);
+      // Destroy kernels by namespace instead of individual destruction
+      await manager.destroyAll("test-multi");
       
       // Verify kernels were destroyed
       assert(!manager.getKernel(mainKernelId), "Main kernel should be destroyed");
       assert(!manager.getKernel(workerKernelId), "Worker kernel should be destroyed");
+      assertEquals(manager.listKernels("test-multi").length, 0, "Should have no kernels in test-multi namespace");
     } finally {
       // Clean up the temporary directory
       await cleanupTempDir(tempDir);
@@ -794,6 +802,79 @@ except Exception as e:
       
     } finally {
       await cleanupTempDir(tempDir);
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test namespace functionality
+Deno.test({
+  name: "8. Test namespace functionality",
+  async fn() {
+    try {
+      // Clean up any existing kernels first
+      await manager.destroyAll();
+      assertEquals(manager.listKernels().length, 0, "Should start with no kernels");
+
+      // Create kernels with different namespaces
+      const project1KernelId1 = await manager.createKernel({
+        namespace: "project1",
+        mode: KernelMode.MAIN_THREAD
+      });
+      const project1KernelId2 = await manager.createKernel({
+        namespace: "project1",
+        mode: KernelMode.WORKER
+      });
+      const project2KernelId = await manager.createKernel({
+        namespace: "project2",
+        mode: KernelMode.MAIN_THREAD
+      });
+      const noNamespaceKernelId = await manager.createKernel();
+
+      // Verify kernel IDs have correct namespace prefixes
+      assert(project1KernelId1.startsWith("project1:"), "Kernel ID should have project1 namespace prefix");
+      assert(project1KernelId2.startsWith("project1:"), "Kernel ID should have project1 namespace prefix");
+      assert(project2KernelId.startsWith("project2:"), "Kernel ID should have project2 namespace prefix");
+      assert(!noNamespaceKernelId.includes(":"), "Kernel ID should not have namespace prefix");
+
+      // Test listKernels with namespace filtering
+      const project1Kernels = manager.listKernels("project1");
+      assertEquals(project1Kernels.length, 2, "Should have 2 kernels in project1 namespace");
+      assert(project1Kernels.every(k => k.namespace === "project1"), "All kernels should have project1 namespace");
+
+      const project2Kernels = manager.listKernels("project2");
+      assertEquals(project2Kernels.length, 1, "Should have 1 kernel in project2 namespace");
+      assertEquals(project2Kernels[0].namespace, "project2", "Kernel should have project2 namespace");
+
+      // Get total kernel count before testing destroyAll
+      const allKernels = manager.listKernels();
+      assertEquals(allKernels.length, 4, "Should have exactly 4 kernels when no namespace specified");
+
+      // Test destroyAll with namespace
+      await manager.destroyAll("project1");
+      const remainingKernels = manager.listKernels();
+      assertEquals(remainingKernels.length, 2, "Should have 2 kernels remaining after destroying project1");
+      assert(!remainingKernels.some(k => k.namespace === "project1"), "Should not have any project1 kernels remaining");
+
+      // Clean up remaining kernels
+      await manager.destroyAll();
+      assertEquals(manager.listKernels().length, 0, "Should have no kernels remaining");
+    } catch (error) {
+      // Make sure to clean up even if test fails
+      await manager.destroyAll();
+      throw error;
+    } finally {
+      // Double check cleanup
+      await manager.destroyAll();
+      const finalKernels = manager.listKernels();
+      if (finalKernels.length > 0) {
+        console.warn(`Warning: ${finalKernels.length} kernels remained after cleanup`);
+        for (const kernel of finalKernels) {
+          console.warn(`Remaining kernel: ${kernel.id} (namespace: ${kernel.namespace})`);
+          await manager.destroyKernel(kernel.id).catch(console.error);
+        }
+      }
     }
   },
   sanitizeResources: false,

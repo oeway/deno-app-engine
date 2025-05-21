@@ -556,6 +556,35 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
       // Execute the code using the IPython interpreter
       const result = await this._kernel.run(code);
       
+      // Debug the result structure
+      console.debug("Python execution result structure:", JSON.stringify(result, null, 2));
+      
+      // Check if there was a Python error - look for error status or error fields directly in result
+      // or inside a nested result object
+      if (result && 
+         ((result.status === 'error') || 
+          (result.ename) || 
+          (result.evalue))) {
+        
+        this._status = "active";
+        
+        // Send the error as an execute_error event
+        this._sendMessage({
+          type: 'execute_error',
+          bundle: {
+            ename: result.ename || 'Error',
+            evalue: result.evalue || 'Unknown error',
+            traceback: result.traceback || []
+          }
+        });
+        
+        return {
+          success: false,
+          error: new Error(`${result.ename || 'Error'}: ${result.evalue || 'Unknown error'}`),
+          result: result
+        };
+      }
+      
       // Get the last expression value if available
       const lastExpr = this.pyodide.globals.get('_');
       if (lastExpr !== undefined && lastExpr !== null && String(lastExpr) !== 'None') {
@@ -572,13 +601,52 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
         }
       }
       
+      // Format the result for the return value
+      const formattedResult = this.formatResult(result);
+      
+      // Check if the formatted result contains error information
+      if (formattedResult && 
+         ((formattedResult.status === 'error') || 
+          (formattedResult.ename) || 
+          (formattedResult.evalue))) {
+        
+        this._status = "active";
+        
+        // Send the error as an execute_error event if not already sent
+        this._sendMessage({
+          type: 'execute_error',
+          bundle: {
+            ename: formattedResult.ename || 'Error',
+            evalue: formattedResult.evalue || 'Unknown error',
+            traceback: formattedResult.traceback || []
+          }
+        });
+        
+        return {
+          success: false,
+          error: new Error(`${formattedResult.ename || 'Error'}: ${formattedResult.evalue || 'Unknown error'}`),
+          result: formattedResult
+        };
+      }
+      
       this._status = "active";
       return {
         success: true,
-        result: this.formatResult(result)
+        result: formattedResult
       };
     } catch (error) {
       console.error("JavaScript error during execution:", error);
+      
+      // Send the error as an execute_error event
+      this._sendMessage({
+        type: 'execute_error',
+        bundle: {
+          ename: error instanceof Error ? error.name : 'Error',
+          evalue: error instanceof Error ? error.message : String(error),
+          traceback: error instanceof Error && error.stack ? [error.stack] : ['No traceback available']
+        }
+      });
+      
       this._status = "active";
       return {
         success: false,

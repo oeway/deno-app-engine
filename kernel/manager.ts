@@ -47,6 +47,7 @@ export interface IDenoPermissions {
 export interface IManagerKernelOptions {
   id?: string;
   mode?: KernelMode;
+  namespace?: string;
   deno?: {
     permissions?: IDenoPermissions;
   };
@@ -79,13 +80,17 @@ export class KernelManager extends EventEmitter {
    * @param options Options for creating the kernel
    * @param options.id Optional custom ID for the kernel
    * @param options.mode Optional kernel mode (main_thread or worker)
+   * @param options.namespace Optional namespace prefix for the kernel ID
    * @param options.deno.permissions Optional Deno permissions for worker mode
    * @param options.filesystem Optional filesystem mounting options
    * @returns Promise resolving to the kernel instance ID
    */
   public async createKernel(options: IManagerKernelOptions = {}): Promise<string> {
-    const id = options.id || crypto.randomUUID();
+    const baseId = options.id || crypto.randomUUID();
     const mode = options.mode || KernelMode.WORKER;
+    
+    // Apply namespace prefix if provided
+    const id = options.namespace ? `${options.namespace}:${baseId}` : baseId;
     
     // Check if kernel with this ID already exists
     if (this.kernels.has(id)) {
@@ -304,26 +309,38 @@ export class KernelManager extends EventEmitter {
   
   /**
    * Get a list of all kernels with their details
+   * @param namespace Optional namespace to filter kernels by
    * @returns Array of kernel information objects
    */
-  public listKernels(): Array<{
+  public listKernels(namespace?: string): Array<{
     id: string;
     mode: KernelMode;
     status: "active" | "busy" | "unknown";
     created: Date;
+    namespace?: string;
     deno?: {
       permissions?: IDenoPermissions;
     };
   }> {
-    return Array.from(this.kernels.entries()).map(([id, instance]) => {
-      return {
-        id,
-        mode: instance.mode,
-        status: instance.kernel.status || "unknown",
-        created: instance.created || new Date(),
-        deno: instance.options?.deno
-      };
-    });
+    return Array.from(this.kernels.entries())
+      .filter(([id]) => {
+        if (!namespace) return true;
+        return id.startsWith(`${namespace}:`);
+      })
+      .map(([id, instance]) => {
+        // Extract namespace from id if present
+        const namespaceMatch = id.match(/^([^:]+):/);
+        const extractedNamespace = namespaceMatch ? namespaceMatch[1] : undefined;
+        
+        return {
+          id,
+          mode: instance.mode,
+          status: instance.kernel.status || "unknown",
+          created: instance.created || new Date(),
+          namespace: extractedNamespace,
+          deno: instance.options?.deno
+        };
+      });
   }
   
   /**
@@ -350,10 +367,15 @@ export class KernelManager extends EventEmitter {
   
   /**
    * Destroy all kernel instances
+   * @param namespace Optional namespace to filter kernels to destroy
    * @returns Promise resolving when all kernels are destroyed
    */
-  public async destroyAll(): Promise<void> {
-    const ids = this.getKernelIds();
+  public async destroyAll(namespace?: string): Promise<void> {
+    const ids = Array.from(this.kernels.keys())
+      .filter(id => {
+        if (!namespace) return true;
+        return id.startsWith(`${namespace}:`);
+      });
     
     // Destroy all kernels
     await Promise.all(ids.map(id => this.destroyKernel(id)));
