@@ -44,6 +44,20 @@ python3 generate-wheels-js.py
 
 ## Usage
 
+### Starting the Server
+
+1. Make the start script executable:
+```bash
+chmod +x start-server.sh
+```
+
+2. Start the server:
+```bash
+./start-server.sh
+```
+
+The server will start with all necessary permissions. Once running, you can access the web interface at `http://localhost:8000`.
+
 ### Basic Example
 
 ```typescript
