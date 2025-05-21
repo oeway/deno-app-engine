@@ -2,6 +2,7 @@
 // This file manages kernel instances in either main thread or worker mode
 
 import * as Comlink from "comlink";
+// @ts-ignore Importing from npm
 import { EventEmitter } from 'node:events';
 // import EventEmitter from "https://deno.land/x/events@v1.0.0/mod.ts";
 import { Kernel, KernelEvents, IKernel, IKernelOptions, IFilesystemMountOptions } from "./index.ts";

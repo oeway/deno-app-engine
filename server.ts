@@ -14,6 +14,7 @@ interface ExecutionSession {
   outputs: unknown[];
   promise: Promise<unknown[]>;
   complete: boolean;
+  listeners: ((output: unknown) => void)[];
 }
 
 const sessions = new Map<string, ExecutionSession>();
@@ -54,6 +55,7 @@ async function createExecutionSession(kernelId: string, code: string): Promise<E
       rejectPromise = reject;
     }),
     complete: false,
+    listeners: []
   };
   
   sessions.set(sessionId, session);
@@ -63,6 +65,8 @@ async function createExecutionSession(kernelId: string, code: string): Promise<E
     try {
       for await (const output of kernelManager.executeStream(kernelId, code)) {
         session.outputs.push(output);
+        // Notify all listeners
+        session.listeners?.forEach(listener => listener(output));
       }
       session.complete = true;
       resolvePromise(session.outputs);
@@ -82,7 +86,8 @@ async function createExecutionSession(kernelId: string, code: string): Promise<E
       };
       session.outputs.push(errorOutput);
       session.complete = true;
-      resolvePromise([errorOutput]);
+      // Notify all listeners of the error
+      session.listeners?.forEach(listener => listener(errorOutput));
       rejectPromise(error instanceof Error ? error : new Error(String(error)));
     }
   })();
@@ -90,9 +95,32 @@ async function createExecutionSession(kernelId: string, code: string): Promise<E
   return session;
 }
 
+// Helper to serve static files
+async function serveStaticFile(path: string): Promise<Response> {
+  try {
+    const file = await Deno.readFile(path);
+    const mediaType = contentType(path.split('.').pop() || '');
+    return new Response(file, {
+      headers: {
+        "Content-Type": mediaType || "application/octet-stream",
+      },
+    });
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      return new Response("404 Not Found", { status: 404 });
+    }
+    return new Response("500 Internal Server Error", { status: 500 });
+  }
+}
+
 export async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
+
+  // Serve index.html at root
+  if (path === "/" || path === "/index.html") {
+    return await serveStaticFile("index.html");
+  }
 
   // CORS headers
   const corsHeaders = {
@@ -107,296 +135,334 @@ export async function handleRequest(req: Request): Promise<Response> {
   }
 
   try {
-    // List kernels
-    if (path === "/api/kernels" && req.method === "GET") {
-      const kernels = kernelManager.getKernelIds();
-      return jsonResponse(kernels);
-    }
+    // API routes
+    if (path.startsWith("/api/")) {
+      // List kernels
+      if (path === "/api/kernels" && req.method === "GET") {
+        const kernels = kernelManager.getKernelIds();
+        return jsonResponse(kernels);
+      }
 
-    // Create kernel
-    if (path === "/api/kernels" && req.method === "POST") {
-      const body = await req.json();
-      const kernelId = await kernelManager.createKernel({
-        id: body.id || crypto.randomUUID(),
-        mode: body.mode || KernelMode.WORKER,
-      });
-      const kernel = kernelManager.getKernel(kernelId);
-      await kernel?.kernel.initialize();
-      
-      // Initialize history for this kernel
-      kernelHistory.set(kernelId, []);
-      
-      return jsonResponse({ id: kernelId });
-    }
-
-    // Delete kernel
-    if (path.match(/^\/api\/kernels\/[\w-]+$/) && req.method === "DELETE") {
-      const kernelId = path.split("/").pop()!;
-      
-      // Clean up sessions for this kernel
-      for (const [sessionId, session] of sessions.entries()) {
-        if (session.kernelId === kernelId) {
-          sessions.delete(sessionId);
+      // Create kernel
+      if (path === "/api/kernels" && req.method === "POST") {
+        try {
+          const body = await req.json();
+          console.log("Creating kernel with options:", body);
+          
+          const kernelId = await kernelManager.createKernel({
+            id: body.id || crypto.randomUUID(),
+            mode: body.mode || KernelMode.WORKER,
+          });
+          console.log("Kernel created with ID:", kernelId, "and mode:", body.mode || KernelMode.WORKER);
+          
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            throw new Error("Failed to get kernel after creation");
+          }
+          
+          console.log("Initializing kernel...");
+          try {
+            await kernel.kernel.initialize();
+            console.log("Kernel initialized successfully");
+            
+            // Initialize history for this kernel
+            kernelHistory.set(kernelId, []);
+            
+            return jsonResponse({ id: kernelId });
+          } catch (error: unknown) {
+            console.error("Kernel initialization failed:", error);
+            // Clean up the failed kernel
+            await kernelManager.destroyKernel(kernelId);
+            return jsonResponse(
+              { error: error instanceof Error ? error.message : String(error) },
+              Status.InternalServerError
+            );
+          }
+        } catch (error: unknown) {
+          console.error("Error creating kernel:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
         }
       }
-      
-      // Clean up history
-      kernelHistory.delete(kernelId);
-      
-      await kernelManager.destroyKernel(kernelId);
-      return new Response(null, { status: Status.NoContent });
-    }
 
-    // Get kernel info
-    if (path.match(/^\/api\/kernels\/[\w-]+\/info$/) && req.method === "GET") {
-      const kernelId = path.split("/")[3];
-      const kernel = kernelManager.getKernel(kernelId);
-      
-      if (!kernel) {
-        return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
-      }
-      
-      return jsonResponse({
-        id: kernelId,
-        name: `Kernel-${kernelId.slice(0, 8)}`,
-        mode: kernel.mode,
-        created: kernel.created,
-        status: kernel.kernel.status || "unknown",
-        history: kernelHistory.get(kernelId) || [],
-      });
-    }
-
-    // Submit async execution
-    if (path.match(/^\/api\/kernels\/[\w-]+\/execute\/submit$/) && req.method === "POST") {
-      const kernelId = path.split("/")[3];
-      const { code } = await req.json();
-
-      if (!code) {
-        return jsonResponse({ error: "No code provided" }, Status.BadRequest);
+      // Delete kernel
+      if (path.match(/^\/api\/kernels\/[\w-]+$/) && req.method === "DELETE") {
+        const kernelId = path.split("/").pop()!;
+        
+        // Clean up sessions for this kernel
+        for (const [sessionId, session] of sessions.entries()) {
+          if (session.kernelId === kernelId) {
+            sessions.delete(sessionId);
+          }
+        }
+        
+        // Clean up history
+        kernelHistory.delete(kernelId);
+        
+        await kernelManager.destroyKernel(kernelId);
+        return new Response(null, { status: Status.NoContent });
       }
 
-      try {
+      // Get kernel info
+      if (path.match(/^\/api\/kernels\/[\w-]+\/info$/) && req.method === "GET") {
+        const kernelId = path.split("/")[3];
         const kernel = kernelManager.getKernel(kernelId);
+        
         if (!kernel) {
           return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
         }
-
-        console.log("Creating execution session...");
-        const session = await createExecutionSession(kernelId, code);
-        console.log("Session created:", session);
-        const response = jsonResponse({ session_id: session.id });
-        console.log("Response content type:", response.headers.get("Content-Type"));
-        console.log("Response body:", await response.clone().json());
-        const headers: Record<string, string> = {};
-        response.headers.forEach((value, key) => {
-          headers[key] = value;
+        
+        return jsonResponse({
+          id: kernelId,
+          name: `Kernel-${kernelId.slice(0, 8)}`,
+          mode: kernel.mode,
+          created: kernel.created,
+          status: kernel.kernel.status || "unknown",
+          history: kernelHistory.get(kernelId) || [],
         });
-        console.log("Response headers:", headers);
-        return response;
-      } catch (error) {
-        console.error("Error in execute/submit:", error);
-        return jsonResponse(
-          { error: error instanceof Error ? error.message : String(error) },
-          Status.InternalServerError
-        );
       }
-    }
 
-    // Get async execution result
-    if (path.match(/^\/api\/kernels\/[\w-]+\/execute\/result\/[\w-]+$/) && req.method === "GET") {
-      const kernelId = path.split("/")[3];
-      const sessionId = path.split("/")[6];
+      // Submit async execution
+      if (path.match(/^\/api\/kernels\/[\w-]+\/execute\/submit$/) && req.method === "POST") {
+        const kernelId = path.split("/")[3];
+        const { code } = await req.json();
 
-      try {
-        const kernel = kernelManager.getKernel(kernelId);
-        if (!kernel) {
-          return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+        if (!code) {
+          return jsonResponse({ error: "No code provided" }, Status.BadRequest);
         }
 
-        const session = sessions.get(sessionId);
-        if (!session) {
-          return jsonResponse({ error: "Session not found" }, Status.NotFound);
-        }
+        try {
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+          }
 
-        console.log("Getting result for session:", sessionId);
-        const result = await session.promise;
-        console.log("Result:", result);
-        return jsonResponse(result);
-      } catch (error) {
-        console.error("Error in execute/result:", error);
-        return jsonResponse(
-          { error: error instanceof Error ? error.message : String(error) },
-          Status.InternalServerError
-        );
+          console.log("Creating execution session...");
+          const session = await createExecutionSession(kernelId, code);
+          console.log("Session created:", session);
+          const response = jsonResponse({ session_id: session.id });
+          console.log("Response content type:", response.headers.get("Content-Type"));
+          console.log("Response body:", await response.clone().json());
+          const headers: Record<string, string> = {};
+          response.headers.forEach((value, key) => {
+            headers[key] = value;
+          });
+          console.log("Response headers:", headers);
+          return response;
+        } catch (error) {
+          console.error("Error in execute/submit:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
       }
-    }
 
-    // Stream execution results
-    if (path.match(/^\/api\/kernels\/[\w-]+\/execute\/stream\/[\w-]+$/) && req.method === "GET") {
-      const kernelId = path.split("/")[3];
-      const sessionId = path.split("/").pop()!;
-      
-      try {
-        const kernel = kernelManager.getKernel(kernelId);
-        if (!kernel) {
-          return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+      // Get async execution result
+      if (path.match(/^\/api\/kernels\/[\w-]+\/execute\/result\/[\w-]+$/) && req.method === "GET") {
+        const kernelId = path.split("/")[3];
+        const sessionId = path.split("/")[6];
+
+        try {
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+          }
+
+          const session = sessions.get(sessionId);
+          if (!session) {
+            return jsonResponse({ error: "Session not found" }, Status.NotFound);
+          }
+
+          console.log("Getting result for session:", sessionId);
+          const result = await session.promise;
+          console.log("Result:", result);
+          return jsonResponse(result);
+        } catch (error) {
+          console.error("Error in execute/result:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
         }
+      }
 
-        const session = sessions.get(sessionId);
-        if (!session) {
-          return jsonResponse({ error: "Session not found" }, Status.NotFound);
-        }
+      // Stream execution results
+      if (path.match(/^\/api\/kernels\/[\w-]+\/execute\/stream\/[\w-]+$/) && req.method === "GET") {
+        const kernelId = path.split("/")[3];
+        const sessionId = path.split("/").pop()!;
+        
+        try {
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+          }
 
-        // Set up SSE stream
-        const stream = new ReadableStream({
-          async start(controller) {
-            try {
-              let lastSentIndex = 0;
-              
-              // Send accumulated results first
-              for (const output of session.outputs) {
-                const event = `data: ${JSON.stringify(output)}\n\n`;
-                controller.enqueue(new TextEncoder().encode(event));
-                lastSentIndex++;
-              }
-              
-              // If execution is complete, we're done
-              if (session.complete) {
-                controller.close();
-                return;
-              }
-              
-              // Wait for new results
+          const session = sessions.get(sessionId);
+          if (!session) {
+            return jsonResponse({ error: "Session not found" }, Status.NotFound);
+          }
+
+          // Set up SSE stream
+          const stream = new ReadableStream({
+            async start(controller) {
               try {
-                const results = await session.promise;
-                
-                // Send any new results that weren't sent in the initial batch
-                for (let i = lastSentIndex; i < results.length; i++) {
-                  const event = `data: ${JSON.stringify(results[i])}\n\n`;
+                // Create a function to send an event
+                const sendEvent = (data: any) => {
+                  const event = `data: ${JSON.stringify(data)}\n\n`;
                   controller.enqueue(new TextEncoder().encode(event));
+                };
+
+                // Send any existing outputs first
+                for (const output of session.outputs) {
+                  sendEvent(output);
                 }
-              } catch (error) {
-                // If there was an error, send it as an event
+
+                // Set up event listener for new outputs
+                const outputListener = (output: any) => {
+                  session.outputs.push(output);
+                  sendEvent(output);
+                };
+
+                // Add listener to session
+                session.listeners = session.listeners || [];
+                session.listeners.push(outputListener);
+
+                // Wait for completion or error
+                try {
+                  await session.promise;
+                  controller.close();
+                } catch (error) {
+                  sendEvent({
+                    type: "error",
+                    data: { message: error instanceof Error ? error.message : String(error) }
+                  });
+                  controller.close();
+                }
+
+                // Clean up listener
+                const listenerIndex = session.listeners.indexOf(outputListener);
+                if (listenerIndex !== -1) {
+                  session.listeners.splice(listenerIndex, 1);
+                }
+              } catch (error: unknown) {
                 const errorEvent = `data: ${JSON.stringify({
                   type: "error",
                   data: { message: error instanceof Error ? error.message : String(error) },
                 })}\n\n`;
                 controller.enqueue(new TextEncoder().encode(errorEvent));
+                controller.close();
               }
-              
-              controller.close();
-            } catch (error: unknown) {
-              const errorEvent = `data: ${JSON.stringify({
-                type: "error",
-                data: { message: error instanceof Error ? error.message : String(error) },
-              })}\n\n`;
-              controller.enqueue(new TextEncoder().encode(errorEvent));
-              controller.close();
-            }
-          },
-        });
+            },
+          });
 
-        return new Response(stream, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-          },
-        });
-      } catch (error) {
-        return jsonResponse(
-          { error: error instanceof Error ? error.message : String(error) },
-          Status.InternalServerError
-        );
-      }
-    }
-
-    // Execute code (non-streaming)
-    if (path.match(/^\/api\/kernels\/[\w-]+\/execute$/) && req.method === "POST") {
-      const kernelId = path.split("/")[3];
-      const { code } = await req.json();
-
-      if (!code) {
-        return jsonResponse({ error: "No code provided" }, Status.BadRequest);
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type",
+            },
+          });
+        } catch (error) {
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
       }
 
-      try {
-        const kernel = kernelManager.getKernel(kernelId);
-        if (!kernel) {
-          return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+      // Execute code (non-streaming)
+      if (path.match(/^\/api\/kernels\/[\w-]+\/execute$/) && req.method === "POST") {
+        const kernelId = path.split("/")[3];
+        const { code } = await req.json();
+
+        if (!code) {
+          return jsonResponse({ error: "No code provided" }, Status.BadRequest);
         }
 
-        // Create a session and wait for results
-        const session = await createExecutionSession(kernelId, code);
-        const results = await session.promise;
-        return jsonResponse(results);
-      } catch (error) {
-        return jsonResponse(
-          { error: error instanceof Error ? error.message : String(error) },
-          Status.InternalServerError
-        );
-      }
-    }
+        try {
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+          }
 
-    // Execute code with SSE streaming
-    if (path.match(/^\/api\/kernels\/[\w-]+\/execute\/stream$/) && req.method === "POST") {
-      const kernelId = path.split("/")[3];
-      const { code } = await req.json();
-
-      if (!code) {
-        return jsonResponse({ error: "No code provided" }, Status.BadRequest);
+          // Create a session and wait for results
+          const session = await createExecutionSession(kernelId, code);
+          const results = await session.promise;
+          return jsonResponse(results);
+        } catch (error) {
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
       }
 
-      try {
-        const kernel = kernelManager.getKernel(kernelId);
-        if (!kernel) {
-          return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+      // Execute code with SSE streaming
+      if (path.match(/^\/api\/kernels\/[\w-]+\/execute\/stream$/) && req.method === "POST") {
+        const kernelId = path.split("/")[3];
+        const { code } = await req.json();
+
+        if (!code) {
+          return jsonResponse({ error: "No code provided" }, Status.BadRequest);
         }
 
-        // Create a session
-        const session = await createExecutionSession(kernelId, code);
+        try {
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+          }
 
-        // Set up SSE stream
-        const stream = new ReadableStream({
-          async start(controller) {
-            try {
-              // Wait for results and stream them
-              const results = await session.promise;
-              for (const output of results) {
-                const event = `data: ${JSON.stringify(output)}\n\n`;
-                controller.enqueue(new TextEncoder().encode(event));
+          // Create a session
+          const session = await createExecutionSession(kernelId, code);
+
+          // Set up SSE stream
+          const stream = new ReadableStream({
+            async start(controller) {
+              try {
+                // Wait for results and stream them
+                const results = await session.promise;
+                for (const output of results) {
+                  const event = `data: ${JSON.stringify(output)}\n\n`;
+                  controller.enqueue(new TextEncoder().encode(event));
+                }
+                controller.close();
+              } catch (error: unknown) {
+                const errorEvent = `data: ${JSON.stringify({
+                  type: "error",
+                  data: { message: error instanceof Error ? error.message : String(error) },
+                })}\n\n`;
+                controller.enqueue(new TextEncoder().encode(errorEvent));
+                controller.close();
               }
-              controller.close();
-            } catch (error: unknown) {
-              const errorEvent = `data: ${JSON.stringify({
-                type: "error",
-                data: { message: error instanceof Error ? error.message : String(error) },
-              })}\n\n`;
-              controller.enqueue(new TextEncoder().encode(errorEvent));
-              controller.close();
-            }
-          },
-        });
+            },
+          });
 
-        return new Response(stream, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-          },
-        });
-      } catch (error) {
-        return jsonResponse(
-          { error: error instanceof Error ? error.message : String(error) },
-          Status.InternalServerError
-        );
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type",
+            },
+          });
+        } catch (error) {
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
       }
+
+      // Not found
+      return jsonResponse({ error: "Not found" }, Status.NotFound);
     }
 
     // Not found

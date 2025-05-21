@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deno Code Interpreter API Examples</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4F46E5;
+            --secondary-color: #6366F1;
+            --success-color: #10B981;
+            --background-color: #F9FAFB;
+            --card-background: #FFFFFF;
+            --text-primary: #1F2937;
+            --text-secondary: #6B7280;
+            --border-color: #E5E7EB;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            color: var(--text-primary);
+            background-color: var(--background-color);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: var(--primary-color);
+            margin-bottom: 2rem;
+            text-align: center;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .example {
+            margin-bottom: 2rem;
+            border: 1px solid var(--border-color);
+            padding: 2rem;
+            border-radius: 1rem;
+            background: var(--card-background);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .example:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 1rem;
+        }
+
+        pre {
+            background: #1E293B;
+            color: #E5E7EB;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            overflow-x: auto;
+            font-size: 0.9rem;
+            margin: 1rem 0;
+        }
+
+        .endpoint {
+            display: inline-block;
+            color: var(--primary-color);
+            font-weight: 500;
+            padding: 0.25rem 0.75rem;
+            background-color: rgba(79, 70, 229, 0.1);
+            border-radius: 0.5rem;
+            margin: 0.5rem 0;
+        }
+
+        button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        button:hover {
+            background: var(--secondary-color);
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            background: var(--text-secondary);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .output {
+            white-space: pre-wrap;
+            background: #F3F4F6;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            margin-top: 1rem;
+            display: none;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.9rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .response-label {
+            font-weight: 500;
+            margin-top: 1rem;
+            color: var(--text-secondary);
+            display: none;
+        }
+
+        .spinner {
+            display: none;
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(79, 70, 229, 0.1);
+            border-top: 3px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .response-container {
+            display: none;
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            background: rgba(249, 250, 251, 0.5);
+            -webkit-backdrop-filter: blur(8px);
+            backdrop-filter: blur(8px);
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Toast notification styles */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 1.5rem;
+            background: var(--success-color);
+            color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            display: none;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            .example {
+                padding: 1.5rem;
+            }
+
+            pre {
+                font-size: 0.8rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Deno Code Interpreter API Examples</h1>
+    
+    <div class="example">
+        <h2>1. Create a New Kernel</h2>
+        <p>Endpoint: <span class="endpoint">POST /api/kernels</span></p>
+        <pre>fetch('/api/kernels', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+});</pre>
+        <button onclick="createKernel()" id="create-button">
+            <span>Create Kernel</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="create-response">
+            <div class="response-label">Response:</div>
+            <div id="create-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>2. List All Kernels</h2>
+        <p>Endpoint: <span class="endpoint">GET /api/kernels</span></p>
+        <pre>fetch('/api/kernels');</pre>
+        <button onclick="listKernels()" id="list-button">
+            <span>List Kernels</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="list-response">
+            <div class="response-label">Response:</div>
+            <div id="list-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>3. Execute Code</h2>
+        <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute</span></p>
+        <pre>fetch(`/api/kernels/${kernelId}/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        code: 'print("Hello, World!")'
+    })
+});</pre>
+        <button onclick="executeCode()" id="execute-button">
+            <span>Execute Code</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="execute-response">
+            <div class="response-label">Response:</div>
+            <div id="execute-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>4. Stream Execution</h2>
+        <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute/stream</span></p>
+        <pre>const response = await fetch(`/api/kernels/${kernelId}/execute/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        code: `
+import asyncio
+print("Starting stream test...")
+for i in range(5):
+    print(f"Processing item {i}...")
+    await asyncio.sleep(1)
+    if i % 2 == 0:
+        print(f"  - Even number found: {i}")
+    else:
+        print(f"  - Odd number found: {i}")
+print("Stream test complete!")`
+    })
+});</pre>
+        <button onclick="streamExecution()" id="stream-button">
+            <span>Stream Execution</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="stream-response">
+            <div class="response-label">Response:</div>
+            <div id="stream-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>5. Get Kernel Info</h2>
+        <p>Endpoint: <span class="endpoint">GET /api/kernels/:id/info</span></p>
+        <pre>fetch(`/api/kernels/${kernelId}/info`);</pre>
+        <button onclick="getKernelInfo()" id="info-button">
+            <span>Get Info</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="info-response">
+            <div class="response-label">Response:</div>
+            <div id="info-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let currentKernelId = null;
+
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.style.display = 'block';
+            toast.style.backgroundColor = type === 'success' ? 'var(--success-color)' : '#EF4444';
+            
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+
+        function showSpinner(id) {
+            const container = document.getElementById(`${id}-response`);
+            const button = document.getElementById(`${id}-button`);
+            const spinner = button.querySelector('.spinner');
+            const output = document.getElementById(`${id}-output`);
+            
+            container.style.display = 'block';
+            spinner.style.display = 'block';
+            output.style.display = 'none';
+            container.querySelector('.response-label').style.display = 'none';
+            button.disabled = true;
+        }
+
+        function hideSpinner(id) {
+            const button = document.getElementById(`${id}-button`);
+            const spinner = button.querySelector('.spinner');
+            
+            spinner.style.display = 'none';
+            button.disabled = false;
+        }
+
+        function showOutput(data, id) {
+            const container = document.getElementById(`${id}-response`);
+            const output = document.getElementById(`${id}-output`);
+            
+            container.style.display = 'block';
+            container.querySelector('.response-label').style.display = 'block';
+            output.textContent = JSON.stringify(data, null, 2);
+            output.style.display = 'block';
+
+            // Smooth scroll to output
+            output.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        async function createKernel() {
+            showSpinner('create');
+            try {
+                const response = await fetch('/api/kernels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+                currentKernelId = data.id;
+                showOutput(data, 'create');
+                showToast('Kernel created successfully!');
+            } catch (error) {
+                showOutput({ error: error.message }, 'create');
+                showToast('Failed to create kernel', 'error');
+            } finally {
+                hideSpinner('create');
+            }
+        }
+
+        async function listKernels() {
+            showSpinner('list');
+            try {
+                const response = await fetch('/api/kernels');
+                const data = await response.json();
+                showOutput(data, 'list');
+                showToast('Kernels listed successfully!');
+            } catch (error) {
+                showOutput({ error: error.message }, 'list');
+                showToast('Failed to list kernels', 'error');
+            } finally {
+                hideSpinner('list');
+            }
+        }
+
+        async function executeCode() {
+            if (!currentKernelId) {
+                showToast('Please create a kernel first', 'error');
+                showOutput({ error: 'Please create a kernel first' }, 'execute');
+                return;
+            }
+            showSpinner('execute');
+            try {
+                const response = await fetch(`/api/kernels/${currentKernelId}/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code: 'print("Hello, World!")'
+                    })
+                });
+                const data = await response.json();
+                showOutput(data, 'execute');
+                showToast('Code executed successfully!');
+            } catch (error) {
+                showOutput({ error: error.message }, 'execute');
+                showToast('Failed to execute code', 'error');
+            } finally {
+                hideSpinner('execute');
+            }
+        }
+
+        async function streamExecution() {
+            if (!currentKernelId) {
+                showToast('Please create a kernel first', 'error');
+                showOutput({ error: 'Please create a kernel first' }, 'stream');
+                return;
+            }
+            showSpinner('stream');
+            
+            try {
+                const execResponse = await fetch(`/api/kernels/${currentKernelId}/execute/submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code: `
+import asyncio
+print("Starting stream test...")
+for i in range(5):
+    print(f"Processing item {i}...")
+    await asyncio.sleep(1)
+    if i % 2 == 0:
+        print(f"  - Even number found: {i}")
+    else:
+        print(f"  - Odd number found: {i}")
+print("Stream test complete!")`
+                    })
+                });
+                
+                if (!execResponse.ok) {
+                    throw new Error(`HTTP error! status: ${execResponse.status}`);
+                }
+                
+                const { session_id } = await execResponse.json();
+                
+                const container = document.getElementById('stream-response');
+                const output = document.getElementById('stream-output');
+                container.style.display = 'block';
+                container.querySelector('.response-label').style.display = 'block';
+                output.style.display = 'block';
+                output.textContent = 'Streaming output:\n';
+
+                showToast('Stream started successfully!');
+
+                const eventSource = new EventSource(`/api/kernels/${currentKernelId}/execute/stream/${session_id}`);
+                
+                return new Promise((resolve, reject) => {
+                    eventSource.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            
+                            let formattedOutput = '';
+                            if (data.type === 'stream') {
+                                formattedOutput = data.data.text;
+                            } else if (data.type === 'execute_result') {
+                                formattedOutput = `Result: ${JSON.stringify(data.data.data)}\n`;
+                            } else if (data.type === 'error') {
+                                formattedOutput = `Error: ${data.data.message}\n`;
+                            } else {
+                                formattedOutput = `${data.type}: ${JSON.stringify(data.data)}\n`;
+                            }
+                            
+                            output.textContent += formattedOutput;
+                            output.scrollTop = output.scrollHeight;
+                        } catch (error) {
+                            console.error('Error processing stream event:', error);
+                        }
+                    };
+
+                    eventSource.onerror = (error) => {
+                        console.log('Stream ended or errored:', error);
+                        eventSource.close();
+                        if (output.textContent === 'Streaming output:\n') {
+                            showOutput({ error: 'Stream ended with no data' }, 'stream');
+                            showToast('Stream ended with no data', 'error');
+                        } else {
+                            showToast('Stream completed successfully!');
+                        }
+                        hideSpinner('stream');
+                        resolve();
+                    };
+                });
+            } catch (error) {
+                showOutput({ error: error.message }, 'stream');
+                showToast('Failed to start stream', 'error');
+                hideSpinner('stream');
+            }
+        }
+
+        async function getKernelInfo() {
+            if (!currentKernelId) {
+                showToast('Please create a kernel first', 'error');
+                showOutput({ error: 'Please create a kernel first' }, 'info');
+                return;
+            }
+            showSpinner('info');
+            try {
+                const response = await fetch(`/api/kernels/${currentKernelId}/info`);
+                const data = await response.json();
+                showOutput(data, 'info');
+                showToast('Kernel info retrieved successfully!');
+            } catch (error) {
+                showOutput({ error: error.message }, 'info');
+                showToast('Failed to get kernel info', 'error');
+            } finally {
+                hideSpinner('info');
+            }
+        }
+    </script>
+</body>
+</html> 
