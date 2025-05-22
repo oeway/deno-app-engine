@@ -212,7 +212,7 @@ arr.sum()
       const info = await service.getKernelInfo({
         kernelId: kernel.id
       });
-      console.log(`  Kernel info: ${JSON.stringify(info)}`);
+      console.log(`  Kernel info: ${info.id} ${info.name}`)
     } catch (error) {
       console.error(`  Failed to get kernel info:`, error);
     }
