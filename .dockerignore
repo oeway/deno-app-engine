@@ -27,4 +27,3 @@ LICENSE
 
 # Large or unnecessary files
 *.log
-node_modules
