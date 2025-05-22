@@ -302,7 +302,8 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
       'comm',
       'pyodide_kernel',
       'jedi',
-      'ipython'
+      'ipython',
+      'nbformat'
     ];
 
     // Use piplite to install required packages

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Deno Code Interpreter API Examples</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
     <style>
         :root {
             --primary-color: #4F46E5;
@@ -235,6 +236,24 @@
             font-size: 0.9rem;
             color: var(--text-secondary);
         }
+
+        .plot-container {
+            margin-top: 1rem;
+            background: white;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--border-color);
+            max-width: 100%;
+            overflow: auto;
+            display: none;
+        }
+
+        .plot-container img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 0 auto;
+        }
     </style>
 </head>
 <body>
@@ -343,6 +362,7 @@ while (true) {
         <div class="response-container" id="execute-response">
             <div class="response-label">Response:</div>
             <div id="execute-output" class="output"></div>
+            <div id="execute-plot" class="plot-container"></div>
         </div>
     </div>
 
@@ -423,6 +443,135 @@ eventSource.onerror = (error) => {
     </div>
 
     <div class="example">
+        <h2>7. Create Matplotlib Plot</h2>
+        <div class="section-header">
+            <select id="matplotlib-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('matplotlib'); synchronizeSelectors('matplotlib')" aria-label="Select kernel for matplotlib plot">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="matplotlib-kernel-info" class="kernel-info"></span>
+        </div>
+        <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute</span></p>
+        <textarea id="matplotlib-code" class="code-input" placeholder="Enter Python code to execute">import micropip
+await micropip.install('matplotlib')
+import matplotlib.pyplot as plt
+import numpy as np
+import io
+import base64
+from IPython.display import HTML, display
+
+# Generate data
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+
+# Create plot
+plt.figure(figsize=(10, 6))
+plt.plot(x, y, 'b-', linewidth=2)
+plt.title('Sine Wave', fontsize=16)
+plt.xlabel('X-axis', fontsize=12)
+plt.ylabel('Y-axis', fontsize=12)
+plt.grid(True)
+
+# Save plot to a bytes buffer and convert to base64
+buf = io.BytesIO()
+plt.savefig(buf, format='png')
+buf.seek(0)
+img_str = base64.b64encode(buf.read()).decode('utf-8')
+
+# Close the plot to free memory
+plt.close()
+
+# Display the image in the notebook
+display(HTML(f'<img src="data:image/png;base64,{img_str}" />'))
+print("Plot generation complete!")</textarea>
+        <button onclick="executePlot('matplotlib')" id="matplotlib-button">
+            <span>Create Plot</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="matplotlib-response">
+            <div class="response-label">Response:</div>
+            <div id="matplotlib-output" class="output"></div>
+            <div id="matplotlib-plot" class="plot-container"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>8. Create Plotly 3D Scatter Plot</h2>
+        <div class="section-header">
+            <select id="plotly-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('plotly'); synchronizeSelectors('plotly')" aria-label="Select kernel for plotly plot">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="plotly-kernel-info" class="kernel-info"></span>
+        </div>
+        <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute</span></p>
+        <textarea id="plotly-code" class="code-input" placeholder="Enter Python code to execute">import micropip
+await micropip.install('plotly')
+await micropip.install('pandas')
+import plotly.express as px
+import numpy as np
+import pandas as pd
+
+# Generate a cool 3D dataset - a helix with noise
+t = np.linspace(0, 10, 500)
+x = np.cos(t)
+y = np.sin(t)
+z = t
+# Add some random noise to make it more interesting
+noise = np.random.randn(500) * 0.2
+x += noise
+y += noise
+z += noise
+
+# Create a DataFrame with our data
+df = pd.DataFrame({
+    'x': x,
+    'y': y,
+    'z': z,
+    'position': t
+})
+
+# Create a 3D scatter plot with Plotly Express
+fig = px.scatter_3d(
+    df,
+    x='x', y='y', z='z',
+    color='position',
+    color_continuous_scale='plasma',
+    opacity=0.8,
+    title="3D Helix Scatter Plot",
+    labels={"position": "Position"},
+    size_max=10,
+)
+
+# Update layout for better appearance
+fig.update_layout(
+    scene = dict(
+        xaxis_title='X Axis',
+        yaxis_title='Y Axis',
+        zaxis_title='Z Axis',
+        aspectratio=dict(x=1, y=1, z=1),
+        camera=dict(
+            eye=dict(x=1.2, y=1.2, z=0.6)
+        )
+    ),
+    width=800,
+    height=700
+)
+
+# Show the plot - this will render as HTML in Pyodide
+fig.show()
+print("3D helix scatter plot complete!")</textarea>
+        <button onclick="executePlot('plotly')" id="plotly-button">
+            <span>Create Plot</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="plotly-response">
+            <div class="response-label">Response:</div>
+            <div id="plotly-output" class="output"></div>
+            <div id="plotly-plot" class="plot-container"></div>
+        </div>
+    </div>
+
+
+    <div class="example">
         <h2>5. Get Kernel Info</h2>
         <div class="section-header">
             <select id="info-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('info'); synchronizeSelectors('info')" aria-label="Select kernel for info">
@@ -464,6 +613,7 @@ eventSource.onerror = (error) => {
         </div>
     </div>
 
+    
     <div class="toast" id="toast"></div>
 
     <script>
@@ -472,27 +622,33 @@ eventSource.onerror = (error) => {
 
         // Function to update kernel selectors
         function updateKernelSelectors() {
-            const selectors = ['execute', 'stream', 'info', 'delete'].map(id => document.getElementById(`${id}-kernel-selector`));
+            const selectors = ['execute', 'stream', 'info', 'delete', 'matplotlib', 'plotly'].map(id => document.getElementById(`${id}-kernel-selector`));
             
             // Clear existing options except the placeholder
             selectors.forEach(selector => {
-                while (selector.options.length > 1) {
-                    selector.remove(1);
+                if (selector) { // Check if selector exists
+                    while (selector.options.length > 1) {
+                        selector.remove(1);
+                    }
                 }
             });
 
             // Add kernel options
             kernels.forEach((info, id) => {
                 selectors.forEach(selector => {
-                    const name = info.name || `Kernel`;
-                    const option = new Option(`${id.slice(0, 8)} (${name})`, id);
-                    selector.add(option);
+                    if (selector) { // Check if selector exists
+                        const name = info.name || `Kernel`;
+                        const option = new Option(`${id.slice(0, 8)} (${name})`, id);
+                        selector.add(option);
+                    }
                 });
             });
 
             // Update info displays
             selectors.forEach(selector => {
-                updateSelectedKernel(selector.id.split('-')[0]);
+                if (selector) { // Check if selector exists
+                    updateSelectedKernel(selector.id.split('-')[0]);
+                }
             });
         }
 
@@ -502,7 +658,7 @@ eventSource.onerror = (error) => {
             const selectedId = sourceSelector.value;
             
             if (selectedId) {
-                const sections = ['execute', 'stream', 'info', 'delete'];
+                const sections = ['execute', 'stream', 'info', 'delete', 'matplotlib', 'plotly'];
                 sections.forEach(section => {
                     if (section !== sourceSection) {
                         const selector = document.getElementById(`${section}-kernel-selector`);
@@ -604,7 +760,7 @@ eventSource.onerror = (error) => {
                 updateKernelSelectors();
                 
                 // Automatically select the newly created kernel in all selectors
-                const sections = ['execute', 'stream', 'info', 'delete'];
+                const sections = ['execute', 'stream', 'info', 'delete', 'matplotlib', 'plotly'];
                 sections.forEach(section => {
                     const selector = document.getElementById(`${section}-kernel-selector`);
                     selector.value = data.id;
@@ -677,10 +833,13 @@ eventSource.onerror = (error) => {
             try {
                 const container = document.getElementById('execute-response');
                 const output = document.getElementById('execute-output');
+                const plotContainer = document.getElementById('execute-plot');
                 container.style.display = 'block';
                 container.querySelector('.response-label').style.display = 'block';
                 output.style.display = 'block';
                 output.textContent = 'Streaming output:\n';
+                plotContainer.innerHTML = ''; // Clear any previous content
+                plotContainer.style.display = 'none';
                 
                 const response = await fetch(`/api/kernels/${kernelId}/execute`, {
                     method: 'POST',
@@ -706,7 +865,7 @@ eventSource.onerror = (error) => {
                         if (buffer.trim()) {
                             try {
                                 const data = JSON.parse(buffer);
-                                processExecutionData(data, output);
+                                renderOutput(data, output, plotContainer);
                             } catch (e) {
                                 console.error('Error parsing final JSON:', e);
                                 output.textContent += `\nError parsing response: ${buffer}`;
@@ -720,10 +879,6 @@ eventSource.onerror = (error) => {
                     buffer += chunk;
                     
                     // Try to extract complete JSON objects
-                    let startPos = 0;
-                    
-                    // Find complete JSON objects in the buffer
-                    // Note: This assumes each JSON object is on its own line
                     const lines = buffer.split('\n');
                     
                     // Process all complete lines except the last one (which might be incomplete)
@@ -732,7 +887,7 @@ eventSource.onerror = (error) => {
                         if (line) {
                             try {
                                 const data = JSON.parse(line);
-                                processExecutionData(data, output);
+                                renderOutput(data, output, plotContainer);
                             } catch (e) {
                                 console.error('Error parsing JSON:', e, line);
                                 output.textContent += `\nReceived non-JSON data: ${line}`;
@@ -756,21 +911,46 @@ eventSource.onerror = (error) => {
             }
         }
         
-        // Helper function to process and display execution data
-        function processExecutionData(data, outputElement) {
-            let formattedOutput = '';
+        // Extract text content from various output types
+        function extractTextContent(data) {
+            if (!data || !data.type) return '';
             
-            if (data.type === 'stream') {
-                formattedOutput = data.data.text;
-            } else if (data.type === 'execute_result') {
-                formattedOutput = `Result: ${JSON.stringify(data.data.data)}\n`;
-            } else if (data.type === 'error') {
-                formattedOutput = `Error: ${data.data.message}\n`;
-            } else {
-                formattedOutput = `${data.type}: ${JSON.stringify(data.data)}\n`;
+            switch (data.type) {
+                case 'stream':
+                    return data.data && data.data.text || '';
+                    
+                case 'error':
+                    return `Error: ${data.data && data.data.message || 'Unknown error'}\n`;
+                
+                case 'execute_error':
+                    if (data.data && data.data.traceback) {
+                        return `Error: ${data.data.ename}: ${data.data.evalue}\n`;
+                    }
+                    return `Error: ${data.data && (data.data.ename + ': ' + data.data.evalue) || 'Unknown error'}\n`;
+                    
+                case 'execute_result':
+                    // Only add text if it's not something we're displaying visually
+                    if (data.data && data.data.data && 
+                        !data.data.data['text/html'] && 
+                        !data.data.data['image/png'] &&
+                        !data.data.data['application/json']) {
+                        return `Result: ${JSON.stringify(data.data.data['text/plain'] || data.data.data)}\n`;
+                    }
+                    return '';
+                    
+                case 'display_data':
+                    // Only add text if it's not something we're displaying visually
+                    if (data.data && data.data.data && 
+                        !data.data.data['text/html'] && 
+                        !data.data.data['image/png'] &&
+                        !data.data.data['application/json']) {
+                        return `${data.data.data['text/plain'] || ''}\n`;
+                    }
+                    return '';
+                    
+                default:
+                    return '';
             }
-            
-            outputElement.textContent += formattedOutput;
         }
 
         async function streamExecution() {
@@ -909,6 +1089,325 @@ eventSource.onerror = (error) => {
             } finally {
                 hideSpinner('delete');
             }
+        }
+
+        async function executePlot(section) {
+            const selector = document.getElementById(`${section}-kernel-selector`);
+            const kernelId = selector.value;
+            const code = document.getElementById(`${section}-code`).value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, section);
+                return;
+            }
+            showSpinner(section);
+            
+            try {
+                const container = document.getElementById(`${section}-response`);
+                const output = document.getElementById(`${section}-output`);
+                const plotContainer = document.getElementById(`${section}-plot`);
+                container.style.display = 'block';
+                container.querySelector('.response-label').style.display = 'block';
+                output.style.display = 'block';
+                output.textContent = 'Streaming output:\n';
+                plotContainer.innerHTML = ''; // Clear any previous plot
+                plotContainer.style.display = 'none';
+                
+                const response = await fetch(`/api/kernels/${kernelId}/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                showToast('Plot generation started!');
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        // Process any remaining data in the buffer
+                        if (buffer.trim()) {
+                            try {
+                                const data = JSON.parse(buffer);
+                                renderOutput(data, output, plotContainer);
+                            } catch (e) {
+                                console.error('Error parsing final JSON:', e);
+                                output.textContent += `\nError parsing response: ${buffer}`;
+                            }
+                        }
+                        break;
+                    }
+                    
+                    // Decode the chunk and add to buffer
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+                    
+                    // Find complete JSON objects in the buffer
+                    const lines = buffer.split('\n');
+                    
+                    // Process all complete lines except the last one (which might be incomplete)
+                    for (let i = 0; i < lines.length - 1; i++) {
+                        const line = lines[i].trim();
+                        if (line) {
+                            try {
+                                const data = JSON.parse(line);
+                                renderOutput(data, output, plotContainer);
+                            } catch (e) {
+                                console.error('Error parsing JSON:', e, line);
+                                output.textContent += `\nReceived non-JSON data: ${line}`;
+                            }
+                        }
+                    }
+                    
+                    // Keep the last (potentially incomplete) line in the buffer
+                    buffer = lines[lines.length - 1];
+                    
+                    // Scroll to the bottom of the output
+                    output.scrollTop = output.scrollHeight;
+                }
+                
+                showToast('Plot created successfully!');
+            } catch (error) {
+                showOutput({ error: error.message }, section);
+                showToast('Failed to create plot', 'error');
+            } finally {
+                hideSpinner(section);
+            }
+        }
+        
+        // Unified function to render different types of output
+        function renderOutput(data, textOutputElement, visualOutputElement) {
+            // First, try to extract any visual content (HTML, images)
+            const visualResult = extractVisualContent(data, visualOutputElement);
+            
+            // Then, handle text output
+            let textOutput = extractTextContent(data);
+            if (textOutput) {
+                textOutputElement.textContent += textOutput;
+            }
+        }
+        
+        // Extract and render visual content (HTML, images)
+        function extractVisualContent(data, container) {
+            if (!data || !data.type || !container) return false;
+            
+            try {
+                // Add debug logging to help identify the data structure
+                console.log("Processing data:", data.type, data);
+                
+                // Function to handle different MIME types
+                const handleMimeTypes = (mimeData) => {
+                    if (!mimeData) return false;
+                    
+                    console.log("MIME data:", mimeData);
+                    
+                    // Handle HTML content
+                    if (mimeData['text/html']) {
+                        console.log("Found HTML content");
+                        const htmlContent = mimeData['text/html'];
+                        
+                        // Check if the HTML contains scripts
+                        if (htmlContent.includes('<script')) {
+                            // Create a temporary container to extract scripts
+                            const tempContainer = document.createElement('div');
+                            tempContainer.innerHTML = htmlContent;
+                            
+                            // First set the container HTML (without executing scripts)
+                            container.innerHTML = htmlContent;
+                            container.style.display = 'block';
+                            
+                            // Extract all scripts
+                            const scripts = tempContainer.querySelectorAll('script');
+                            const scriptPromises = [];
+                            
+                            // Execute each script by adding it to the head
+                            scripts.forEach(oldScript => {
+                                // Create the promise first
+                                const scriptPromise = new Promise((resolve) => {
+                                    const newScript = document.createElement('script');
+                                    
+                                    // Copy all attributes
+                                    Array.from(oldScript.attributes).forEach(attr => {
+                                        newScript.setAttribute(attr.name, attr.value);
+                                    });
+                                    
+                                    // For external scripts, wait for load/error events
+                                    if (oldScript.src) {
+                                        newScript.onload = () => resolve();
+                                        newScript.onerror = () => resolve(); // Resolve anyway to continue
+                                    }
+                                    
+                                    // Copy the content
+                                    newScript.textContent = oldScript.textContent;
+                                    
+                                    // Add to document head to execute
+                                    document.head.appendChild(newScript);
+                                    
+                                    // For inline scripts, resolve immediately
+                                    if (!oldScript.src) {
+                                        setTimeout(resolve, 0);
+                                    }
+                                });
+                                
+                                // Store script reference and promise
+                                scriptPromises.push({
+                                    promise: scriptPromise,
+                                    script: document.head.lastElementChild // Reference to the script we just added
+                                });
+                            });
+                            
+                            // Clean up scripts after execution
+                            Promise.all(scriptPromises.map(item => item.promise)).then(() => {
+                                // Remove scripts from head after execution
+                                scriptPromises.forEach(item => {
+                                    if (item.script && item.script.parentNode) {
+                                        item.script.parentNode.removeChild(item.script);
+                                    }
+                                });
+                                console.log("All scripts executed and cleaned up");
+                            });
+                        } else {
+                            // Regular HTML without scripts
+                            container.innerHTML = htmlContent;
+                            container.style.display = 'block';
+                        }
+                        return true;
+                    }
+                    
+                    // Handle image content
+                    if (mimeData['image/png']) {
+                        console.log("Found PNG image");
+                        container.innerHTML = `<img src="data:image/png;base64,${mimeData['image/png']}" alt="Plot" />`;
+                        container.style.display = 'block';
+                        return true;
+                    }
+                    
+                    // Handle SVG content
+                    if (mimeData['image/svg+xml']) {
+                        console.log("Found SVG content");
+                        container.innerHTML = mimeData['image/svg+xml'];
+                        container.style.display = 'block';
+                        return true;
+                    }
+                    
+                    // Handle JSON content (might be useful for custom visualizations)
+                    if (mimeData['application/json']) {
+                        console.log("Found JSON content");
+                        // You could render JSON data in special ways if needed
+                        return false;
+                    }
+                    
+                    return false;
+                };
+                
+                // Check different output types
+                switch (data.type) {
+                    case 'display_data':
+                        console.log("Processing display_data");
+                        if (data.data && data.data.data) {
+                            return handleMimeTypes(data.data.data);
+                        }
+                        break;
+                        
+                    case 'execute_result':
+                        console.log("Processing execute_result");
+                        if (data.data && data.data.data) {
+                            return handleMimeTypes(data.data.data);
+                        }
+                        break;
+                        
+                    // Handle direct HTML strings (custom format)
+                    default:
+                        if (data.data && typeof data.data === 'string' && data.data.includes('<')) {
+                            console.log("Found direct HTML string");
+                            if (data.data.startsWith('<img') || data.data.startsWith('<div') || 
+                                data.data.startsWith('<!DOCTYPE') || data.data.startsWith('<html')) {
+                                
+                                const htmlContent = data.data;
+                                
+                                // Check if the HTML contains scripts
+                                if (htmlContent.includes('<script')) {
+                                    // Create a temporary container to extract scripts
+                                    const tempContainer = document.createElement('div');
+                                    tempContainer.innerHTML = htmlContent;
+                                    
+                                    // First set the container HTML (without executing scripts)
+                                    container.innerHTML = htmlContent;
+                                    container.style.display = 'block';
+                                    
+                                    // Extract all scripts
+                                    const scripts = tempContainer.querySelectorAll('script');
+                                    const scriptPromises = [];
+                                    
+                                    // Execute each script by adding it to the head
+                                    scripts.forEach(oldScript => {
+                                        // Create the promise first
+                                        const scriptPromise = new Promise((resolve) => {
+                                            const newScript = document.createElement('script');
+                                            
+                                            // Copy all attributes
+                                            Array.from(oldScript.attributes).forEach(attr => {
+                                                newScript.setAttribute(attr.name, attr.value);
+                                            });
+                                            
+                                            // For external scripts, wait for load/error events
+                                            if (oldScript.src) {
+                                                newScript.onload = () => resolve();
+                                                newScript.onerror = () => resolve(); // Resolve anyway to continue
+                                            }
+                                            
+                                            // Copy the content
+                                            newScript.textContent = oldScript.textContent;
+                                            
+                                            // Add to document head to execute
+                                            document.head.appendChild(newScript);
+                                            
+                                            // For inline scripts, resolve immediately
+                                            if (!oldScript.src) {
+                                                setTimeout(resolve, 0);
+                                            }
+                                        });
+                                        
+                                        // Store script reference and promise
+                                        scriptPromises.push({
+                                            promise: scriptPromise,
+                                            script: document.head.lastElementChild // Reference to the script we just added
+                                        });
+                                    });
+                                    
+                                    // Clean up scripts after execution
+                                    Promise.all(scriptPromises.map(item => item.promise)).then(() => {
+                                        // Remove scripts from head after execution
+                                        scriptPromises.forEach(item => {
+                                            if (item.script && item.script.parentNode) {
+                                                item.script.parentNode.removeChild(item.script);
+                                            }
+                                        });
+                                        console.log("All scripts executed and cleaned up");
+                                    });
+                                } else {
+                                    // Regular HTML without scripts
+                                    container.innerHTML = htmlContent;
+                                    container.style.display = 'block';
+                                }
+                                return true;
+                            }
+                        }
+                }
+            } catch (e) {
+                console.error('Error processing visual content:', e);
+            }
+            
+            return false;
         }
 
         // Initialize by listing kernels

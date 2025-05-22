@@ -147,7 +147,6 @@ export async function handleRequest(req: Request): Promise<Response> {
             mode: kernel.mode,
             status: kernel.status,
             created: kernel.created,
-            history: kernelHistory.get(kernel.id) || []
           }));
           return jsonResponse(kernels);
         } catch (error) {
