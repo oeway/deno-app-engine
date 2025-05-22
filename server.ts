@@ -418,10 +418,70 @@ export async function handleRequest(req: Request): Promise<Response> {
             return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
           }
 
-          // Create a session and wait for results
+          // Create a session
           const session = await createExecutionSession(kernelId, code);
-          const results = await session.promise;
-          return jsonResponse(results);
+
+          // Set up streaming response
+          const stream = new ReadableStream({
+            async start(controller) {
+              try {
+                // Create a function to send an event
+                const sendOutput = (data: any) => {
+                  controller.enqueue(new TextEncoder().encode(JSON.stringify(data) + "\n"));
+                };
+
+                // Send any existing outputs first
+                for (const output of session.outputs) {
+                  sendOutput(output);
+                }
+
+                // Set up event listener for new outputs
+                const outputListener = (output: any) => {
+                  sendOutput(output);
+                };
+
+                // Add listener to session
+                session.listeners = session.listeners || [];
+                session.listeners.push(outputListener);
+
+                // Wait for completion or error
+                try {
+                  await session.promise;
+                  controller.close();
+                } catch (error) {
+                  sendOutput({
+                    type: "error",
+                    data: { message: error instanceof Error ? error.message : String(error) }
+                  });
+                  controller.close();
+                }
+
+                // Clean up listener
+                const listenerIndex = session.listeners.indexOf(outputListener);
+                if (listenerIndex !== -1) {
+                  session.listeners.splice(listenerIndex, 1);
+                }
+              } catch (error: unknown) {
+                const errorOutput = {
+                  type: "error",
+                  data: { message: error instanceof Error ? error.message : String(error) }
+                };
+                controller.enqueue(new TextEncoder().encode(JSON.stringify(errorOutput) + "\n"));
+                controller.close();
+              }
+            },
+          });
+
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "application/x-ndjson",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type",
+            },
+          });
         } catch (error) {
           return jsonResponse(
             { error: error instanceof Error ? error.message : String(error) },

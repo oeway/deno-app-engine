@@ -281,14 +281,61 @@
             <span id="execute-kernel-info" class="kernel-info"></span>
         </div>
         <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute</span></p>
-        <textarea id="execute-code" class="code-input" placeholder="Enter Python code to execute">print("Hello, World!")</textarea>
-        <pre>fetch(`/api/kernels/${kernelId}/execute`, {
+        <textarea id="execute-code" class="code-input" placeholder="Enter Python code to execute">import asyncio
+print("Starting execution stream test...")
+for i in range(5):
+    print(f"Processing item {i}...")
+    await asyncio.sleep(1)
+    if i % 2 == 0:
+        print(f"  - Even number found: {i}")
+    else:
+        print(f"  - Odd number found: {i}")
+print("Execution stream test complete!")</textarea>
+        <pre>// Use the Response object as a readable stream
+const response = await fetch(`/api/kernels/${kernelId}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-        code: 'print("Hello, World!")'
+        code: `
+import asyncio
+print("Starting execution stream test...")
+for i in range(5):
+    print(f"Processing item {i}...")
+    await asyncio.sleep(1)
+    if i % 2 == 0:
+        print(f"  - Even number found: {i}")
+    else:
+        print(f"  - Odd number found: {i}")
+print("Execution stream test complete!")`
     })
-});</pre>
+});
+
+// Create a reader for the response body stream
+const reader = response.body.getReader();
+let decoder = new TextDecoder();
+let result = '';
+
+// Process the stream chunks as they arrive
+while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    // Decode and process the chunk
+    const chunk = decoder.decode(value, { stream: true });
+    result += chunk;
+    
+    // Try to parse complete JSON objects as they come in
+    try {
+        const parsedData = JSON.parse(result);
+        console.log('Received data:', parsedData);
+        
+        // Update the UI with the received data
+        // This is just for demonstration - actual implementation may vary
+    } catch (e) {
+        // Not a complete JSON object yet, continue reading
+        console.log('Received partial chunk:', chunk);
+    }
+}</pre>
         <button onclick="executeCode()" id="execute-button">
             <span>Execute Code</span>
             <div class="spinner"></div>
@@ -626,14 +673,80 @@ eventSource.onerror = (error) => {
                 return;
             }
             showSpinner('execute');
+            
             try {
+                const container = document.getElementById('execute-response');
+                const output = document.getElementById('execute-output');
+                container.style.display = 'block';
+                container.querySelector('.response-label').style.display = 'block';
+                output.style.display = 'block';
+                output.textContent = 'Streaming output:\n';
+                
                 const response = await fetch(`/api/kernels/${kernelId}/execute`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ code })
                 });
-                const data = await response.json();
-                showOutput(data, 'execute');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                showToast('Code execution started!');
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        // Process any remaining data in the buffer
+                        if (buffer.trim()) {
+                            try {
+                                const data = JSON.parse(buffer);
+                                processExecutionData(data, output);
+                            } catch (e) {
+                                console.error('Error parsing final JSON:', e);
+                                output.textContent += `\nError parsing response: ${buffer}`;
+                            }
+                        }
+                        break;
+                    }
+                    
+                    // Decode the chunk and add to buffer
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+                    
+                    // Try to extract complete JSON objects
+                    let startPos = 0;
+                    
+                    // Find complete JSON objects in the buffer
+                    // Note: This assumes each JSON object is on its own line
+                    const lines = buffer.split('\n');
+                    
+                    // Process all complete lines except the last one (which might be incomplete)
+                    for (let i = 0; i < lines.length - 1; i++) {
+                        const line = lines[i].trim();
+                        if (line) {
+                            try {
+                                const data = JSON.parse(line);
+                                processExecutionData(data, output);
+                            } catch (e) {
+                                console.error('Error parsing JSON:', e, line);
+                                output.textContent += `\nReceived non-JSON data: ${line}`;
+                            }
+                        }
+                    }
+                    
+                    // Keep the last (potentially incomplete) line in the buffer
+                    buffer = lines[lines.length - 1];
+                    
+                    // Scroll to the bottom of the output
+                    output.scrollTop = output.scrollHeight;
+                }
+                
                 showToast('Code executed successfully!');
             } catch (error) {
                 showOutput({ error: error.message }, 'execute');
@@ -641,6 +754,23 @@ eventSource.onerror = (error) => {
             } finally {
                 hideSpinner('execute');
             }
+        }
+        
+        // Helper function to process and display execution data
+        function processExecutionData(data, outputElement) {
+            let formattedOutput = '';
+            
+            if (data.type === 'stream') {
+                formattedOutput = data.data.text;
+            } else if (data.type === 'execute_result') {
+                formattedOutput = `Result: ${JSON.stringify(data.data.data)}\n`;
+            } else if (data.type === 'error') {
+                formattedOutput = `Error: ${data.data.message}\n`;
+            } else {
+                formattedOutput = `${data.type}: ${JSON.stringify(data.data)}\n`;
+            }
+            
+            outputElement.textContent += formattedOutput;
         }
 
         async function streamExecution() {
