@@ -3,6 +3,7 @@
 import * as Comlink from "comlink";
 import { Kernel, KernelEvents, IKernelOptions } from "./index.ts";
 
+
 // Create a new kernel instance
 const kernel = new Kernel();
 
@@ -23,7 +24,7 @@ self.addEventListener("message", (event) => {
     
     // Initialize the kernel with the provided options
     initializeKernel(kernelOptions).catch(error => {
-      console.error("Error initializing kernel in worker:", error);
+      console.error("[WORKER] Error initializing kernel in worker:", error);
       if (eventPort) {
         eventPort.postMessage({
           type: KernelEvents.EXECUTE_ERROR,
@@ -63,7 +64,7 @@ function setupEventForwarding() {
   // Forward all kernel events to the main thread
   Object.values(KernelEvents).forEach((eventType) => {
     // Use EventEmitter's on method
-    (kernel as any).on(eventType, (data: any) => {
+    kernel.on(eventType, (data: any) => {
       if (eventPort) {
         // Send just the event type and raw data
         // This matches the structure used in main thread mode
@@ -98,5 +99,69 @@ self.addEventListener("beforeunload", async () => {
   }
 });
 
-// Expose the kernel through Comlink
-Comlink.expose(kernel); 
+// Log available methods for debugging
+
+// Create a simplified proxy that only exposes the methods we need
+// We're not trying to implement the full EventEmitter interface
+const simpleProxy = {
+  // Required methods from IKernel interface
+  initialize: async (options?: IKernelOptions) => {
+    try {
+      await kernel.initialize(options);
+      return undefined;
+    } catch (error) {
+      console.error("[WORKER] Initialize error:", error);
+      throw error;
+    }
+  },
+  
+  execute: async (code: string, parent?: any) => {
+      try {
+      const result = await kernel.execute(code, parent);
+      return result;
+    } catch (error) {
+      console.error("[WORKER] Execute error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  },
+  
+  isInitialized: () => {
+    try {
+      const result = kernel.isInitialized();
+      return result;
+    } catch (error) {
+      console.error("[WORKER] IsInitialized error:", error);
+      return false;
+    }
+  },
+  
+  inputReply: async (content: { value: string }) => {
+    try {
+      await kernel.inputReply(content);
+    } catch (error) {
+      console.error("[WORKER] InputReply error:", error);
+      throw error;
+    }
+  },
+  
+  // Instead of a getter, use a regular method for status
+  getStatus: () => {
+    try {
+      const status = kernel.status;
+      return status;
+    } catch (error) {
+      console.error("[WORKER] getStatus error:", error);
+      return "unknown";
+    }
+  }
+};
+
+// Expose the proxy through Comlink
+try {
+  Comlink.expose(simpleProxy);
+} catch (error) {
+  console.error("Error exposing proxy:", error);
+} 

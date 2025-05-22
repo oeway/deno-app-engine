@@ -196,6 +196,45 @@
                 font-size: 0.8rem;
             }
         }
+
+        .kernel-selector {
+            margin: 1rem 0;
+            padding: 0.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            width: 100%;
+            font-size: 0.9rem;
+        }
+
+        .code-input {
+            width: 100%;
+            min-height: 100px;
+            margin: 1rem 0;
+            padding: 1rem;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.9rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            resize: vertical;
+            background: #1E293B;
+            color: #E5E7EB;
+        }
+
+        .code-input::placeholder {
+            color: #9CA3AF;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .kernel-info {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
     </style>
 </head>
 <body>
@@ -235,7 +274,14 @@
 
     <div class="example">
         <h2>3. Execute Code</h2>
+        <div class="section-header">
+            <select id="execute-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('execute'); synchronizeSelectors('execute')" aria-label="Select kernel for code execution">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="execute-kernel-info" class="kernel-info"></span>
+        </div>
         <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute</span></p>
+        <textarea id="execute-code" class="code-input" placeholder="Enter Python code to execute">print("Hello, World!")</textarea>
         <pre>fetch(`/api/kernels/${kernelId}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -255,8 +301,27 @@
 
     <div class="example">
         <h2>4. Stream Execution</h2>
-        <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute/stream</span></p>
-        <pre>const response = await fetch(`/api/kernels/${kernelId}/execute/stream`, {
+        <div class="section-header">
+            <select id="stream-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('stream'); synchronizeSelectors('stream')" aria-label="Select kernel for stream execution">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="stream-kernel-info" class="kernel-info"></span>
+        </div>
+        <p>Endpoints:</p>
+        <p><span class="endpoint">POST /api/kernels/:id/execute/submit</span> - Submit code for execution</p>
+        <p><span class="endpoint">GET /api/kernels/:id/execute/stream/:session_id</span> - Stream execution results</p>
+        <textarea id="stream-code" class="code-input" placeholder="Enter Python code to execute">import asyncio
+print("Starting stream test...")
+for i in range(5):
+    print(f"Processing item {i}...")
+    await asyncio.sleep(1)
+    if i % 2 == 0:
+        print(f"  - Even number found: {i}")
+    else:
+        print(f"  - Odd number found: {i}")
+print("Stream test complete!")</textarea>
+        <pre>// First submit the code for execution
+const execResponse = await fetch(`/api/kernels/${kernelId}/execute/submit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -272,7 +337,34 @@ for i in range(5):
         print(f"  - Odd number found: {i}")
 print("Stream test complete!")`
     })
-});</pre>
+});
+
+const { session_id } = await execResponse.json();
+
+// Then create an EventSource to receive streaming updates
+const eventSource = new EventSource(`/api/kernels/${kernelId}/execute/stream/${session_id}`);
+
+eventSource.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    
+    let formattedOutput = '';
+    if (data.type === 'stream') {
+        formattedOutput = data.data.text;
+    } else if (data.type === 'execute_result') {
+        formattedOutput = `Result: ${JSON.stringify(data.data.data)}\n`;
+    } else if (data.type === 'error') {
+        formattedOutput = `Error: ${data.data.message}\n`;
+    } else {
+        formattedOutput = `${data.type}: ${JSON.stringify(data.data)}\n`;
+    }
+    
+    console.log(formattedOutput);
+};
+
+eventSource.onerror = (error) => {
+    console.error('Stream error:', error);
+    eventSource.close();
+};</pre>
         <button onclick="streamExecution()" id="stream-button">
             <span>Stream Execution</span>
             <div class="spinner"></div>
@@ -285,6 +377,12 @@ print("Stream test complete!")`
 
     <div class="example">
         <h2>5. Get Kernel Info</h2>
+        <div class="section-header">
+            <select id="info-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('info'); synchronizeSelectors('info')" aria-label="Select kernel for info">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="info-kernel-info" class="kernel-info"></span>
+        </div>
         <p>Endpoint: <span class="endpoint">GET /api/kernels/:id/info</span></p>
         <pre>fetch(`/api/kernels/${kernelId}/info`);</pre>
         <button onclick="getKernelInfo()" id="info-button">
@@ -297,10 +395,93 @@ print("Stream test complete!")`
         </div>
     </div>
 
+    <div class="example">
+        <h2>6. Delete Kernel</h2>
+        <div class="section-header">
+            <select id="delete-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('delete'); synchronizeSelectors('delete')" aria-label="Select kernel to delete">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="delete-kernel-info" class="kernel-info"></span>
+        </div>
+        <p>Endpoint: <span class="endpoint">DELETE /api/kernels/:id</span></p>
+        <pre>fetch(`/api/kernels/${kernelId}`, {
+    method: 'DELETE'
+});</pre>
+        <button onclick="deleteKernel()" id="delete-button">
+            <span>Delete Kernel</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="delete-response">
+            <div class="response-label">Response:</div>
+            <div id="delete-output" class="output"></div>
+        </div>
+    </div>
+
     <div class="toast" id="toast"></div>
 
     <script>
         let currentKernelId = null;
+        let kernels = new Map(); // Store kernel info
+
+        // Function to update kernel selectors
+        function updateKernelSelectors() {
+            const selectors = ['execute', 'stream', 'info', 'delete'].map(id => document.getElementById(`${id}-kernel-selector`));
+            
+            // Clear existing options except the placeholder
+            selectors.forEach(selector => {
+                while (selector.options.length > 1) {
+                    selector.remove(1);
+                }
+            });
+
+            // Add kernel options
+            kernels.forEach((info, id) => {
+                selectors.forEach(selector => {
+                    const name = info.name || `Kernel`;
+                    const option = new Option(`${id.slice(0, 8)} (${name})`, id);
+                    selector.add(option);
+                });
+            });
+
+            // Update info displays
+            selectors.forEach(selector => {
+                updateSelectedKernel(selector.id.split('-')[0]);
+            });
+        }
+
+        // Function to synchronize all kernel selectors to the same value
+        function synchronizeSelectors(sourceSection) {
+            const sourceSelector = document.getElementById(`${sourceSection}-kernel-selector`);
+            const selectedId = sourceSelector.value;
+            
+            if (selectedId) {
+                const sections = ['execute', 'stream', 'info', 'delete'];
+                sections.forEach(section => {
+                    if (section !== sourceSection) {
+                        const selector = document.getElementById(`${section}-kernel-selector`);
+                        selector.value = selectedId;
+                        updateSelectedKernel(section);
+                    }
+                });
+            }
+        }
+
+        // Function to update selected kernel info display
+        function updateSelectedKernel(section) {
+            const selector = document.getElementById(`${section}-kernel-selector`);
+            const infoSpan = document.getElementById(`${section}-kernel-info`);
+            const selectedId = selector.value;
+            
+            if (selectedId && kernels.has(selectedId)) {
+                const info = kernels.get(selectedId);
+                const created = new Date(info.created).toLocaleString();
+                const mode = info.mode === 'main_thread' ? 'Main Thread' : 'Worker';
+                const status = info.status || 'unknown';
+                infoSpan.textContent = `ID: ${selectedId.slice(0, 8)} | Mode: ${mode} | Status: ${status} | Created: ${created}`;
+            } else {
+                infoSpan.textContent = '';
+            }
+        }
 
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
@@ -353,15 +534,44 @@ print("Stream test complete!")`
                 const response = await fetch('/api/kernels', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({})
+                    body: JSON.stringify({
+                        mode: 'worker' // Explicitly request main thread mode
+                    })
                 });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
                 const data = await response.json();
+                if (data.error) {
+                    throw new Error(data.error);
+                }
                 currentKernelId = data.id;
+                // Store full kernel info
+                kernels.set(data.id, {
+                    id: data.id,
+                    name: data.name,
+                    mode: data.mode,
+                    status: data.status,
+                    created: data.created
+                });
+                updateKernelSelectors();
+                
+                // Automatically select the newly created kernel in all selectors
+                const sections = ['execute', 'stream', 'info', 'delete'];
+                sections.forEach(section => {
+                    const selector = document.getElementById(`${section}-kernel-selector`);
+                    selector.value = data.id;
+                    updateSelectedKernel(section);
+                });
+                
                 showOutput(data, 'create');
                 showToast('Kernel created successfully!');
+                
+                // Refresh kernel list
+                await listKernels();
             } catch (error) {
                 showOutput({ error: error.message }, 'create');
-                showToast('Failed to create kernel', 'error');
+                showToast('Failed to create kernel: ' + error.message, 'error');
             } finally {
                 hideSpinner('create');
             }
@@ -371,31 +581,56 @@ print("Stream test complete!")`
             showSpinner('list');
             try {
                 const response = await fetch('/api/kernels');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
                 const data = await response.json();
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                // Update kernels map with full kernel info
+                kernels.clear();
+                if (Array.isArray(data)) {
+                    data.forEach(kernel => {
+                        if (kernel && typeof kernel === 'object') {
+                            kernels.set(kernel.id, {
+                                id: kernel.id,
+                                name: kernel.name,
+                                mode: kernel.mode,
+                                status: kernel.status,
+                                created: kernel.created,
+                                history: kernel.history || []
+                            });
+                        }
+                    });
+                }
+                updateKernelSelectors();
                 showOutput(data, 'list');
                 showToast('Kernels listed successfully!');
             } catch (error) {
                 showOutput({ error: error.message }, 'list');
-                showToast('Failed to list kernels', 'error');
+                showToast('Failed to list kernels: ' + error.message, 'error');
             } finally {
                 hideSpinner('list');
             }
         }
 
         async function executeCode() {
-            if (!currentKernelId) {
-                showToast('Please create a kernel first', 'error');
-                showOutput({ error: 'Please create a kernel first' }, 'execute');
+            const selector = document.getElementById('execute-kernel-selector');
+            const kernelId = selector.value;
+            const code = document.getElementById('execute-code').value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, 'execute');
                 return;
             }
             showSpinner('execute');
             try {
-                const response = await fetch(`/api/kernels/${currentKernelId}/execute`, {
+                const response = await fetch(`/api/kernels/${kernelId}/execute`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        code: 'print("Hello, World!")'
-                    })
+                    body: JSON.stringify({ code })
                 });
                 const data = await response.json();
                 showOutput(data, 'execute');
@@ -409,30 +644,22 @@ print("Stream test complete!")`
         }
 
         async function streamExecution() {
-            if (!currentKernelId) {
-                showToast('Please create a kernel first', 'error');
-                showOutput({ error: 'Please create a kernel first' }, 'stream');
+            const selector = document.getElementById('stream-kernel-selector');
+            const kernelId = selector.value;
+            const code = document.getElementById('stream-code').value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, 'stream');
                 return;
             }
             showSpinner('stream');
             
             try {
-                const execResponse = await fetch(`/api/kernels/${currentKernelId}/execute/submit`, {
+                const execResponse = await fetch(`/api/kernels/${kernelId}/execute/submit`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        code: `
-import asyncio
-print("Starting stream test...")
-for i in range(5):
-    print(f"Processing item {i}...")
-    await asyncio.sleep(1)
-    if i % 2 == 0:
-        print(f"  - Even number found: {i}")
-    else:
-        print(f"  - Odd number found: {i}")
-print("Stream test complete!")`
-                    })
+                    body: JSON.stringify({ code })
                 });
                 
                 if (!execResponse.ok) {
@@ -450,7 +677,7 @@ print("Stream test complete!")`
 
                 showToast('Stream started successfully!');
 
-                const eventSource = new EventSource(`/api/kernels/${currentKernelId}/execute/stream/${session_id}`);
+                const eventSource = new EventSource(`/api/kernels/${kernelId}/execute/stream/${session_id}`);
                 
                 return new Promise((resolve, reject) => {
                     eventSource.onmessage = (event) => {
@@ -496,14 +723,17 @@ print("Stream test complete!")`
         }
 
         async function getKernelInfo() {
-            if (!currentKernelId) {
-                showToast('Please create a kernel first', 'error');
-                showOutput({ error: 'Please create a kernel first' }, 'info');
+            const selector = document.getElementById('info-kernel-selector');
+            const kernelId = selector.value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, 'info');
                 return;
             }
             showSpinner('info');
             try {
-                const response = await fetch(`/api/kernels/${currentKernelId}/info`);
+                const response = await fetch(`/api/kernels/${kernelId}/info`);
                 const data = await response.json();
                 showOutput(data, 'info');
                 showToast('Kernel info retrieved successfully!');
@@ -514,6 +744,45 @@ print("Stream test complete!")`
                 hideSpinner('info');
             }
         }
+
+        async function deleteKernel() {
+            const selector = document.getElementById('delete-kernel-selector');
+            const kernelId = selector.value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, 'delete');
+                return;
+            }
+            showSpinner('delete');
+            try {
+                const response = await fetch(`/api/kernels/${kernelId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                // Remove from kernels map
+                kernels.delete(kernelId);
+                updateKernelSelectors();
+                
+                showOutput({ success: true, message: `Kernel ${kernelId} deleted successfully` }, 'delete');
+                showToast('Kernel deleted successfully!');
+                
+                // Refresh kernel list
+                await listKernels();
+            } catch (error) {
+                showOutput({ error: error.message }, 'delete');
+                showToast('Failed to delete kernel', 'error');
+            } finally {
+                hideSpinner('delete');
+            }
+        }
+
+        // Initialize by listing kernels
+        listKernels().catch(console.error);
     </script>
 </body>
 </html> 

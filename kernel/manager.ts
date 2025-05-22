@@ -181,11 +181,6 @@ export class KernelManager extends EventEmitter {
       workerOptions.deno = {
         permissions: options.deno.permissions
       };
-      
-      console.log(`Creating worker with custom permissions: ${JSON.stringify(options.deno.permissions)}`);
-    } else {
-      // Don't set any deno options to inherit host permissions
-      console.log("Creating worker with inherited host permissions");
     }
     
     // Create worker with permissions
@@ -251,7 +246,29 @@ export class KernelManager extends EventEmitter {
     // Create the kernel instance
     const instance: IKernelInstance = {
       id,
-      kernel: kernelProxy as unknown as IKernel, // Cast to IKernel
+      kernel: {
+        // Map methods from the Comlink proxy to the IKernel interface
+        initialize: async (options?: IKernelOptions) => {
+          return kernelProxy.initialize(options);
+        },
+        execute: async (code: string, parent?: any) => {
+          return kernelProxy.execute(code, parent);
+        },
+        isInitialized: () => {
+          return kernelProxy.isInitialized();
+        },
+        inputReply: async (content: { value: string }) => {
+          return kernelProxy.inputReply(content);
+        },
+        // Map getStatus method to status getter for compatibility with IKernel interface
+        get status() {
+          try {
+            return kernelProxy.getStatus();
+          } catch (error) {
+            return "unknown";
+          }
+        }
+      } as unknown as IKernel,
       mode: KernelMode.WORKER,
       worker,
       created: new Date(),
@@ -567,8 +584,18 @@ export class KernelManager extends EventEmitter {
       
       // Forward to the kernel's executeStream method
       if (typeof kernel.executeStream === 'function') {
-        yield* kernel.executeStream(code, parent);
-        return { success: true };
+        try {
+          yield* kernel.executeStream(code, parent);
+          return { success: true };
+        } catch (error) {
+          console.error(`[MANAGER] Error in main thread executeStream:`, error);
+          return { 
+            success: false, 
+            error: error instanceof Error ? error : new Error(String(error))
+          };
+        }
+      } else {
+        console.warn(`[MANAGER] executeStream method not found on main thread kernel, falling back to event-based approach`);
       }
     }
     
@@ -615,6 +642,7 @@ export class KernelManager extends EventEmitter {
         
         const handleErrorEvent = (event: { kernelId: string, data: any }) => {
           if (event.kernelId === kernelId) {
+            console.log(`[MANAGER] Received error event for kernel ${kernelId}:`, event.data);
             streamQueue.push({
               type: 'execute_error',
               data: event.data
@@ -638,19 +666,47 @@ export class KernelManager extends EventEmitter {
         
         // Execute the code
         // We need to wait for the execution to complete before returning the result
-        instance.kernel.execute(code, parent).then((result) => {
-          executionComplete = true;
-          executionResult = result;
+        try {
+          // We know the execute method is available directly on the kernel object
+          // because we mapped it in the IKernelInstance creation
+          // We know the execute method is available directly on the kernel object
+          // because we mapped it in the IKernelInstance creation
+          const executePromise = instance.kernel.execute(code, parent);
+          console.log(`[MANAGER] Execute called, got promise:`, typeof executePromise);
           
-          // Cleanup event handlers
-          super.off(KernelEvents.STREAM, handleStreamEvent);
-          super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
-          super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
-          super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
-          super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
-          
-          resolve(result);
-        }).catch((error) => {
+          executePromise.then((result) => {
+            executionComplete = true;
+            executionResult = result;
+            
+            // Cleanup event handlers
+            super.off(KernelEvents.STREAM, handleStreamEvent);
+            super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+            super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
+            super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+            super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+            
+            resolve(result);
+          }).catch((error) => {
+            console.error(`[MANAGER] Error in execute:`, error);
+            executionComplete = true;
+            const errorResult = {
+              success: false,
+              error: error instanceof Error ? error : new Error(String(error))
+            };
+            executionResult = errorResult;
+            
+            // Cleanup event handlers
+            console.log(`[MANAGER] Cleaning up event handlers after error`);
+            super.off(KernelEvents.STREAM, handleStreamEvent);
+            super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+            super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
+            super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+            super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+            
+            resolve(errorResult);
+          });
+        } catch (error) {
+          console.error(`[MANAGER] Direct error calling execute:`, error);
           executionComplete = true;
           const errorResult = {
             success: false,
@@ -658,7 +714,7 @@ export class KernelManager extends EventEmitter {
           };
           executionResult = errorResult;
           
-          // Cleanup event handlers
+          // Cleanup event handlers on direct error
           super.off(KernelEvents.STREAM, handleStreamEvent);
           super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
           super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
@@ -666,7 +722,7 @@ export class KernelManager extends EventEmitter {
           super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
           
           resolve(errorResult);
-        });
+        }
       });
       
       // Setup timeout
@@ -691,7 +747,6 @@ export class KernelManager extends EventEmitter {
       
       // Handle timeout
       if (!executionComplete && Date.now() - startTime >= timeout) {
-        console.log("Execution timed out");
         return {
           success: false,
           error: new Error("Execution timed out")
@@ -702,11 +757,11 @@ export class KernelManager extends EventEmitter {
       const result = await executionPromise;
       return result;
     } catch (error) {
-      console.error("Error in executeStream:", error);
+      console.error(`[MANAGER] Error in executeStream:`, error);
       return {
         success: false,
         error: error instanceof Error ? error : new Error(String(error))
       };
     }
   }
-} 
+}

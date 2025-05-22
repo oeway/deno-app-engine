@@ -139,8 +139,24 @@ export async function handleRequest(req: Request): Promise<Response> {
     if (path.startsWith("/api/")) {
       // List kernels
       if (path === "/api/kernels" && req.method === "GET") {
-        const kernels = kernelManager.getKernelIds();
-        return jsonResponse(kernels);
+        try {
+          const kernelList = kernelManager.listKernels();
+          const kernels = kernelList.map(kernel => ({
+            id: kernel.id,
+            name: `Kernel-${kernel.id.slice(0, 8)}`,
+            mode: kernel.mode,
+            status: kernel.status,
+            created: kernel.created,
+            history: kernelHistory.get(kernel.id) || []
+          }));
+          return jsonResponse(kernels);
+        } catch (error) {
+          console.error("Error listing kernels:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
       }
 
       // Create kernel
@@ -162,13 +178,24 @@ export async function handleRequest(req: Request): Promise<Response> {
           
           console.log("Initializing kernel...");
           try {
-            await kernel.kernel.initialize();
+            // Check how to initialize this kernel
+            if (typeof kernel.kernel.initialize === 'function') {
+              await kernel.kernel.initialize();
+            } else {
+              console.log("Direct initialize not available, assuming already initialized");
+            }
             console.log("Kernel initialized successfully");
             
             // Initialize history for this kernel
             kernelHistory.set(kernelId, []);
             
-            return jsonResponse({ id: kernelId });
+            return jsonResponse({
+              id: kernelId,
+              mode: kernel.mode,
+              status: kernel.kernel.status || "unknown",
+              created: kernel.created,
+              name: `Kernel-${kernelId.slice(0, 8)}`
+            });
           } catch (error: unknown) {
             console.error("Kernel initialization failed:", error);
             // Clean up the failed kernel
