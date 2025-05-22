@@ -10,4 +10,4 @@ fi
 # Start the server with necessary permissions
 echo "Starting Deno Code Interpreter service..."
 
-deno run --allow-net --allow-read --allow-env hypha-service.ts
+deno run --allow-net --allow-read --allow-write --allow-env hypha-service.ts

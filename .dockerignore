@@ -1,0 +1,30 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Build artifacts
+dist
+
+# Development and test files
+tests
+test_dir
+examples
+.ipython
+.DS_Store
+
+# Documentation
+README.md
+README.k8s.md
+LICENSE
+
+# Editor files
+.vscode
+.idea
+*.swp
+*.swo
+.cursorrules
+
+# Large or unnecessary files
+*.log
+node_modules
