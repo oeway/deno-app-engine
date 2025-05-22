@@ -23,6 +23,11 @@ A Deno-based code interpreter that provides Jupyter kernel-like functionality wi
   - Filesystem access restrictions
   - Network access management
 
+- **Execution Management**
+  - Automatic tracking of code execution
+  - Inactivity timeout for idle kernels
+  - Detection of stalled/deadlocked executions
+
 ## Prerequisites
 
 - Deno 1.x or higher
@@ -38,70 +43,101 @@ cd deno-code-interpreter
 
 2. Generate Python wheels (first time only):
 ```bash
-cd kernel
-python3 generate-wheels-js.py
+deno run --allow-read --allow-write --allow-run kernel/check-wheels.ts
 ```
 
 ## Usage
 
-### Starting the Server
-
-1. Make the start script executable:
-```bash
-chmod +x start-server.sh
-```
-
-2. Start the server:
-```bash
-./start-server.sh
-```
-
-The server will start with all necessary permissions. Once running, you can access the web interface at `http://localhost:8000`.
-
 ### Basic Example
 
 ```typescript
-import { KernelManager, KernelMode } from "./kernel/mod.ts";
+// Import from the main module
+import { createKernel, createKernelManager, KernelMode, KernelEvents } from "./mod.ts";
 
-// Create a kernel manager
-const manager = new KernelManager();
-
-// Create a kernel
-const kernelId = await manager.createKernel({
-  mode: KernelMode.MAIN_THREAD
-});
-
-// Get the kernel instance
-const kernel = manager.getKernel(kernelId);
-
-// Execute Python code
-const result = await kernel.execute('print("Hello from Python!")');
-```
-
-### Filesystem Mounting
-
-```typescript
-const kernelId = await manager.createKernel({
-  mode: KernelMode.WORKER,
+// Method 1: Direct kernel usage (simpler)
+const kernel = await createKernel({
   filesystem: {
     enabled: true,
-    root: "/path/to/local/directory",
+    root: ".",
     mountPoint: "/home/pyodide"
   }
 });
+
+// Execute Python code directly
+const result = await kernel.execute('print("Hello from Python!")');
+
+// Method 2: Using KernelManager (recommended for multiple kernels)
+const manager = createKernelManager();
+
+// Create a kernel
+const kernelId = await manager.createKernel({
+  mode: KernelMode.MAIN_THREAD,
+  filesystem: {
+    enabled: true,
+    root: ".",
+    mountPoint: "/home/pyodide"
+  }
+});
+
+// Get the kernel instance
+const kernelInstance = manager.getKernel(kernelId);
+
+// Execute Python code with the manager (tracks execution automatically)
+const managerResult = await manager.execute(kernelId, 'print("Hello from managed kernel!")');
+
+// Or execute directly on the kernel instance
+const directResult = await kernelInstance.kernel.execute('print("Hello again!")');
+
+// Destroy the kernel when done
+await manager.destroyKernel(kernelId);
+```
+
+### Streaming Execution Results
+
+```typescript
+// Execute with streaming output
+const generator = manager.executeStream(kernelId, `
+for i in range(5):
+    print(f"Count: {i}")
+import numpy as np
+np.random.seed(42)
+data = np.random.rand(3, 3)
+print(data)
+`);
+
+// Process stream events
+for await (const event of generator) {
+  if (event.type === 'stream') {
+    console.log("Stream output:", event.data.text);
+  } else if (event.type === 'display_data') {
+    console.log("Display data:", event.data);
+  }
+}
 ```
 
 ### Event Handling
 
 ```typescript
-import { KernelEvents } from "./kernel/mod.ts";
-
+// Listen for specific kernel events
 manager.onKernelEvent(kernelId, KernelEvents.STREAM, (data) => {
   console.log("Stream output:", data.text);
 });
+
+manager.onKernelEvent(kernelId, KernelEvents.DISPLAY_DATA, (data) => {
+  console.log("Rich output:", data);
+});
+
+manager.onKernelEvent(kernelId, KernelEvents.EXECUTE_RESULT, (data) => {
+  console.log("Execution result:", data);
+});
+
+manager.onKernelEvent(kernelId, KernelEvents.EXECUTE_ERROR, (data) => {
+  console.error("Error:", data.ename, data.evalue);
+  console.error("Traceback:", data.traceback);
+});
 ```
 
-### Restricted Permissions
+### Worker with Restricted Permissions
 
 ```typescript
 const kernelId = await manager.createKernel({
@@ -118,21 +154,46 @@ const kernelId = await manager.createKernel({
 
 ## API Reference
 
+### Main Module Exports
+
+- `createKernel(options?)`: Creates a standalone kernel instance
+- `createKernelManager()`: Creates a kernel manager for handling multiple kernels
+- `KernelMode`: Enum for kernel execution modes (MAIN_THREAD, WORKER)
+- `KernelEvents`: Enum for kernel event types
+- `ensureWheelsExist()`: Utility to check and generate Python wheels
+
 ### KernelManager
 
 The main class for managing kernel instances.
 
 - `createKernel(options?)`: Creates a new kernel instance
 - `destroyKernel(id)`: Destroys a kernel instance
+- `destroyAll(namespace?)`: Destroys all kernels or those in a namespace
 - `getKernel(id)`: Gets a kernel instance by ID
+- `getKernelIds()`: Gets all kernel IDs
+- `listKernels(namespace?)`: Lists all kernels with details
+- `execute(id, code, parent?)`: Executes code with tracking
+- `executeStream(id, code, parent?)`: Executes code with streaming results
 - `onKernelEvent(id, event, listener)`: Registers an event listener
+- `offKernelEvent(id, event, listener)`: Removes an event listener
+
+### Inactivity and Execution Management
+
+- `setInactivityTimeout(id, timeout)`: Sets inactivity timeout for a kernel
+- `getInactivityTimeout(id)`: Gets current inactivity timeout
+- `getTimeUntilShutdown(id)`: Gets time until auto-shutdown
+- `getExecutionInfo(id)`: Gets information about ongoing executions
+- `getOngoingExecutionCount(id)`: Gets count of ongoing executions
+- `forceTerminateKernel(id, reason?)`: Force terminates a stuck kernel
 
 ### Kernel Events
 
 - `STREAM`: Output stream events (stdout/stderr)
 - `DISPLAY_DATA`: Rich display data
+- `UPDATE_DISPLAY_DATA`: Updates to display data
 - `EXECUTE_RESULT`: Execution results
 - `EXECUTE_ERROR`: Error events
+- `EXECUTION_STALLED`: Stalled execution events
 
 ## Development
 
@@ -144,10 +205,10 @@ To run all tests (including worker and server tests):
 deno test -A --unstable-worker-options
 ```
 
-To run a specific test file (e.g., the server test):
+To run a specific test file:
 
 ```bash
-deno test --allow-net --allow-read tests/server_test.ts
+deno test --allow-net --allow-read tests/manager_test.ts
 ```
 
 - `-A` grants all permissions (required for filesystem/network tests).
@@ -157,8 +218,6 @@ deno test --allow-net --allow-read tests/server_test.ts
 
 - **Run all tests:**  
   `deno test -A --unstable-worker-options`
-- **Run a single test file:**  
-  `deno test --allow-net --allow-read tests/server_test.ts`
 - **Format code:**  
   `deno fmt`
 - **Check for lint errors:**  
@@ -169,11 +228,12 @@ deno test --allow-net --allow-read tests/server_test.ts
 ```
 .
 ├── kernel/
-│   ├── mod.ts           # Main entry point
+│   ├── index.ts         # Core interfaces and types
 │   ├── manager.ts       # Kernel manager implementation
 │   ├── worker.ts        # Worker implementation
-│   ├── index.ts         # Core interfaces and types
-│   └── pypi/           # Python wheel files
+│   ├── check-wheels.ts  # Wheel checking functionality
+│   └── pypi/            # Python wheel files
+├── mod.ts               # Main entry point and public API
 ├── tests/
 │   └── manager_test.ts  # Test suite
 └── README.md
