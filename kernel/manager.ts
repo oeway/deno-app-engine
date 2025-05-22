@@ -387,10 +387,22 @@ export class KernelManager extends EventEmitter {
         const namespaceMatch = id.match(/^([^:]+):/);
         const extractedNamespace = namespaceMatch ? namespaceMatch[1] : undefined;
         
+        // Safely handle potentially incomplete kernel instance
+        let status: "active" | "busy" | "unknown" = "unknown";
+        try {
+          // Check if kernel and status properties exist
+          if (instance && instance.kernel && typeof instance.kernel.status !== 'undefined') {
+            status = instance.kernel.status || "unknown";
+          }
+        } catch (error) {
+          console.warn(`Error getting status for kernel ${id}:`, error);
+          status = "unknown";
+        }
+        
         return {
           id,
           mode: instance.mode,
-          status: instance.kernel.status || "unknown",
+          status,
           created: instance.created || new Date(),
           namespace: extractedNamespace,
           deno: instance.options?.deno
@@ -1211,6 +1223,11 @@ export class KernelManager extends EventEmitter {
   } {
     const instance = this.kernels.get(id);
     if (!instance) {
+      return { count: 0, isStuck: false, executionIds: [] };
+    }
+    
+    // Handle partially initialized kernels where options may not be fully set
+    if (!instance.options) {
       return { count: 0, isStuck: false, executionIds: [] };
     }
     

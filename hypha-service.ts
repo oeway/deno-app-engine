@@ -1,6 +1,97 @@
 import { hyphaWebsocketClient } from "npm:hypha-rpc";
 import { KernelManager, KernelMode } from "./kernel/mod.ts";
 
+// Add type declaration for global variable
+declare global {
+  var cpuBaseline: number | undefined;
+}
+
+// Helper functions for formatting
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 Bytes';
+  
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function formatUptime(seconds: number): string {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+  
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (remainingSeconds > 0 || parts.length === 0) parts.push(`${remainingSeconds}s`);
+  
+  return parts.join(' ');
+}
+
+// Function to get approximate CPU usage
+// This is a simple approximation in Deno, as there is no direct API for CPU usage
+let lastCpuUsage = { time: Date.now(), usage: 0 };
+async function getCpuUsage(): Promise<number> {
+  try {
+    // Use cached value if it's recent (within last second)
+    const now = Date.now();
+    if (now - lastCpuUsage.time < 1000) {
+      return lastCpuUsage.usage;
+    }
+    
+    // Create a simple CPU-intensive task to measure relative performance
+    const startTime = now;
+    let counter = 0;
+    
+    // Run a computation for a short time to measure CPU load
+    const sampleDuration = 50; // ms - shorter duration to be less intrusive
+    while (Date.now() - startTime < sampleDuration) {
+      counter++;
+      // Simple math operations to use CPU
+      Math.sqrt(Math.random() * 10000);
+    }
+    
+    const endTime = Date.now();
+    const actualDuration = endTime - startTime;
+    
+    // Calculate operations per millisecond
+    const opsPerMs = counter / actualDuration;
+    
+    // Measure against a reasonable baseline that varies by machine
+    // We'll use a dynamic approach based on the first measurement
+    if (!globalThis.cpuBaseline) {
+      // First run - assume this is a baseline (low load)
+      // Store it with a safety margin
+      globalThis.cpuBaseline = opsPerMs * 0.8; // 80% of first measurement
+      console.log(`CPU baseline established: ${globalThis.cpuBaseline.toFixed(2)} ops/ms`);
+      return 0.2; // Assume 20% load on first measurement
+    }
+    
+    // Calculate load factor as inverse ratio of current perf to baseline
+    // Lower ops/ms means higher CPU usage
+    const loadFactor = 1 - (opsPerMs / globalThis.cpuBaseline);
+    
+    // Clamp between 0 and 1 (0-100%)
+    const usage = Math.min(1, Math.max(0, loadFactor));
+    
+    // Store the last measurement
+    lastCpuUsage = { time: endTime, usage };
+    
+    return usage;
+  } catch (error) {
+    console.error("Error measuring CPU usage:", error);
+    // Return last known usage or 0 if none
+    return lastCpuUsage.usage || 0;
+  }
+}
+
+// Track service start time
+const serviceStartTime = Date.now();
+
 // Create a global kernel manager instance
 const kernelManager = new KernelManager();
 
@@ -159,6 +250,98 @@ async function startHyphaService() {
         created: kernel.created.toISOString(),
         status: kernel.kernel.status || "unknown",
         history: kernelHistory.get(kernelId) || [],
+      };
+    },
+
+    async getStatus(context: {user: any, ws: string}) {
+      // Get total kernels across all namespaces
+      const allKernels = kernelManager.getKernelIds();
+      const totalKernels = allKernels.length;
+      
+      // Get kernels in current namespace - use a more robust approach
+      // to avoid errors with partially initialized kernels
+      const userKernelIds = allKernels.filter(id => id.startsWith(context.ws + ':'));
+      const namespaceKernelCount = userKernelIds.length;
+      
+      // Get active executions counts across all kernels
+      let totalActiveExecutions = 0;
+      let namespaceActiveExecutions = 0;
+      
+      // Map to store executions by status
+      const executionsByStatus = {
+        total: { active: 0, stuck: 0 },
+        namespace: { active: 0, stuck: 0 }
+      };
+      
+      // Calculate active executions and check for stuck kernels
+      for (const kernelId of allKernels) {
+        try {
+          const execInfo = kernelManager.getExecutionInfo(kernelId);
+          totalActiveExecutions += execInfo.count;
+          
+          if (execInfo.isStuck) {
+            executionsByStatus.total.stuck += 1;
+          }
+          
+          if (execInfo.count > 0) {
+            executionsByStatus.total.active += 1;
+          }
+          
+          // Check if this kernel belongs to the user's namespace
+          if (kernelId.startsWith(context.ws + ':')) {
+            namespaceActiveExecutions += execInfo.count;
+            
+            if (execInfo.isStuck) {
+              executionsByStatus.namespace.stuck += 1;
+            }
+            
+            if (execInfo.count > 0) {
+              executionsByStatus.namespace.active += 1;
+            }
+          }
+        } catch (error) {
+          console.warn(`Error getting execution info for kernel ${kernelId}:`, error);
+          // Continue with other kernels if one fails
+          continue;
+        }
+      }
+      
+      // Get memory usage information
+      const memoryUsage = Deno.memoryUsage();
+      
+      // Get uptime in seconds
+      const uptime = (Date.now() - serviceStartTime) / 1000;
+      
+      // Calculate average memory per kernel if kernels exist
+      const avgMemoryPerKernel = totalKernels > 0 
+        ? Math.round(memoryUsage.heapUsed / totalKernels) 
+        : 0;
+      
+      // Get CPU usage
+      const cpuUsage = await getCpuUsage();
+      
+      return {
+        systemStats: {
+          uptime: Math.round(uptime),
+          uptimeFormatted: formatUptime(uptime),
+          memoryUsage: {
+            heapTotal: formatBytes(memoryUsage.heapTotal),
+            heapUsed: formatBytes(memoryUsage.heapUsed),
+            rss: formatBytes(memoryUsage.rss),
+            external: formatBytes(memoryUsage.external)
+          },
+          avgMemoryPerKernel: formatBytes(avgMemoryPerKernel),
+          cpuUsage: `${Math.round(cpuUsage * 100)}%`
+        },
+        kernelStats: {
+          total: totalKernels,
+          namespaceCount: namespaceKernelCount,
+          activeExecutions: {
+            total: totalActiveExecutions,
+            namespace: namespaceActiveExecutions
+          },
+          executionsByStatus
+        }
       };
     },
 
