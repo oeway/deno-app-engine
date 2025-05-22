@@ -27,8 +27,17 @@ function ensureKernelId(id: string, namespace: string) {
 
 async function startHyphaService() {
   console.log("Connecting to hypha server...");
+  let token = Deno.env.get("HYPHA_TOKEN");
+  if(!token){
+    token = await hyphaWebsocketClient.login({
+        "server_url": Deno.env.get("HYPHA_SERVER_URL") || "https://hypha.aicell.io",
+    })
+  }
   const server = await hyphaWebsocketClient.connectToServer({
-    "server_url": "https://hypha.aicell.io"
+    // read the following from environment variables and use default
+    "server_url": Deno.env.get("HYPHA_SERVER_URL") || "https://hypha.aicell.io",
+    "workspace": Deno.env.get("HYPHA_WORKSPACE") || undefined,
+    "token": token
   });
   
   console.log("Connected to hypha server, registering service...");
@@ -36,6 +45,7 @@ async function startHyphaService() {
   const svc = await server.registerService({
     "name": "Deno Code Interpreter",
     "id": "deno-code-interpreter",
+    "type": "deno-code-interpreter",
     "config": {
       "visibility": "public",
       "require_context": true

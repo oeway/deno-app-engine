@@ -321,3 +321,18 @@ The kernel manager automatically tracks code execution to:
 3. Provide visibility into kernel activity
 
 When using the kernel manager to execute code (instead of calling kernel.execute directly), all execution tracking happens automatically.
+
+## Development
+
+### Running the service
+
+```bash
+deno run --allow-net --allow-read --allow-write --allow-env hypha-service.ts
+```
+
+### Build docker image
+
+```bash
+docker build --platform linux/amd64 -t oeway/deno-code-interpreter:0.1.0 . && docker push oeway/deno-code-interpreter:0.1.0
+```
+

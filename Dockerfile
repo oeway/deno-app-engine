@@ -1,4 +1,4 @@
-FROM denoland/deno:alpine-2.2.12
+FROM --platform=linux/amd64 denoland/deno:alpine-2.2.12
 
 WORKDIR /app
 
@@ -28,5 +28,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD deno eval 'try { new WebSocket("ws://localhost:8000"); console.log("healthy"); Deno.exit(0); } catch (e) { console.error(e); Deno.exit(1); }'
 
-# Use bash to run the start script
-CMD ["/bin/sh", "start-hypha-service.sh"] 
+# Run the service directly without tini
+CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "hypha-service.ts"] 

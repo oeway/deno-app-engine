@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Check if Deno is installed
 if ! command -v deno &> /dev/null; then
