@@ -680,7 +680,7 @@ print("3D helix scatter plot complete!")</textarea>
                 const created = new Date(info.created).toLocaleString();
                 const mode = info.mode === 'main_thread' ? 'Main Thread' : 'Worker';
                 const status = info.status || 'unknown';
-                infoSpan.textContent = `ID: ${selectedId.slice(0, 8)} | Mode: ${mode} | Status: ${status} | Created: ${created}`;
+                infoSpan.textContent = `ID: ${selectedId.slice(0, 8)} | Mode: ${mode} | Created: ${created}`;
             } else {
                 infoSpan.textContent = '';
             }
