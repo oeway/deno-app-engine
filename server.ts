@@ -1,4 +1,3 @@
-import { serve } from "https://deno.land/std@0.201.0/http/server.ts";
 import { KernelManager, KernelMode } from "./kernel/mod.ts";
 import { Status } from "https://deno.land/std@0.201.0/http/http_status.ts";
 import { contentType } from "https://deno.land/std/media_types/mod.ts";
@@ -564,7 +563,7 @@ export async function handleRequest(req: Request): Promise<Response> {
 
 export async function startServer(port = 8000) {
   console.log(`Starting kernel HTTP server on port ${port}...`);
-  return serve(handleRequest, { port });
+  return Deno.serve({ port }, handleRequest);
 }
 
 // Start the server if this is the main module
