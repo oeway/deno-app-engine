@@ -42,20 +42,43 @@ async function startHyphaService() {
     },
     
     // Service methods
-    async createKernel(options: {id: string, mode: KernelMode}, context: {user: any, ws: string}) {
+    async createKernel(options: {id: string, mode: KernelMode, inactivity_timeout?: number, max_execution_time?: number}, context: {user: any, ws: string}) {
       try {
         options = options || {};
+        const namespace = context.ws;
+        console.log(`Creating kernel with namespace: ${namespace}, requested ID: ${options.id || "auto-generated"}`);
+        
+        // Get existing kernels before creation
+        const existingKernels = kernelManager.getKernelIds();
+        console.log(`Existing kernels before creation: ${existingKernels.length}`);
+        
         const kernelId = await kernelManager.createKernel({
           id: options.id || crypto.randomUUID(),
           mode: options.mode || KernelMode.WORKER,
-          namespace: context.ws, // Use workspace as namespace for isolation
-          inactivityTimeout: 1000 * 60 * 30, // 30 minutes
-          maxExecutionTime: 1000 * 60 * 60 * 24 * 10 // 10 days
+          namespace: namespace, // Use workspace as namespace for isolation
+          inactivityTimeout: options.inactivity_timeout || 1000 * 60 * 10, // 10 minutes default
+          maxExecutionTime: options.max_execution_time || 1000 * 60 * 60 * 24 * 10 // 10 days default
         });
         
+        console.log(`Kernel created with ID: ${kernelId}`);
+        
+        // Verify kernel exists in manager
+        const allKernelsAfter = kernelManager.getKernelIds();
+        console.log(`All kernels after creation: ${allKernelsAfter.join(', ')}`);
+        
+        // Verify kernel exists
         const kernel = kernelManager.getKernel(kernelId);
         if (!kernel) {
+          console.error(`Failed to get kernel after creation: ${kernelId}`);
           throw new Error("Failed to get kernel after creation");
+        }
+        
+        // Verify it appears in list for this namespace
+        const kernelsInNamespace = kernelManager.listKernels(namespace);
+        console.log(`Kernels in namespace ${namespace} after creation: ${kernelsInNamespace.length}`);
+        const kernelExists = kernelsInNamespace.some(k => k.id === kernelId);
+        if (!kernelExists) {
+          console.error(`Kernel ${kernelId} created but not found in namespace ${namespace} list`);
         }
         
         // Initialize the kernel
@@ -80,7 +103,10 @@ async function startHyphaService() {
     
     listKernels(context: {user: any, ws: string}) {
       // Only list kernels in the user's workspace namespace
+      console.log(`Listing kernels for namespace: ${context.ws}, total kernels in manager: ${kernelManager.getKernelIds().length}`);
+      console.log(`All kernel IDs: ${kernelManager.getKernelIds().join(', ')}`);
       const kernelList = kernelManager.listKernels(context.ws);
+      console.log(`Found ${kernelList.length} kernels for namespace ${context.ws}`);
       return kernelList.map(kernel => ({
         id: kernel.id,
         name: `Kernel-${kernel.id.split(":")[1].slice(0, 8)}`,
@@ -91,9 +117,11 @@ async function startHyphaService() {
     
     async destroyKernel({kernelId}: {kernelId: string}, context: {user: any, ws: string}) {
       kernelId = ensureKernelId(kernelId, context.ws);
+      console.log(`Attempting to destroy kernel: ${kernelId}`);
       // Verify kernel belongs to user's namespace
       const kernel = kernelManager.getKernel(kernelId);
       if (!kernel) {
+        console.log(`Kernel not found: ${kernelId}`);
         throw new Error("Kernel not found or access denied");
       }
       
@@ -101,6 +129,7 @@ async function startHyphaService() {
       kernelHistory.delete(kernelId);
       
       await kernelManager.destroyKernel(kernelId);
+      console.log(`Kernel destroyed: ${kernelId}`);
       return { success: true };
     },
     
