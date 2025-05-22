@@ -1,6 +1,8 @@
 // Web Worker file for running the Kernel in a separate thread
 // Import necessary modules
 import * as Comlink from "comlink";
+// @ts-ignore Importing from npm
+import { EventEmitter } from 'node:events';
 import { Kernel, KernelEvents, IKernelOptions } from "./index.ts";
 
 
@@ -63,8 +65,8 @@ function setupEventForwarding() {
 
   // Forward all kernel events to the main thread
   Object.values(KernelEvents).forEach((eventType) => {
-    // Use EventEmitter's on method
-    kernel.on(eventType, (data: any) => {
+    // Cast kernel to EventEmitter to access the 'on' method
+    (kernel as unknown as EventEmitter).on(eventType, (data: any) => {
       if (eventPort) {
         // Send just the event type and raw data
         // This matches the structure used in main thread mode

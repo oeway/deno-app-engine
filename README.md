@@ -196,3 +196,68 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [Pyodide](https://pyodide.org/) - Python scientific stack in WebAssembly
 - [Deno](https://deno.land/) - A modern runtime for JavaScript and TypeScript
 - [JupyterLite](https://github.com/jupyterlite/jupyterlite) - Jupyter running in the browser
+
+## Kernel Inactivity and Execution Monitoring
+
+The kernel manager supports automatic shutdown of inactive kernels and monitoring of long-running executions:
+
+### Inactivity Timeout
+
+Kernels can be configured to automatically shut down after a period of inactivity:
+
+```typescript
+// Create a kernel with an inactivity timeout of 5 minutes
+const kernelId = await manager.createKernel({
+  inactivityTimeout: 5 * 60 * 1000 // 5 minutes in milliseconds
+});
+
+// Disable inactivity timeout
+manager.setInactivityTimeout(kernelId, 0);
+
+// Change inactivity timeout to 10 minutes
+manager.setInactivityTimeout(kernelId, 10 * 60 * 1000);
+
+// Get current inactivity timeout
+const timeout = manager.getInactivityTimeout(kernelId);
+
+// Get time until auto-shutdown
+const timeRemaining = manager.getTimeUntilShutdown(kernelId);
+```
+
+The inactivity detection is intelligent:
+- Kernels with ongoing executions are not considered inactive
+- Only kernels with no running tasks will be shut down after the timeout
+
+### Stalled Execution Detection
+
+Detect potentially stuck or deadlocked kernels by setting a maximum execution time:
+
+```typescript
+// Create a kernel with a maximum execution time of 30 seconds
+const kernelId = await manager.createKernel({
+  maxExecutionTime: 30 * 1000 // 30 seconds in milliseconds
+});
+
+// Listen for stalled execution events
+manager.onKernelEvent(kernelId, KernelEvents.EXECUTION_STALLED, (event) => {
+  console.log(`Execution ${event.executionId} has been running for over ${event.maxExecutionTime}ms`);
+  
+  // Optionally terminate the kernel
+  manager.forceTerminateKernel(kernelId, "Execution took too long");
+});
+
+// Get information about ongoing executions
+const execInfo = manager.getExecutionInfo(kernelId);
+console.log(`Kernel has ${execInfo.count} ongoing executions`);
+console.log(`Is kernel stuck? ${execInfo.isStuck}`);
+console.log(`Longest running time: ${execInfo.longestRunningTime}ms`);
+```
+
+### Execution Tracking
+
+The kernel manager automatically tracks code execution to:
+1. Prevent auto-shutdown of busy kernels
+2. Detect stalled executions
+3. Provide visibility into kernel activity
+
+When using the kernel manager to execute code (instead of calling kernel.execute directly), all execution tracking happens automatically.

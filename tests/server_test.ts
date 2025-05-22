@@ -115,7 +115,7 @@ Deno.test({
   async fn() {
     const kernels = await makeRequest("/kernels");
     assertEquals(kernels.length, 1);
-    assertEquals(kernels[0], kernelId);
+    assertEquals(kernels[0].id, kernelId);
   },
   sanitizeResources: false,
   sanitizeOps: false,

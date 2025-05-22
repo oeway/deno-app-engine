@@ -879,4 +879,289 @@ Deno.test({
   },
   sanitizeResources: false,
   sanitizeOps: false
+});
+
+// Test kernel inactivity timeout feature
+Deno.test({
+  name: "9. Test kernel inactivity timeout feature",
+  async fn() {
+    try {
+      // Create a kernel with a short inactivity timeout (2 seconds)
+      const kernelId = await manager.createKernel({
+        id: "timeout-test",
+        inactivityTimeout: 2000, // 2 seconds
+      });
+      
+      // Verify kernel exists
+      assert(manager.getKernel(kernelId), "Kernel should exist");
+      
+      // Verify inactivity timeout was set
+      const timeout = manager.getInactivityTimeout(kernelId);
+      assertEquals(timeout, 2000, "Inactivity timeout should be 2000ms");
+      
+      // Execute code to verify kernel is working
+      const result = await manager.getKernel(kernelId)?.kernel.execute('print("Testing inactivity timeout")');
+      assert(result?.success, "Execution should succeed");
+      
+      // Verify the last activity time was updated
+      const lastActivity = manager.getLastActivityTime(kernelId);
+      assert(lastActivity !== undefined, "Last activity time should be set");
+      
+      // Get time until shutdown
+      const timeUntilShutdown = manager.getTimeUntilShutdown(kernelId);
+      assert(timeUntilShutdown !== undefined, "Time until shutdown should be set");
+      assert(timeUntilShutdown! <= 2000, "Time until shutdown should be less than or equal to 2000ms");
+      assert(timeUntilShutdown! > 0, "Time until shutdown should be greater than 0ms");
+      
+      console.log(`Kernel ${kernelId} will shut down in ${timeUntilShutdown}ms. Waiting for auto-shutdown...`);
+      
+      // Wait for the kernel to be automatically destroyed
+      await new Promise<void>((resolve) => {
+        // Check every 500ms if the kernel is still there
+        const checkInterval = setInterval(() => {
+          if (!manager.getKernel(kernelId)) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 500);
+        
+        // Set a maximum wait time of 5 seconds
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          resolve(); // Resolve anyway after 5 seconds
+        }, 5000);
+      });
+      
+      // Verify kernel was destroyed
+      assertEquals(manager.getKernel(kernelId), undefined, "Kernel should be automatically destroyed after inactivity timeout");
+      
+      // Now test changing the timeout
+      console.log("Testing changing the inactivity timeout...");
+      
+      // Create a new kernel with an initial timeout
+      const kernelId2 = await manager.createKernel({
+        id: "timeout-change-test",
+        inactivityTimeout: 60000, // Initial timeout is 1 minute
+      });
+      
+      // Verify the initial timeout
+      assertEquals(manager.getInactivityTimeout(kernelId2), 60000, "Initial timeout should be 60000ms");
+      
+      // Update the timeout to a shorter value
+      const updateResult = manager.setInactivityTimeout(kernelId2, 1500); // 1.5 seconds
+      assert(updateResult, "Timeout update should succeed");
+      
+      // Verify the timeout was updated
+      assertEquals(manager.getInactivityTimeout(kernelId2), 1500, "Updated timeout should be 1500ms");
+      
+      // Execute code to update activity time
+      await manager.getKernel(kernelId2)?.kernel.execute('print("Testing timeout change")');
+      
+      // Get time until shutdown
+      const timeUntilShutdown2 = manager.getTimeUntilShutdown(kernelId2);
+      assert(timeUntilShutdown2! <= 1500, "Time until shutdown should be less than or equal to 1500ms");
+      
+      console.log(`Kernel ${kernelId2} will shut down in ${timeUntilShutdown2}ms. Waiting for auto-shutdown...`);
+      
+      // Wait for the kernel to be automatically destroyed
+      await new Promise<void>((resolve) => {
+        // Check every 500ms if the kernel is still there
+        const checkInterval = setInterval(() => {
+          if (!manager.getKernel(kernelId2)) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 300);
+        
+        // Set a maximum wait time of 5 seconds
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          resolve(); // Resolve anyway after 5 seconds
+        }, 5000);
+      });
+      
+      // Verify kernel was destroyed
+      assertEquals(manager.getKernel(kernelId2), undefined, "Kernel with updated timeout should be automatically destroyed");
+      
+      // Test disabling the timeout
+      console.log("Testing disabling the inactivity timeout...");
+      
+      // Create a kernel with a short timeout
+      const kernelId3 = await manager.createKernel({
+        id: "timeout-disable-test",
+        inactivityTimeout: 1000, // 1 second
+      });
+      
+      // Verify kernel exists
+      assert(manager.getKernel(kernelId3), "Kernel should exist after creation");
+      
+      // Execute code to ensure the kernel is initialized
+      await manager.getKernel(kernelId3)?.kernel.execute('print("Testing timeout disable")');
+      
+      // Verify timeout is set
+      assertEquals(manager.getInactivityTimeout(kernelId3), 1000, "Timeout should be 1000ms initially");
+      
+      // Disable the timeout by setting it to 0
+      console.log("Setting inactivity timeout to 0...");
+      const updateResult2 = manager.setInactivityTimeout(kernelId3, 0);
+      assert(updateResult2, "Timeout update should succeed");
+      
+      // Verify the timeout was disabled
+      assertEquals(manager.getInactivityTimeout(kernelId3), 0, "Timeout should be 0 (disabled)");
+      assertEquals(manager.getTimeUntilShutdown(kernelId3), undefined, "Time until shutdown should be undefined when timeout is disabled");
+      
+      // Wait for 2 seconds to ensure the kernel is not automatically destroyed
+      console.log("Waiting for 2 seconds to verify kernel is not destroyed...");
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Log kernel status
+      const kernelExists = manager.getKernel(kernelId3) !== undefined;
+      console.log(`After waiting, kernel exists: ${kernelExists}`);
+      
+      // Additional logging for debugging
+      if (!kernelExists) {
+        console.log("Kernel was destroyed despite timeout being disabled");
+        // Check if there are any remaining inactivity timers
+        // This requires adding a method to expose the timer map for testing
+        const inactivityTimers = manager.getInactivityTimers?.() || {};
+        console.log(`Remaining inactivity timers: ${Object.keys(inactivityTimers).length}`);
+      }
+      
+      // Verify the kernel still exists
+      assert(manager.getKernel(kernelId3), "Kernel should still exist after timeout was disabled");
+      
+      // Clean up
+      await manager.destroyKernel(kernelId3);
+    } catch (error) {
+      console.error("Error in inactivity timeout test:", error);
+      throw error;
+    } finally {
+      // Clean up any remaining kernels
+      await manager.destroyAll();
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test execution tracking and stalled detection
+Deno.test({
+  name: "10. Test execution tracking and stalled detection",
+  async fn() {
+    try {
+      // Create a kernel with a maxExecutionTime
+      const kernelId = await manager.createKernel({
+        id: "execution-tracking-test",
+        maxExecutionTime: 2000, // 2 seconds
+      });
+      
+      // Verify kernel exists
+      assert(manager.getKernel(kernelId), "Kernel should exist");
+      
+      // First check if we have no ongoing executions
+      const initialInfo = manager.getExecutionInfo(kernelId);
+      assertEquals(initialInfo.count, 0, "Should have 0 ongoing executions initially");
+      
+      // Set up event listener for stalled execution events
+      let stalledEventReceived = false;
+      const stalledListener = (event: any) => {
+        console.log("Received stalled execution event:", event);
+        if (event && event.kernelId === kernelId) {
+          stalledEventReceived = true;
+        }
+      };
+      manager.onKernelEvent(kernelId, KernelEvents.EXECUTION_STALLED, stalledListener);
+      
+      // Set up error event listener to capture execution errors
+      let errorEventReceived = false;
+      const errorListener = (event: any) => {
+        console.log("Received error event:", event);
+        if (event && event.ename === "ExecutionStalledError") {
+          errorEventReceived = true;
+        }
+      };
+      manager.onKernelEvent(kernelId, KernelEvents.EXECUTE_ERROR, errorListener);
+      
+      // Execute a short task that should complete quickly
+      console.log("Executing a quick task...");
+      const quickResult = await manager.execute(kernelId, 'print("Quick task")');
+      assert(quickResult?.success, "Quick execution should succeed");
+      
+      // Check that we have no ongoing executions after quick task completes
+      const afterQuickInfo = manager.getExecutionInfo(kernelId);
+      assertEquals(afterQuickInfo.count, 0, "Should have 0 ongoing executions after quick task");
+      
+      // Execute a long-running task that will be interrupted by the stalled detection
+      console.log("Executing a long task that should exceed maxExecutionTime...");
+      
+      // Start a separate process to monitor execution info during the long-running task
+      let executionInfo: any[] = [];
+      let monitoringActive = true;
+      
+      // Start the monitoring in a separate Promise
+      const monitoringPromise = (async () => {
+        while (monitoringActive) {
+          const info = manager.getExecutionInfo(kernelId);
+          executionInfo.push({
+            timestamp: Date.now(),
+            count: info.count,
+            isStuck: info.isStuck,
+            longestRunningTime: info.longestRunningTime
+          });
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      })();
+      
+      // Execute a long-running task (infinite loop with a sleep to avoid blocking)
+      const longTaskPromise = manager.execute(kernelId, `
+import time
+i = 0
+while True:
+    i += 1
+    print(f"Iteration {i}")
+    time.sleep(0.1)  # Sleep to avoid blocking completely
+`).catch(error => {
+        console.log("Long task error (expected):", error);
+        return { success: false, error };
+      });
+      
+      // Wait for some time to let the stalled execution be detected
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Check if we now have ongoing executions
+      const duringLongInfo = manager.getExecutionInfo(kernelId);
+      console.log("Execution info during long task:", duringLongInfo);
+      
+      // Stop the monitoring
+      monitoringActive = false;
+      await monitoringPromise;
+      
+      // Log the execution info collected during the test
+      console.log("Execution info history:", executionInfo);
+      
+      // Verify that we detected an ongoing execution
+      assert(executionInfo.some(info => info.count > 0), "Should have detected an ongoing execution");
+      
+      // Verify that we detected the execution as stuck at some point
+      assert(executionInfo.some(info => info.isStuck), "Should have detected the execution as stuck");
+      
+      // Force terminate the kernel to stop the infinite loop
+      const terminationResult = await manager.forceTerminateKernel(kernelId, "Test completed, terminating kernel");
+      assert(terminationResult, "Kernel termination should succeed");
+      
+      // Verify the stalled and error events were emitted
+      assert(stalledEventReceived || errorEventReceived, "Should have received stalled execution or error event");
+      
+      // Clean up any remaining kernels
+      await manager.destroyAll();
+    } catch (error) {
+      console.error("Error in execution tracking test:", error);
+      throw error;
+    } finally {
+      // Clean up
+      await manager.destroyAll();
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
 }); 

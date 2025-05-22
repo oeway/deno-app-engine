@@ -53,6 +53,8 @@ export interface IManagerKernelOptions {
     permissions?: IDenoPermissions;
   };
   filesystem?: IFilesystemMountOptions;
+  inactivityTimeout?: number; // Time in milliseconds after which an inactive kernel will be shut down
+  maxExecutionTime?: number; // Maximum time in milliseconds a single execution can run before considered stuck/dead
 }
 
 // Helper type for listener management
@@ -69,6 +71,14 @@ export class KernelManager extends EventEmitter {
   private kernels: Map<string, IKernelInstance> = new Map();
   // Track listeners for each kernel to enable individual removal
   private listenerWrappers: Map<string, Map<string, Map<Function, ListenerWrapper>>> = new Map();
+  // Track last activity time for each kernel
+  private lastActivityTime: Map<string, number> = new Map();
+  // Store inactivity timers for each kernel
+  private inactivityTimers: Map<string, number> = new Map();
+  // Track ongoing executions for each kernel
+  private ongoingExecutions: Map<string, Set<string>> = new Map();
+  // Track execution timeouts for detecting stuck/dead kernels
+  private executionTimeouts: Map<string, Map<string, number>> = new Map();
   
   constructor() {
     super();
@@ -84,9 +94,15 @@ export class KernelManager extends EventEmitter {
    * @param options.namespace Optional namespace prefix for the kernel ID
    * @param options.deno.permissions Optional Deno permissions for worker mode
    * @param options.filesystem Optional filesystem mounting options
+   * @param options.inactivityTimeout Optional timeout in ms after which an inactive kernel will be shut down
+   * @param options.maxExecutionTime Optional maximum time in ms an execution can run before considered stuck
    * @returns Promise resolving to the kernel instance ID
    */
   public async createKernel(options: IManagerKernelOptions = {}): Promise<string> {
+    // make sure the options.id does not contain colons because it will be used as a namespace prefix
+    if (options.id && options.id.includes(':')) {
+      throw new Error('Kernel ID cannot contain colons');
+    }
     const baseId = options.id || crypto.randomUUID();
     const mode = options.mode || KernelMode.WORKER;
     
@@ -120,6 +136,23 @@ export class KernelManager extends EventEmitter {
     
     // Forward kernel events to manager
     this.setupEventForwarding(instance);
+    
+    // Initialize activity tracking
+    this.updateKernelActivity(id);
+    
+    // Set up inactivity timeout if specified and greater than 0
+    if (options.inactivityTimeout && options.inactivityTimeout > 0) {
+      console.log(`Setting up initial inactivity timeout for kernel ${id}: ${options.inactivityTimeout}ms`);
+      this.setupInactivityTimeout(id, options.inactivityTimeout);
+    } else if (options.inactivityTimeout === 0) {
+      console.log(`Inactivity timeout explicitly disabled for kernel ${id}`);
+    }
+    
+    // Setup handlers for stalled executions if maxExecutionTime is specified
+    if (options.maxExecutionTime && options.maxExecutionTime > 0) {
+      console.log(`Setting up execution monitoring for kernel ${id} with max execution time: ${options.maxExecutionTime}ms`);
+      this.setupStalledExecutionHandler(id);
+    }
     
     return id;
   }
@@ -212,7 +245,7 @@ export class KernelManager extends EventEmitter {
     worker.postMessage({ type: "SET_EVENT_PORT", port: port2 }, [port2]);
     
     // Create a proxy to the worker using Comlink
-    const kernelProxy = Comlink.wrap(worker);
+    const kernelProxy = Comlink.wrap<IKernel>(worker);
     
     // Add a local event handler to bridge the worker events
     // This works around the limitation that Comlink doesn't proxy event emitters
@@ -263,7 +296,11 @@ export class KernelManager extends EventEmitter {
         // Map getStatus method to status getter for compatibility with IKernel interface
         get status() {
           try {
-            return kernelProxy.getStatus();
+            if (typeof kernelProxy.getStatus === 'function') {
+              return kernelProxy.getStatus();
+            } else {
+              return "unknown";
+            }
           } catch (error) {
             return "unknown";
           }
@@ -372,6 +409,24 @@ export class KernelManager extends EventEmitter {
     if (!instance) {
       throw new Error(`Kernel with ID ${id} not found`);
     }
+    
+    // Clear any inactivity timer
+    this.clearInactivityTimeout(id);
+    
+    // Clean up execution timeouts
+    if (this.executionTimeouts.has(id)) {
+      const timeouts = this.executionTimeouts.get(id)!;
+      for (const timeoutId of timeouts.values()) {
+        clearTimeout(timeoutId);
+      }
+      this.executionTimeouts.delete(id);
+    }
+    
+    // Clean up ongoing executions tracking
+    this.ongoingExecutions.delete(id);
+    
+    // Clean up activity tracking
+    this.lastActivityTime.delete(id);
     
     // Remove all event listeners for this kernel
     this.removeAllKernelListeners(id);
@@ -576,118 +631,170 @@ export class KernelManager extends EventEmitter {
       throw new Error(`Kernel with ID ${kernelId} not found`);
     }
     
-    // For main thread kernels, we can use the executeStream method directly
-    if (instance.mode === KernelMode.MAIN_THREAD) {
-      const kernel = instance.kernel as unknown as { 
-        executeStream: (code: string, parent: any) => AsyncGenerator<any, any, void> 
-      };
-      
-      // Forward to the kernel's executeStream method
-      if (typeof kernel.executeStream === 'function') {
-        try {
-          yield* kernel.executeStream(code, parent);
-          return { success: true };
-        } catch (error) {
-          console.error(`[MANAGER] Error in main thread executeStream:`, error);
-          return { 
-            success: false, 
-            error: error instanceof Error ? error : new Error(String(error))
-          };
-        }
-      } else {
-        console.warn(`[MANAGER] executeStream method not found on main thread kernel, falling back to event-based approach`);
-      }
-    }
+    // Update kernel activity
+    this.updateKernelActivity(kernelId);
     
-    // For worker mode, we need to implement streaming via events
+    // Track this execution
+    const executionId = this.trackExecution(kernelId);
+    
     try {
-      // Setup queue for storing events
-      const streamQueue: any[] = [];
-      let executionComplete = false;
-      let executionResult: { success: boolean, result?: any, error?: Error } | null = null;
-      
-      // Set up a promise that will resolve when execution completes
-      const executionPromise = new Promise<{ success: boolean, result?: any, error?: Error }>((resolve) => {
-        // Create event handlers
-        const handleStreamEvent = (event: { kernelId: string, data: any }) => {
-          if (event.kernelId === kernelId) {
-            streamQueue.push({
-              type: 'stream',
-              data: event.data
-            });
-          }
+      // For main thread kernels, we can use the executeStream method directly
+      if (instance.mode === KernelMode.MAIN_THREAD) {
+        const kernel = instance.kernel as unknown as { 
+          executeStream: (code: string, parent: any) => AsyncGenerator<any, any, void> 
         };
         
-        const handleDisplayEvent = (event: { kernelId: string, data: any }) => {
-          if (event.kernelId === kernelId) {
-            streamQueue.push({
-              type: 'display_data',
-              data: event.data
-            });
-          }
-        };
-        
-        const handleResultEvent = (event: { kernelId: string, data: any }) => {
-          if (event.kernelId === kernelId) {
-            streamQueue.push({
-              type: 'execute_result',
-              data: {
-                execution_count: event.data.execution_count,
-                data: event.data.data,
-                metadata: event.data.metadata
-              }
-            });
-          }
-        };
-        
-        const handleErrorEvent = (event: { kernelId: string, data: any }) => {
-          if (event.kernelId === kernelId) {
-            console.log(`[MANAGER] Received error event for kernel ${kernelId}:`, event.data);
-            streamQueue.push({
-              type: 'execute_error',
-              data: event.data
-            });
+        // Forward to the kernel's executeStream method
+        if (typeof kernel.executeStream === 'function') {
+          try {
+            yield* kernel.executeStream(code, parent);
             
-            // Store the error for the final result
-            executionResult = {
-              success: false,
-              error: new Error(`${event.data.ename}: ${event.data.evalue}`),
-              result: event.data
+            // Update activity after execution completes
+            this.updateKernelActivity(kernelId);
+            
+            // Complete execution tracking
+            this.completeExecution(kernelId, executionId);
+            
+            return { success: true };
+          } catch (error) {
+            console.error(`[MANAGER] Error in main thread executeStream:`, error);
+            
+            // Update activity even if there's an error
+            this.updateKernelActivity(kernelId);
+            
+            // Complete execution tracking even on error
+            this.completeExecution(kernelId, executionId);
+            
+            return { 
+              success: false, 
+              error: error instanceof Error ? error : new Error(String(error))
             };
           }
-        };
+        } else {
+          console.warn(`[MANAGER] executeStream method not found on main thread kernel, falling back to event-based approach`);
+        }
+      }
+      
+      // For worker mode, we need to implement streaming via events
+      try {
+        // Event-based approach for worker kernels or main thread kernels without executeStream
+        const streamQueue: any[] = [];
+        let executionComplete = false;
+        let executionResult: { success: boolean, result?: any, error?: Error } = { success: true };
         
-        // Register all the event handlers
-        super.on(KernelEvents.STREAM, handleStreamEvent);
-        super.on(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
-        super.on(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
-        super.on(KernelEvents.EXECUTE_RESULT, handleResultEvent);
-        super.on(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
-        
-        // Execute the code
-        // We need to wait for the execution to complete before returning the result
-        try {
-          // We know the execute method is available directly on the kernel object
-          // because we mapped it in the IKernelInstance creation
-          // We know the execute method is available directly on the kernel object
-          // because we mapped it in the IKernelInstance creation
-          const executePromise = instance.kernel.execute(code, parent);
-          console.log(`[MANAGER] Execute called, got promise:`, typeof executePromise);
+        // Create a promise that will resolve when execution is complete
+        const executionPromise = new Promise<{ success: boolean, result?: any, error?: Error }>((resolve) => {
+          // Create event handlers
+          const handleStreamEvent = (event: { kernelId: string, data: any }) => {
+            if (event.kernelId === kernelId) {
+              streamQueue.push({
+                type: 'stream',
+                data: event.data
+              });
+              
+              // Stream events also count as activity
+              this.updateKernelActivity(kernelId);
+            }
+          };
           
-          executePromise.then((result) => {
-            executionComplete = true;
-            executionResult = result;
+          const handleDisplayEvent = (event: { kernelId: string, data: any }) => {
+            if (event.kernelId === kernelId) {
+              streamQueue.push({
+                type: 'display_data',
+                data: event.data
+              });
+              
+              // Display events also count as activity
+              this.updateKernelActivity(kernelId);
+            }
+          };
+          
+          const handleResultEvent = (event: { kernelId: string, data: any }) => {
+            if (event.kernelId === kernelId) {
+              streamQueue.push({
+                type: 'execute_result',
+                data: event.data
+              });
+              
+              // Result events indicate activity
+              this.updateKernelActivity(kernelId);
+            }
+          };
+          
+          const handleErrorEvent = (event: { kernelId: string, data: any }) => {
+            if (event.kernelId === kernelId) {
+              console.log(`[MANAGER] Received error event for kernel ${kernelId}:`, event.data);
+              streamQueue.push({
+                type: 'execute_error',
+                data: event.data
+              });
+              
+              // Error events also count as activity
+              this.updateKernelActivity(kernelId);
+              
+              // Store the error for the final result
+              executionResult = {
+                success: false,
+                error: new Error(`${event.data.ename}: ${event.data.evalue}`),
+                result: event.data
+              };
+            }
+          };
+          
+          // Register all the event handlers
+          super.on(KernelEvents.STREAM, handleStreamEvent);
+          super.on(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+          super.on(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
+          super.on(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+          super.on(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+          
+          // Execute the code
+          // We need to wait for the execution to complete before returning the result
+          try {
+            // We know the execute method is available directly on the kernel object
+            // because we mapped it in the IKernelInstance creation
+            const executePromise = instance.kernel.execute(code, parent);
+            console.log(`[MANAGER] Execute called, got promise:`, typeof executePromise);
             
-            // Cleanup event handlers
-            super.off(KernelEvents.STREAM, handleStreamEvent);
-            super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
-            super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
-            super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
-            super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
-            
-            resolve(result);
-          }).catch((error) => {
-            console.error(`[MANAGER] Error in execute:`, error);
+            executePromise.then((result) => {
+              executionComplete = true;
+              executionResult = result;
+              
+              // Update activity when execution completes
+              this.updateKernelActivity(kernelId);
+              
+              // Cleanup event handlers
+              super.off(KernelEvents.STREAM, handleStreamEvent);
+              super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+              super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
+              super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+              super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+              
+              resolve(result);
+            }).catch((error) => {
+              console.error(`[MANAGER] Error in execute:`, error);
+              executionComplete = true;
+              const errorResult = {
+                success: false,
+                error: error instanceof Error ? error : new Error(String(error))
+              };
+              executionResult = errorResult;
+              
+              // Update activity even on error
+              this.updateKernelActivity(kernelId);
+              
+              // Cleanup event handlers
+              console.log(`[MANAGER] Cleaning up event handlers after error`);
+              super.off(KernelEvents.STREAM, handleStreamEvent);
+              super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+              super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
+              super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+              super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+              
+              resolve(errorResult);
+            });
+          } catch (error) {
+            console.error(`[MANAGER] Direct error calling execute:`, error);
             executionComplete = true;
             const errorResult = {
               success: false,
@@ -695,8 +802,10 @@ export class KernelManager extends EventEmitter {
             };
             executionResult = errorResult;
             
-            // Cleanup event handlers
-            console.log(`[MANAGER] Cleaning up event handlers after error`);
+            // Update activity even on direct error
+            this.updateKernelActivity(kernelId);
+            
+            // Cleanup event handlers on direct error
             super.off(KernelEvents.STREAM, handleStreamEvent);
             super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
             super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
@@ -704,60 +813,475 @@ export class KernelManager extends EventEmitter {
             super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
             
             resolve(errorResult);
-          });
-        } catch (error) {
-          console.error(`[MANAGER] Direct error calling execute:`, error);
-          executionComplete = true;
-          const errorResult = {
+          }
+        });
+        
+        // Setup timeout
+        const startTime = Date.now();
+        const timeout = 60000; // 60 second timeout
+        
+        // Monitor the stream queue and yield results
+        while ((!executionComplete || streamQueue.length > 0) && 
+               (Date.now() - startTime < timeout)) {
+          // If there are items in the queue, yield them
+          if (streamQueue.length > 0) {
+            const event = streamQueue.shift();
+            yield event;
+            continue;
+          }
+          
+          // If no more events but execution is not complete, wait a little
+          if (!executionComplete) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+        }
+        
+        // Handle timeout
+        if (!executionComplete && Date.now() - startTime >= timeout) {
+          // Complete execution tracking
+          this.completeExecution(kernelId, executionId);
+          
+          return {
             success: false,
-            error: error instanceof Error ? error : new Error(String(error))
+            error: new Error("Execution timed out")
           };
-          executionResult = errorResult;
-          
-          // Cleanup event handlers on direct error
-          super.off(KernelEvents.STREAM, handleStreamEvent);
-          super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
-          super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
-          super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
-          super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
-          
-          resolve(errorResult);
+        }
+        
+        // Wait for the final result
+        const result = await executionPromise;
+        
+        // Complete execution tracking
+        this.completeExecution(kernelId, executionId);
+        
+        return result;
+      } catch (error) {
+        // Complete execution tracking
+        this.completeExecution(kernelId, executionId);
+        
+        console.error(`[MANAGER] Error in executeStream:`, error);
+        return {
+          success: false,
+          error: error instanceof Error ? error : new Error(String(error))
+        };
+      }
+    } catch (error) {
+      // Complete execution tracking on any outer error
+      this.completeExecution(kernelId, executionId);
+      
+      console.error(`[MANAGER] Unexpected error in executeStream:`, error);
+      return {
+        success: false, 
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+
+  /**
+   * Track a new execution task for a kernel
+   * @param kernelId Kernel ID
+   * @returns Unique execution ID
+   * @private
+   */
+  private trackExecution(kernelId: string): string {
+    // Create a unique execution ID
+    const executionId = `exec-${crypto.randomUUID()}`;
+    
+    // Get or create the set of ongoing executions for this kernel
+    if (!this.ongoingExecutions.has(kernelId)) {
+      this.ongoingExecutions.set(kernelId, new Set());
+    }
+    
+    // Add this execution to the set
+    this.ongoingExecutions.get(kernelId)!.add(executionId);
+    
+    // Update activity timestamp
+    this.updateKernelActivity(kernelId);
+    
+    // If maxExecutionTime is set, create a timeout to detect stuck/dead kernels
+    const instance = this.kernels.get(kernelId);
+    if (instance && instance.options.maxExecutionTime && instance.options.maxExecutionTime > 0) {
+      // Get or create the map of execution timeouts for this kernel
+      if (!this.executionTimeouts.has(kernelId)) {
+        this.executionTimeouts.set(kernelId, new Map());
+      }
+      
+      // Set a timeout for this execution
+      const timeoutId = setTimeout(() => {
+        console.warn(`Execution ${executionId} on kernel ${kernelId} has been running for ${instance.options.maxExecutionTime}ms and may be stuck/dead.`);
+        // Emit a stalled execution event
+        super.emit('execution_stalled', {
+          kernelId,
+          executionId,
+          maxExecutionTime: instance.options.maxExecutionTime
+        });
+      }, instance.options.maxExecutionTime);
+      
+      // Store the timeout ID
+      this.executionTimeouts.get(kernelId)!.set(executionId, timeoutId);
+    }
+    
+    return executionId;
+  }
+  
+  /**
+   * Complete tracking for an execution
+   * @param kernelId Kernel ID
+   * @param executionId Execution ID
+   * @private
+   */
+  private completeExecution(kernelId: string, executionId: string): void {
+    // Clear any execution timeout
+    if (this.executionTimeouts.has(kernelId)) {
+      const timeouts = this.executionTimeouts.get(kernelId)!;
+      if (timeouts.has(executionId)) {
+        clearTimeout(timeouts.get(executionId));
+        timeouts.delete(executionId);
+      }
+      
+      // Clean up empty maps
+      if (timeouts.size === 0) {
+        this.executionTimeouts.delete(kernelId);
+      }
+    }
+    
+    // Remove from ongoing executions
+    if (this.ongoingExecutions.has(kernelId)) {
+      const executions = this.ongoingExecutions.get(kernelId)!;
+      executions.delete(executionId);
+      
+      // Clean up empty sets
+      if (executions.size === 0) {
+        this.ongoingExecutions.delete(kernelId);
+        
+        // Update activity timestamp for completed execution
+        this.updateKernelActivity(kernelId);
+      }
+    }
+  }
+  
+  /**
+   * Check if a kernel has any ongoing executions
+   * @param kernelId Kernel ID
+   * @returns True if the kernel has ongoing executions
+   * @private
+   */
+  private hasOngoingExecutions(kernelId: string): boolean {
+    return this.ongoingExecutions.has(kernelId) && 
+           this.ongoingExecutions.get(kernelId)!.size > 0;
+  }
+  
+  /**
+   * Get the count of ongoing executions for a kernel
+   * @param id Kernel ID
+   * @returns Number of ongoing executions
+   */
+  public getOngoingExecutionCount(id: string): number {
+    if (!this.ongoingExecutions.has(id)) {
+      return 0;
+    }
+    return this.ongoingExecutions.get(id)!.size;
+  }
+  
+  /**
+   * Set up an inactivity timeout for a kernel
+   * @param id Kernel ID
+   * @param timeout Timeout in milliseconds
+   * @private
+   */
+  private setupInactivityTimeout(id: string, timeout: number): void {
+    // Don't set up a timer if timeout is 0 or negative
+    if (timeout <= 0) {
+      console.log(`Not setting up inactivity timer for kernel ${id} because timeout is ${timeout}ms`);
+      return;
+    }
+    
+    // Always clear any existing timer first
+    this.clearInactivityTimeout(id);
+    
+    // Create a timer to destroy the kernel after the timeout
+    console.log(`Setting up inactivity timer for kernel ${id} with timeout ${timeout}ms`);
+    const timer = setTimeout(() => {
+      // Check if the kernel has ongoing executions before shutting down
+      if (this.hasOngoingExecutions(id)) {
+        console.log(`Kernel ${id} has ongoing executions, not shutting down despite inactivity timeout.`);
+        // Reset the timer to check again later
+        this.setupInactivityTimeout(id, timeout);
+        return;
+      }
+      
+      console.log(`Kernel ${id} has been inactive for ${timeout}ms with no ongoing executions. Shutting down.`);
+      this.destroyKernel(id).catch(error => {
+        console.error(`Error destroying inactive kernel ${id}:`, error);
+      });
+    }, timeout);
+    
+    // Store the timer ID
+    this.inactivityTimers.set(id, timer);
+  }
+  
+  /**
+   * Clear any existing inactivity timeout for a kernel
+   * @param id Kernel ID
+   * @private
+   */
+  private clearInactivityTimeout(id: string): void {
+    if (this.inactivityTimers.has(id)) {
+      const timerId = this.inactivityTimers.get(id);
+      console.log(`Clearing inactivity timer ${timerId} for kernel ${id}`);
+      clearTimeout(timerId);
+      this.inactivityTimers.delete(id);
+    }
+  }
+
+  /**
+   * Update activity timestamp for a kernel and reset inactivity timer if present
+   * @param id Kernel ID
+   * @private
+   */
+  private updateKernelActivity(id: string): void {
+    // Update the last activity time
+    this.lastActivityTime.set(id, Date.now());
+    
+    // Get the kernel options
+    const instance = this.kernels.get(id);
+    if (!instance) return;
+    
+    const timeout = instance.options.inactivityTimeout;
+    
+    // Reset the inactivity timer if timeout is enabled (greater than 0)
+    if (timeout && timeout > 0) {
+      this.setupInactivityTimeout(id, timeout);
+    }
+  }
+
+  /**
+   * Get the last activity time for a kernel
+   * @param id Kernel ID
+   * @returns Last activity time in milliseconds since epoch, or undefined if not found
+   */
+  public getLastActivityTime(id: string): number | undefined {
+    return this.lastActivityTime.get(id);
+  }
+
+  /**
+   * Get the inactivity timeout for a kernel
+   * @param id Kernel ID
+   * @returns Inactivity timeout in milliseconds, or undefined if not set
+   */
+  public getInactivityTimeout(id: string): number | undefined {
+    const instance = this.kernels.get(id);
+    if (!instance) return undefined;
+    
+    return instance.options.inactivityTimeout;
+  }
+
+  /**
+   * Set or update the inactivity timeout for a kernel
+   * @param id Kernel ID
+   * @param timeout Timeout in milliseconds, or 0 to disable
+   * @returns True if the timeout was set, false if the kernel was not found
+   */
+  public setInactivityTimeout(id: string, timeout: number): boolean {
+    const instance = this.kernels.get(id);
+    if (!instance) return false;
+    
+    // Update the timeout in the options
+    instance.options.inactivityTimeout = timeout;
+    
+    // Clear any existing timer
+    this.clearInactivityTimeout(id);
+    
+    // If timeout is greater than 0, set up a new timer
+    if (timeout > 0) {
+      this.setupInactivityTimeout(id, timeout);
+    } else {
+      console.log(`Inactivity timeout disabled for kernel ${id}`);
+    }
+    
+    return true;
+  }
+
+  /**
+   * Get time until auto-shutdown for a kernel
+   * @param id Kernel ID
+   * @returns Time in milliseconds until auto-shutdown, or undefined if no timeout is set
+   */
+  public getTimeUntilShutdown(id: string): number | undefined {
+    const instance = this.kernels.get(id);
+    if (!instance) return undefined;
+    
+    const timeout = instance.options.inactivityTimeout;
+    if (!timeout || timeout <= 0) return undefined;
+    
+    const lastActivity = this.lastActivityTime.get(id);
+    if (!lastActivity) return undefined;
+    
+    const elapsedTime = Date.now() - lastActivity;
+    const remainingTime = timeout - elapsedTime;
+    
+    return Math.max(0, remainingTime);
+  }
+
+  /**
+   * Get the map of inactivity timers (for debugging/testing only)
+   * @returns Object with kernel IDs as keys and timer IDs as values
+   */
+  public getInactivityTimers(): Record<string, number> {
+    // Convert Map to Object for easier inspection
+    const timers: Record<string, number> = {};
+    this.inactivityTimers.forEach((value, key) => {
+      timers[key] = value;
+    });
+    return timers;
+  }
+
+  /**
+   * Set up a handler for stalled executions
+   * @param id Kernel ID
+   * @private
+   */
+  private setupStalledExecutionHandler(id: string): void {
+    // Listen for stalled execution events
+    super.on(KernelEvents.EXECUTION_STALLED, (event: { kernelId: string, executionId: string, maxExecutionTime: number }) => {
+      if (event.kernelId === id) {
+        console.warn(`Handling stalled execution ${event.executionId} on kernel ${id} (running longer than ${event.maxExecutionTime}ms)`);
+        
+        // Emit an event for clients to handle
+        const instance = this.kernels.get(id);
+        if (instance) {
+          super.emit(KernelEvents.EXECUTE_ERROR, {
+            kernelId: id,
+            data: {
+              ename: "ExecutionStalledError",
+              evalue: `Execution stalled or potentially deadlocked (running > ${event.maxExecutionTime}ms)`,
+              traceback: ["Execution may be stuck in an infinite loop or deadlocked."]
+            }
+          });
+        }
+      }
+    });
+  }
+
+  /**
+   * Force terminate a potentially stuck kernel
+   * @param id Kernel ID
+   * @param reason Optional reason for termination
+   * @returns Promise resolving to true if the kernel was terminated
+   */
+  public async forceTerminateKernel(id: string, reason = "Force terminated due to stalled execution"): Promise<boolean> {
+    const instance = this.kernels.get(id);
+    
+    if (!instance) {
+      return false;
+    }
+    
+    try {
+      // Log the forced termination
+      console.warn(`Force terminating kernel ${id}: ${reason}`);
+      
+      // Emit an error event to notify clients
+      super.emit(KernelEvents.EXECUTE_ERROR, {
+        kernelId: id,
+        data: {
+          ename: "KernelForcedTermination",
+          evalue: reason,
+          traceback: ["Kernel was forcefully terminated by the system."]
         }
       });
       
-      // Setup timeout
-      const startTime = Date.now();
-      const timeout = 60000; // 60 second timeout
+      // Destroy the kernel
+      await this.destroyKernel(id);
+      return true;
+    } catch (error) {
+      console.error(`Error during forced termination of kernel ${id}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Get information about ongoing executions for a kernel
+   * @param id Kernel ID
+   * @returns Information about ongoing executions
+   */
+  public getExecutionInfo(id: string): { 
+    count: number; 
+    isStuck: boolean; 
+    executionIds: string[];
+    longestRunningTime?: number;
+  } {
+    const instance = this.kernels.get(id);
+    if (!instance) {
+      return { count: 0, isStuck: false, executionIds: [] };
+    }
+    
+    const executionIds = this.ongoingExecutions.get(id) 
+      ? Array.from(this.ongoingExecutions.get(id)!)
+      : [];
+    
+    const count = executionIds.length;
+    
+    // Calculate longest running time if we have activity timestamps
+    let longestRunningTime: number | undefined = undefined;
+    if (this.lastActivityTime.has(id)) {
+      longestRunningTime = Date.now() - this.lastActivityTime.get(id)!;
+    }
+    
+    // Consider stuck if running longer than maxExecutionTime
+    const isStuck = instance.options.maxExecutionTime !== undefined && 
+                   longestRunningTime !== undefined && 
+                   longestRunningTime > instance.options.maxExecutionTime;
+    
+    return {
+      count,
+      isStuck,
+      executionIds,
+      longestRunningTime
+    };
+  }
+
+  /**
+   * Execute Python code in a kernel
+   * Overrides the kernel's execute method to track executions
+   * @param kernelId ID of the kernel to use
+   * @param code Python code to execute
+   * @param parent Optional parent message header
+   * @returns Promise resolving to execution result
+   */
+  public async execute(
+    kernelId: string,
+    code: string,
+    parent: any = {}
+  ): Promise<{ success: boolean, result?: any, error?: Error }> {
+    const instance = this.getKernel(kernelId);
+    
+    if (!instance) {
+      throw new Error(`Kernel with ID ${kernelId} not found`);
+    }
+    
+    // Update kernel activity
+    this.updateKernelActivity(kernelId);
+    
+    // Track this execution
+    const executionId = this.trackExecution(kernelId);
+    
+    try {
+      // Execute the code
+      const result = await instance.kernel.execute(code, parent);
       
-      // Monitor the stream queue and yield results
-      while ((!executionComplete || streamQueue.length > 0) && 
-             (Date.now() - startTime < timeout)) {
-        // If there are items in the queue, yield them
-        if (streamQueue.length > 0) {
-          const event = streamQueue.shift();
-          yield event;
-          continue;
-        }
-        
-        // If no more events but execution is not complete, wait a little
-        if (!executionComplete) {
-          await new Promise(resolve => setTimeout(resolve, 10));
-        }
-      }
+      // Update activity after execution completes
+      this.updateKernelActivity(kernelId);
       
-      // Handle timeout
-      if (!executionComplete && Date.now() - startTime >= timeout) {
-        return {
-          success: false,
-          error: new Error("Execution timed out")
-        };
-      }
+      // Complete execution tracking
+      this.completeExecution(kernelId, executionId);
       
-      // Wait for the final result
-      const result = await executionPromise;
       return result;
     } catch (error) {
-      console.error(`[MANAGER] Error in executeStream:`, error);
+      // Update activity even if there's an error
+      this.updateKernelActivity(kernelId);
+      
+      // Complete execution tracking even on error
+      this.completeExecution(kernelId, executionId);
+      
       return {
         success: false,
         error: error instanceof Error ? error : new Error(String(error))

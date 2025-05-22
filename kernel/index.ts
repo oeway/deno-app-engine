@@ -15,22 +15,40 @@ import {
   allJSONUrl
 } from './_pypi.ts';
 
-// Interface for kernel events
+// Event types from JupyterLab
 export enum KernelEvents {
+  // IOPub Channel Messages
   STREAM = "stream",
   DISPLAY_DATA = "display_data",
   UPDATE_DISPLAY_DATA = "update_display_data",
   EXECUTE_RESULT = "execute_result",
   EXECUTE_ERROR = "execute_error",
+  EXECUTE_REQUEST = "execute_request",
+  
+  // Input request
   INPUT_REQUEST = "input_request",
+  
+  // Output control
   CLEAR_OUTPUT = "clear_output",
+  
+  // Comm messages
   COMM_OPEN = "comm_open",
   COMM_MSG = "comm_msg",
   COMM_CLOSE = "comm_close",
-  ALL = "*", // Add a wildcard event type
+  
+  // Internal Events
+  KERNEL_READY = "kernel_ready",
+  KERNEL_BUSY = "kernel_busy",
+  KERNEL_IDLE = "kernel_idle",
+  
+  // Special catchall for internal use
+  ALL = "*", // Wildcard event type
+  
+  // Execution monitoring events
+  EXECUTION_STALLED = "execution_stalled"
 }
 
-// Interface for filesystem mounting options
+// Interface for kernel events
 export interface IFilesystemMountOptions {
   enabled?: boolean;
   root?: string;
@@ -46,9 +64,10 @@ export interface IKernelOptions {
 export interface IKernel extends EventEmitter {
   initialize(options?: IKernelOptions): Promise<void>;
   execute(code: string, parent?: any): Promise<{ success: boolean, result?: any, error?: Error }>;
-  executeStream(code: string, parent?: any): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void>;
+  executeStream?(code: string, parent?: any): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void>;
   isInitialized(): boolean;
   inputReply(content: { value: string }): Promise<void>;
+  getStatus?(): "active" | "busy" | "unknown";
   status: "active" | "busy" | "unknown";
   
   // Optional methods
