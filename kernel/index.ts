@@ -915,3 +915,6 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
     }
   }
 }
+
+// Export TypeScript kernel for main thread use
+export { TypeScriptKernel } from "./tsKernel.ts";

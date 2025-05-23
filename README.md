@@ -1,6 +1,6 @@
 # Deno Code Interpreter
 
-A Deno-based code interpreter that provides Jupyter kernel-like functionality with Pyodide integration. This project enables running Python code in both main thread and worker contexts, with filesystem mounting capabilities and secure permission management.
+A Deno-based app engine that provides Jupyter kernel-like functionality with Pyodide integration. This project enables running Python code in both main thread and worker contexts, with filesystem mounting capabilities and secure permission management.
 
 ## Features
 
@@ -37,8 +37,8 @@ A Deno-based code interpreter that provides Jupyter kernel-like functionality wi
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/deno-code-interpreter.git
-cd deno-code-interpreter
+git clone https://github.com/yourusername/deno-app-engine.git
+cd deno-app-engine
 ```
 
 2. Generate Python wheels (first time only):
@@ -333,6 +333,6 @@ deno run --allow-net --allow-read --allow-write --allow-env hypha-service.ts
 ### Build docker image
 
 ```bash
-docker build --platform linux/amd64 -t oeway/deno-code-interpreter:0.1.0 . && docker push oeway/deno-code-interpreter:0.1.0
+docker build --platform linux/amd64 -t oeway/deno-app-engine:0.1.0 . && docker push oeway/deno-app-engine:0.1.0
 ```
 

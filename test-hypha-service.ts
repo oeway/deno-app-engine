@@ -85,7 +85,7 @@ async function runStressTest() {
     service = services.find((s: any) => 
       s.id === serviceId || 
       s.id.includes(serviceId) || 
-      s.id.includes('deno-code-interpreter') ||
+      s.id.includes('deno-app-engine') ||
       s.name === 'Deno Code Interpreter'
     );
     

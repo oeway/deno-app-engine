@@ -135,8 +135,8 @@ async function startHyphaService() {
   
   const svc = await server.registerService({
     "name": "Deno Code Interpreter",
-    "id": "deno-code-interpreter",
-    "type": "deno-code-interpreter",
+    "id": "deno-app-engine",
+    "type": "deno-app-engine",
     "config": {
       "visibility": "public",
       "require_context": true

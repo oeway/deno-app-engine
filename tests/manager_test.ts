@@ -2,7 +2,7 @@
 // This file tests creating and managing kernels in both main thread and worker modes
 
 import { assert, assertEquals, assertExists } from "https://deno.land/std/assert/mod.ts";
-import { KernelManager, KernelMode } from "../kernel/manager.ts";
+import { KernelManager, KernelMode, KernelLanguage } from "../kernel/manager.ts";
 import { KernelEvents } from "../kernel/index.ts";
 import { EventEmitter } from "node:events";
 import { join } from "https://deno.land/std/path/mod.ts";
@@ -1160,6 +1160,475 @@ while True:
     } finally {
       // Clean up
       await manager.destroyAll();
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// TypeScript Kernel Manager Tests
+
+// Test creating and using a TypeScript kernel in main thread mode
+Deno.test({
+  name: "11. Create and use a TypeScript kernel in main thread mode",
+  async fn() {
+    // Create a temporary directory with a test file
+    const tempDir = await createTempDir();
+    const testFileName = "typescript_test.txt";
+    const testContent = "Hello from TypeScript main thread test!";
+    await writeTestFile(tempDir, testFileName, testContent);
+    
+    try {
+      // Create a TypeScript kernel with filesystem mounting
+      const kernelId = await manager.createKernel({
+        id: "ts-main-test",
+        mode: KernelMode.MAIN_THREAD,
+        lang: KernelLanguage.TYPESCRIPT,
+        filesystem: {
+          enabled: true,
+          root: tempDir,
+          mountPoint: "/tmp/test"
+        }
+      });
+      
+      assertEquals(kernelId, "ts-main-test", "Kernel ID should match");
+      
+      // Get the kernel instance
+      const instance = manager.getKernel(kernelId);
+      assert(instance, "Kernel instance should exist");
+      assertEquals(instance?.mode, KernelMode.MAIN_THREAD, "Kernel mode should be MAIN_THREAD");
+      assertEquals(instance?.language, KernelLanguage.TYPESCRIPT, "Kernel language should be TYPESCRIPT");
+      
+      // Simple test to verify TypeScript execution works
+      const tsTest = await instance?.kernel.execute('console.log("Hello from TypeScript main thread"); 42');
+      assert(tsTest?.success, "Basic TypeScript execution should succeed");
+      
+      // Test that we can read files from the mounted directory
+      const readFile = await instance?.kernel.execute(`
+try {
+    const content = await Deno.readTextFile('/tmp/test/${testFileName}');
+    console.log(\`File content: \${content}\`);
+    const foundExpected = content === "${testContent}";
+    console.log(\`Content matches expected: \${foundExpected}\`);
+} catch (error) {
+    console.error(\`Error reading file: \${error}\`);
+}
+`);
+      
+      assert(readFile?.success, "File reading should succeed");
+      
+      // Wait a moment for the kernel to stabilize
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Clean up
+      await manager.destroyKernel(kernelId);
+    } finally {
+      // Clean up the temporary directory
+      await cleanupTempDir(tempDir);
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test creating and using a TypeScript kernel in worker mode
+Deno.test({
+  name: "12. Create and use a TypeScript kernel in worker mode",
+  async fn() {
+    // Create a temporary directory with a test file
+    const tempDir = await createTempDir();
+    const testFileName = "ts_worker_test.txt";
+    const testContent = "Hello from TypeScript worker kernel test!";
+    await writeTestFile(tempDir, testFileName, testContent);
+    
+    try {
+      // Create a TypeScript kernel with filesystem mounting
+      const kernelId = await manager.createKernel({
+        id: "ts-worker-test",
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.TYPESCRIPT,
+        filesystem: {
+          enabled: true,
+          root: tempDir,
+          mountPoint: "/tmp/test"
+        }
+      });
+      
+      assertEquals(kernelId, "ts-worker-test", "Kernel ID should match");
+      
+      // Get the kernel instance
+      const instance = manager.getKernel(kernelId);
+      assert(instance, "Kernel instance should exist");
+      assertEquals(instance?.mode, KernelMode.WORKER, "Kernel mode should be WORKER");
+      assertEquals(instance?.language, KernelLanguage.TYPESCRIPT, "Kernel language should be TYPESCRIPT");
+      assert(instance?.worker instanceof Worker, "Worker should be a Worker instance");
+      
+      // Wait for initialization to complete
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Set up direct event listener to capture ALL events
+      const capturedEvents: any[] = [];
+      
+      // Listen for all event types
+      const streamListener = (data: any) => {
+        const streamText = data.text;
+        console.log(`TS STREAM EVENT: ${JSON.stringify({
+          type: 'stream',
+          name: data.name || 'unknown',
+          text: streamText ? streamText.substring(0, 50) + (streamText.length > 50 ? '...' : '') : 'undefined'
+        })}`);
+        capturedEvents.push({ type: 'stream', data });
+      };
+      
+      const displayListener = (data: any) => {
+        console.log(`TS DISPLAY EVENT: ${JSON.stringify(data || 'undefined')}`);
+        capturedEvents.push({ type: 'display', data });
+      };
+      
+      const executeResultListener = (data: any) => {
+        console.log(`TS EXECUTE_RESULT EVENT: ${JSON.stringify(data || 'undefined')}`);
+        capturedEvents.push({ type: 'result', data });
+      };
+      
+      // Register event listeners
+      manager.onKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
+      manager.onKernelEvent(kernelId, KernelEvents.DISPLAY_DATA, displayListener);
+      manager.onKernelEvent(kernelId, KernelEvents.EXECUTE_RESULT, executeResultListener);
+      
+      console.log("Executing TypeScript code to read the mounted filesystem...");
+      
+      // Execute TypeScript code that reads from the mounted filesystem
+      const result = await instance?.kernel.execute(`
+// List files in the mounted directory
+const files = [];
+try {
+    for await (const entry of Deno.readDir('/tmp/test')) {
+        files.push(entry.name);
+    }
+    console.log(\`Files in mounted directory: \${JSON.stringify(files)}\`);
+    
+    // Read the test file content
+    if (files.includes('${testFileName}')) {
+        const content = await Deno.readTextFile('/tmp/test/${testFileName}');
+        console.log(\`File content: \${content}\`);
+        
+        if (content === "${testContent}") {
+            console.log("Content verified successfully");
+        } else {
+            console.log("Content doesn't match expected value");
+        }
+    } else {
+        console.log("File not found in directory listing");
+    }
+} catch (error) {
+    console.error(\`Error: \${error}\`);
+}
+`);
+      
+      // Wait for a short time to collect events
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Output captured events for debugging
+      console.log(`Captured ${capturedEvents.length} TypeScript events`);
+      for (const event of capturedEvents) {
+        if (event.type === 'stream') {
+          console.log(`TS Stream data: ${JSON.stringify(event.data)}`);
+        }
+      }
+      
+      // Check if we have verification in the captured events
+      let fileVerified = false;
+      
+      for (const event of capturedEvents) {
+        if (event.type === 'stream') {
+          const data = event.data;
+          const streamText = data.text;
+          
+          if (streamText && !streamText.startsWith("[TS_WORKER]")) {
+            console.log(`TS Stream text to check: ${streamText}`);
+            
+            if (streamText.includes("Content verified successfully") || 
+                streamText.includes(testContent)) {
+              console.log(`Found verification in: ${streamText}`);
+              fileVerified = true;
+              break;
+            }
+          }
+        }
+      }
+      
+      // Clean up event listeners
+      manager.offKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
+      manager.offKernelEvent(kernelId, KernelEvents.DISPLAY_DATA, displayListener);
+      manager.offKernelEvent(kernelId, KernelEvents.EXECUTE_RESULT, executeResultListener);
+      
+      assert(result?.success, "Execution should succeed");
+      assert(fileVerified, "File content should be verified in stream events");
+      
+      // Clean up
+      await manager.destroyKernel(kernelId);
+    } finally {
+      // Clean up the temporary directory
+      await cleanupTempDir(tempDir);
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test creating and using multiple TypeScript kernels with namespaces
+Deno.test({
+  name: "13. Create and use multiple TypeScript kernels with namespaces",
+  async fn() {
+    // Create a temporary directory with test files
+    const tempDir = await createTempDir();
+    const mainFileName = "ts_main_test.txt";
+    const workerFileName = "ts_worker_test.txt";
+    const mainContent = "Hello from TypeScript main thread kernel!";
+    const workerContent = "Hello from TypeScript worker kernel!";
+    
+    try {
+      // Create main thread TypeScript kernel with filesystem mounting and namespace
+      const mainKernelId = await manager.createKernel({
+        namespace: "test-ts-multi",
+        id: "ts-main-multi-test",
+        mode: KernelMode.MAIN_THREAD,
+        lang: KernelLanguage.TYPESCRIPT,
+        filesystem: {
+          enabled: true,
+          root: tempDir,
+          mountPoint: "/tmp/test"
+        }
+      });
+      
+      // Create worker TypeScript kernel with filesystem mounting and same namespace
+      const workerKernelId = await manager.createKernel({
+        namespace: "test-ts-multi",
+        id: "ts-worker-multi-test",
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.TYPESCRIPT,
+        filesystem: {
+          enabled: true,
+          root: tempDir,
+          mountPoint: "/tmp/test"
+        }
+      });
+      
+      // Get kernel instances
+      const mainInstance = manager.getKernel(mainKernelId);
+      const workerInstance = manager.getKernel(workerKernelId);
+      
+      // Verify both kernels were created with correct namespace and language
+      assert(mainInstance, "Main kernel instance should exist");
+      assert(workerInstance, "Worker kernel instance should exist");
+      assert(mainKernelId.startsWith("test-ts-multi:"), "Main kernel ID should have namespace prefix");
+      assert(workerKernelId.startsWith("test-ts-multi:"), "Worker kernel ID should have namespace prefix");
+      assertEquals(mainInstance?.language, KernelLanguage.TYPESCRIPT, "Main kernel should be TypeScript");
+      assertEquals(workerInstance?.language, KernelLanguage.TYPESCRIPT, "Worker kernel should be TypeScript");
+
+      // List kernels in the namespace
+      const namespaceKernels = manager.listKernels("test-ts-multi");
+      assertEquals(namespaceKernels.length, 2, "Should have 2 kernels in test-ts-multi namespace");
+      assert(namespaceKernels.every(k => k.namespace === "test-ts-multi"), "All kernels should have test-ts-multi namespace");
+      assert(namespaceKernels.every(k => k.language === "typescript"), "All kernels should be TypeScript");
+
+      // Wait for initialization to complete
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Write files from TypeScript in each kernel
+      console.log("Writing file from TypeScript main kernel...");
+      await mainInstance?.kernel.execute(`
+try {
+    await Deno.writeTextFile('/tmp/test/${mainFileName}', "${mainContent}");
+    
+    // Verify by reading back
+    const readContent = await Deno.readTextFile('/tmp/test/${mainFileName}');
+    if (readContent === "${mainContent}") {
+        console.log(\`Main TS kernel wrote to ${mainFileName} and verified content\`);
+    } else {
+        console.log("Content doesn't match");
+    }
+} catch (error) {
+    console.error(\`Error in main TS kernel file writing: \${error}\`);
+}
+`);
+      
+      console.log("Writing file from TypeScript worker kernel...");
+      await workerInstance?.kernel.execute(`
+try {
+    await Deno.writeTextFile('/tmp/test/${workerFileName}', "${workerContent}");
+    
+    // Verify by reading back
+    const readContent = await Deno.readTextFile('/tmp/test/${workerFileName}');
+    if (readContent === "${workerContent}") {
+        console.log(\`Worker TS kernel wrote to ${workerFileName} and verified content\`);
+    } else {
+        console.log("Content doesn't match");
+    }
+} catch (error) {
+    console.error(\`Error in worker TS kernel file writing: \${error}\`);
+}
+`);
+      
+      // Let's verify files exist on Deno side
+      try {
+        const mainFileContent = await Deno.readTextFile(join(tempDir, mainFileName));
+        console.log(`Main TS file content from Deno: ${mainFileContent}`);
+        assertEquals(mainFileContent, mainContent, "Main file content should match");
+      } catch (error) {
+        console.error("Error reading main TS file:", error);
+      }
+      
+      try {
+        const workerFileContent = await Deno.readTextFile(join(tempDir, workerFileName));
+        console.log(`Worker TS file content from Deno: ${workerFileContent}`);
+        assertEquals(workerFileContent, workerContent, "Worker file content should match");
+      } catch (error) {
+        console.error("Error reading worker TS file:", error);
+      }
+      
+      // Now read each other's files
+      console.log("Main TS kernel reading worker's file...");
+      const mainReadResult = await mainInstance?.kernel.execute(`
+try {
+    // Read the file from worker kernel
+    const content = await Deno.readTextFile('/tmp/test/${workerFileName}');
+    if (content === "${workerContent}") {
+        console.log(\`Main TS kernel successfully read file written by worker: \${content}\`);
+    } else {
+        console.log("Content doesn't match expected value");
+    }
+} catch (error) {
+    console.error(\`Error reading worker's file from main TS kernel: \${error}\`);
+}
+`);
+      
+      console.log("Worker TS kernel reading main's file...");
+      const workerReadResult = await workerInstance?.kernel.execute(`
+try {
+    // Read the file from main thread kernel
+    const content = await Deno.readTextFile('/tmp/test/${mainFileName}');
+    if (content === "${mainContent}") {
+        console.log(\`Worker TS kernel successfully read file written by main: \${content}\`);
+    } else {
+        console.log("Content doesn't match expected value");
+    }
+} catch (error) {
+    console.error(\`Error reading main's file from worker TS kernel: \${error}\`);
+}
+`);
+      
+      // Verify cross-reading succeeded via execution results
+      assert(mainReadResult?.success, "Main TS kernel should read worker's file successfully");
+      assert(workerReadResult?.success, "Worker TS kernel should read main's file successfully");
+      
+      // List all kernel IDs
+      const kernelIds = manager.getKernelIds();
+      assert(kernelIds.includes(mainKernelId), "Main TS kernel ID should be listed");
+      assert(kernelIds.includes(workerKernelId), "Worker TS kernel ID should be listed");
+      
+      // Destroy kernels by namespace
+      await manager.destroyAll("test-ts-multi");
+      
+      // Verify kernels were destroyed
+      assert(!manager.getKernel(mainKernelId), "Main TS kernel should be destroyed");
+      assert(!manager.getKernel(workerKernelId), "Worker TS kernel should be destroyed");
+      assertEquals(manager.listKernels("test-ts-multi").length, 0, "Should have no kernels in test-ts-multi namespace");
+    } finally {
+      // Clean up the temporary directory
+      await cleanupTempDir(tempDir);
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test TypeScript kernel with Deno.jupyter functionality
+Deno.test({
+  name: "14. Test TypeScript kernel with Deno.jupyter functionality",
+  async fn() {
+    try {
+      // Create a TypeScript kernel
+      const kernelId = await manager.createKernel({
+        id: "ts-jupyter-test",
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.TYPESCRIPT
+      });
+      
+      // Get the kernel instance
+      const instance = manager.getKernel(kernelId);
+      assert(instance, "Kernel instance should exist");
+      assertEquals(instance?.language, KernelLanguage.TYPESCRIPT, "Kernel should be TypeScript");
+      
+      // Wait for initialization
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Set up event listener for display data
+      const displayEvents: any[] = [];
+      const displayListener = (data: any) => {
+        displayEvents.push(data);
+      };
+      manager.onKernelEvent(kernelId, KernelEvents.DISPLAY_DATA, displayListener);
+      
+      // Test Deno.jupyter.display functionality
+      const displayResult = await instance?.kernel.execute(`
+await Deno.jupyter.display({
+  "text/plain": "TypeScript display test",
+  "text/html": "<h1>TypeScript HTML Display</h1>",
+  "application/json": { message: "TypeScript JSON", value: 123 }
+}, { raw: true });
+`);
+      
+      // Wait for events to be processed
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      assert(displayResult?.success, "Display execution should succeed");
+      assert(displayEvents.length > 0, "Should have received display events");
+      
+      const displayData = displayEvents[0];
+      assert(displayData.data["text/plain"], "Should contain plain text");
+      assert(displayData.data["text/html"], "Should contain HTML");
+      assert(displayData.data["application/json"], "Should contain JSON");
+      
+      assertEquals(displayData.data["text/plain"], "TypeScript display test");
+      assertEquals(displayData.data["text/html"], "<h1>TypeScript HTML Display</h1>");
+      assertEquals(displayData.data["application/json"].message, "TypeScript JSON");
+      assertEquals(displayData.data["application/json"].value, 123);
+      
+      // Test Deno.jupyter.html functionality
+      const htmlEvents: any[] = [];
+      const htmlListener = (data: any) => {
+        htmlEvents.push(data);
+      };
+      manager.onKernelEvent(kernelId, KernelEvents.DISPLAY_DATA, htmlListener);
+      
+      const htmlResult = await instance?.kernel.execute(`
+const htmlObj = Deno.jupyter.html\`<p>TypeScript HTML template test</p>\`;
+htmlObj
+`);
+      
+      // Wait for events
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      assert(htmlResult?.success, "HTML execution should succeed");
+      assert(htmlEvents.length > 0, "Should have received HTML display events");
+      
+      const htmlData = htmlEvents[htmlEvents.length - 1];
+      assert(htmlData.data["text/html"], "Should contain HTML MIME type");
+      assert(
+        htmlData.data["text/html"].includes("<p>TypeScript HTML template test</p>"),
+        "HTML content should match expected output"
+      );
+      
+      // Clean up event listeners
+      manager.offKernelEvent(kernelId, KernelEvents.DISPLAY_DATA, displayListener);
+      manager.offKernelEvent(kernelId, KernelEvents.DISPLAY_DATA, htmlListener);
+      
+      // Clean up
+      await manager.destroyKernel(kernelId);
+    } catch (error) {
+      console.error("Error in TypeScript Jupyter test:", error);
+      throw error;
     }
   },
   sanitizeResources: false,

@@ -1,7 +1,7 @@
 {
-  "name": "deno-code-interpreter",
+  "name": "deno-app-engine",
   "version": "0.1.0",
-  "description": "A Deno-based code interpreter with Pyodide",
+  "description": "A Deno-based app engine with Pyodide",
   "pypi-packages": {
     "packages": {
       "py/pyodide-kernel": "0.5.2",

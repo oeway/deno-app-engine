@@ -5,12 +5,18 @@ import * as Comlink from "comlink";
 // @ts-ignore Importing from npm
 import { EventEmitter } from 'node:events';
 // import EventEmitter from "https://deno.land/x/events@v1.0.0/mod.ts";
-import { Kernel, KernelEvents, IKernel, IKernelOptions, IFilesystemMountOptions } from "./index.ts";
+import { Kernel, KernelEvents, IKernel, IKernelOptions, IFilesystemMountOptions, TypeScriptKernel } from "./index.ts";
 
 // Execution mode enum
 export enum KernelMode {
   MAIN_THREAD = "main_thread",
   WORKER = "worker"
+}
+
+// Kernel language enum
+export enum KernelLanguage {
+  PYTHON = "python",
+  TYPESCRIPT = "typescript"
 }
 
 // Extended WorkerOptions interface to include Deno permissions
@@ -27,6 +33,7 @@ export interface IKernelInstance {
   id: string;
   kernel: IKernel;
   mode: KernelMode;
+  language: KernelLanguage;
   worker?: Worker;
   created: Date;
   options: IManagerKernelOptions;
@@ -48,6 +55,7 @@ export interface IDenoPermissions {
 export interface IManagerKernelOptions {
   id?: string;
   mode?: KernelMode;
+  lang?: KernelLanguage;
   namespace?: string;
   deno?: {
     permissions?: IDenoPermissions;
@@ -91,6 +99,7 @@ export class KernelManager extends EventEmitter {
    * @param options Options for creating the kernel
    * @param options.id Optional custom ID for the kernel
    * @param options.mode Optional kernel mode (main_thread or worker)
+   * @param options.lang Optional kernel language (python or typescript)
    * @param options.namespace Optional namespace prefix for the kernel ID
    * @param options.deno.permissions Optional Deno permissions for worker mode
    * @param options.filesystem Optional filesystem mounting options
@@ -105,6 +114,7 @@ export class KernelManager extends EventEmitter {
     }
     const baseId = options.id || crypto.randomUUID();
     const mode = options.mode || KernelMode.WORKER;
+    const language = options.lang || KernelLanguage.PYTHON;
     
     // Apply namespace prefix if provided
     const id = options.namespace ? `${options.namespace}:${baseId}` : baseId;
@@ -117,8 +127,9 @@ export class KernelManager extends EventEmitter {
     // Store options temporarily to be used in createWorkerKernel
     const tempInstance = {
       id,
-      options,
-      mode
+      options: { ...options, lang: language },
+      mode,
+      language
     };
     this.kernels.set(id, tempInstance as unknown as IKernelInstance);
     
@@ -163,15 +174,24 @@ export class KernelManager extends EventEmitter {
    * @returns Kernel instance
    */
   private async createMainThreadKernel(id: string): Promise<IKernelInstance> {
-    const kernel = new Kernel();
     // Get options from the temporary instance
     const options = this.kernels.get(id)?.options || {};
+    const language = options.lang || KernelLanguage.PYTHON;
+    
+    // Create the appropriate kernel based on language
+    let kernel: IKernel;
+    if (language === KernelLanguage.TYPESCRIPT) {
+      kernel = new TypeScriptKernel();
+    } else {
+      kernel = new Kernel();
+    }
     
     // Create the kernel instance
     const instance: IKernelInstance = {
       id,
       kernel,
       mode: KernelMode.MAIN_THREAD,
+      language,
       created: new Date(),
       options,
       destroy: async () => {
@@ -202,6 +222,7 @@ export class KernelManager extends EventEmitter {
   private async createWorkerKernel(id: string): Promise<IKernelInstance> {
     // Get permissions from options when creating the kernel
     const options = this.kernels.get(id)?.options || {};
+    const language = options.lang || KernelLanguage.PYTHON;
     
     // Create a new worker with optional permissions
     const workerOptions: WorkerOptions = {
@@ -216,9 +237,14 @@ export class KernelManager extends EventEmitter {
       };
     }
     
+    // Select the worker file based on the language
+    const workerFile = language === KernelLanguage.TYPESCRIPT ? 
+      "./tsWorker.ts" : 
+      "./worker.ts";
+    
     // Create worker with permissions
     const worker = new Worker(
-      new URL("./worker.ts", import.meta.url).href,
+      new URL(workerFile, import.meta.url).href,
       workerOptions
     );
     
@@ -269,7 +295,8 @@ export class KernelManager extends EventEmitter {
     worker.postMessage({
       type: "INITIALIZE_KERNEL",
       options: {
-        filesystem: options.filesystem
+        filesystem: options.filesystem,
+        lang: language
       }
     });
     
@@ -307,6 +334,7 @@ export class KernelManager extends EventEmitter {
         }
       } as unknown as IKernel,
       mode: KernelMode.WORKER,
+      language,
       worker,
       created: new Date(),
       options, // Store the options for reference
@@ -370,6 +398,7 @@ export class KernelManager extends EventEmitter {
   public listKernels(namespace?: string): Array<{
     id: string;
     mode: KernelMode;
+    language: KernelLanguage;
     status: "active" | "busy" | "unknown";
     created: Date;
     namespace?: string;
@@ -402,6 +431,7 @@ export class KernelManager extends EventEmitter {
         return {
           id,
           mode: instance.mode,
+          language: instance.language,
           status,
           created: instance.created || new Date(),
           namespace: extractedNamespace,
@@ -737,7 +767,7 @@ export class KernelManager extends EventEmitter {
             if (event.kernelId === kernelId) {
               console.log(`[MANAGER] Received error event for kernel ${kernelId}:`, event.data);
               streamQueue.push({
-                type: 'execute_error',
+                type: 'error',
                 data: event.data
               });
               

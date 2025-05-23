@@ -1,5 +1,5 @@
 {
-  "name": "deno-code-interpreter",
+  "name": "deno-app-engine",
   "version": "0.1.0",
   "exports": {
     ".": "./mod.ts"
@@ -14,7 +14,7 @@
     "example": "deno run -A examples/main.ts",
     "generate-wheels": "cd kernel && python3 generate-wheels-js.py",
     "build": "deno task generate-wheels && deno task test",
-    "compile": "deno compile -A --output dist/deno-code-interpreter mod.ts"
+    "compile": "deno compile -A --output dist/deno-app-engine mod.ts"
   },
   "assets": [
     "kernel/pypi/**/*"

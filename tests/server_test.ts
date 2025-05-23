@@ -305,6 +305,168 @@ Deno.test({
   sanitizeOps: false,
 });
 
+// TypeScript Kernel Tests
+let tsKernelId: string;
+
+// Test: Create TypeScript kernel
+Deno.test({
+  name: "POST /kernels - should create new TypeScript kernel",
+  async fn() {
+    const result = await makeRequest("/kernels", "POST", { lang: "typescript" });
+    assertExists(result.id);
+    tsKernelId = result.id;
+    assertEquals(result.language, "typescript");
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test: Execute TypeScript code
+Deno.test({
+  name: "POST /kernels/:id/execute - should execute TypeScript code",
+  async fn() {
+    const code = 'console.log("Hello from TypeScript!"); const result = 5 + 3; result';
+    const result = await makeRequest(`/kernels/${tsKernelId}/execute`, "POST", { code });
+    
+    // Check for stdout output
+    const stdoutEvent = result.find((event: any) => 
+      event.type === "stream" && 
+      event.data.name === "stdout" &&
+      event.data.text.includes("Hello from TypeScript!")
+    );
+    assertExists(stdoutEvent);
+    
+    // Check for execution result
+    const executeResult = result.find((event: any) => 
+      event.type === "execute_result" &&
+      event.data.data["text/plain"] === "8"
+    );
+    assertExists(executeResult);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test: Execute TypeScript code with error
+Deno.test({
+  name: "POST /kernels/:id/execute - should handle TypeScript errors",
+  async fn() {
+    const code = 'throw new Error("TypeScript test error");';
+    const result = await makeRequest(`/kernels/${tsKernelId}/execute`, "POST", { code });
+    
+    // Check for error event
+    const errorEvent = result.find((event: any) => 
+      event.type === "error" && 
+      event.data.ename === "Error" &&
+      event.data.evalue === "TypeScript test error"
+    );
+    assertExists(errorEvent);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test: Stream TypeScript execution
+Deno.test({
+  name: "POST /kernels/:id/execute/stream - should stream TypeScript execution results",
+  async fn() {
+    const code = `console.log("Start TS");
+await new Promise(resolve => setTimeout(resolve, 100));
+console.log("Middle TS");
+await new Promise(resolve => setTimeout(resolve, 100));
+console.log("End TS");`;
+    
+    const response = await fetch(`http://localhost:8001/api/kernels/${tsKernelId}/execute/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    
+    assertEquals(response.headers.get("Content-Type"), "text/event-stream");
+    
+    const events = await readSSEStream(response);
+    
+    // Verify we got all three print outputs (filter out TS_WORKER messages)
+    const outputs = events
+      .filter((event: any) => event.type === "stream")
+      .map((event: any) => event.data.text.trim())
+      .filter(text => text.length > 0 && !text.startsWith("[TS_WORKER]"));
+    
+    assertEquals(outputs, ["Start TS", "Middle TS", "End TS"]);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test: TypeScript Deno.jupyter display functionality
+Deno.test({
+  name: "POST /kernels/:id/execute - should handle Deno.jupyter display",
+  async fn() {
+    const code = `await Deno.jupyter.display({
+  "text/plain": "Plain text from API test",
+  "text/html": "<strong>HTML from API test</strong>"
+}, { raw: true });`;
+    
+    const result = await makeRequest(`/kernels/${tsKernelId}/execute`, "POST", { code });
+    
+    // Check for display data event
+    const displayEvent = result.find((event: any) => 
+      event.type === "display_data" &&
+      event.data.data["text/plain"] === "Plain text from API test" &&
+      event.data.data["text/html"] === "<strong>HTML from API test</strong>"
+    );
+    assertExists(displayEvent);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test: Submit async TypeScript execution
+Deno.test({
+  name: "POST /kernels/:id/execute/submit - should submit async TypeScript execution",
+  async fn() {
+    const code = `
+await new Promise(resolve => setTimeout(resolve, 500));
+console.log("Async TypeScript execution complete!");
+const result = 42 * 2;
+result  // This will be in execute_result
+`;
+    const submitResult = await makeRequest(`/kernels/${tsKernelId}/execute/submit`, "POST", { code });
+    assertExists(submitResult.session_id);
+    const sessionId = submitResult.session_id;
+
+    // Get results - this should block until execution is complete
+    const execResult = await makeRequest(`/kernels/${tsKernelId}/execute/result/${sessionId}`);
+    
+    // Verify stdout and result
+    const stdoutEvent = execResult.find((event: any) => 
+      event.type === "stream" && 
+      event.data.name === "stdout" &&
+      event.data.text.includes("Async TypeScript execution complete!")
+    );
+    assertExists(stdoutEvent);
+
+    const resultEvent = execResult.find((event: any) =>
+      event.type === "execute_result" &&
+      event.data.data["text/plain"] === "84"
+    );
+    assertExists(resultEvent);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Clean up TypeScript kernel
+Deno.test({
+  name: "DELETE /kernels/:id - should delete TypeScript kernel",
+  async fn() {
+    const response = await fetch(`http://localhost:8001/api/kernels/${tsKernelId}`, { method: "DELETE" });
+    assertEquals(response.status, 200);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
 // Cleanup
 Deno.test({
   name: "cleanup",

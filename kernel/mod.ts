@@ -8,6 +8,7 @@ export { Kernel, KernelEvents, type IEventData, type IKernelOptions } from "./in
 export { 
   KernelManager, 
   KernelMode,
+  KernelLanguage,
   type IKernelInstance
 } from "./manager.ts";
 

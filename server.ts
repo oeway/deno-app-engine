@@ -59,6 +59,11 @@ async function createExecutionSession(kernelId: string, code: string): Promise<E
   
   sessions.set(sessionId, session);
   
+  // Initialize history for this kernel if it doesn't exist
+  if (!kernelHistory.has(kernelId)) {
+    kernelHistory.set(kernelId, []);
+  }
+  
   // Start execution in background
   (async () => {
     try {
@@ -78,6 +83,7 @@ async function createExecutionSession(kernelId: string, code: string): Promise<E
         outputs: session.outputs,
       });
       kernelHistory.set(kernelId, history);
+      console.log(`Updated history for kernel ${kernelId}. History now has ${history.length} entries.`);
     } catch (error) {
       const errorOutput = {
         type: "error",
@@ -88,6 +94,15 @@ async function createExecutionSession(kernelId: string, code: string): Promise<E
       // Notify all listeners of the error
       session.listeners?.forEach(listener => listener(errorOutput));
       rejectPromise(error instanceof Error ? error : new Error(String(error)));
+      
+      // Still add to history, but with error
+      const history = kernelHistory.get(kernelId) || [];
+      history.push({
+        id: sessionId,
+        script: code,
+        outputs: session.outputs,
+      });
+      kernelHistory.set(kernelId, history);
     }
   })();
   
@@ -166,6 +181,7 @@ export async function handleRequest(req: Request): Promise<Response> {
           const kernelId = await kernelManager.createKernel({
             id: body.id || crypto.randomUUID(),
             mode: body.mode || KernelMode.WORKER,
+            lang: body.lang,
           });
           console.log("Kernel created with ID:", kernelId, "and mode:", body.mode || KernelMode.WORKER);
           
@@ -190,6 +206,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             return jsonResponse({
               id: kernelId,
               mode: kernel.mode,
+              language: kernel.language || "python",
               status: kernel.kernel.status || "unknown",
               created: kernel.created,
               name: `Kernel-${kernelId.slice(0, 8)}`
@@ -227,7 +244,7 @@ export async function handleRequest(req: Request): Promise<Response> {
         kernelHistory.delete(kernelId);
         
         await kernelManager.destroyKernel(kernelId);
-        return new Response(null, { status: Status.NoContent });
+        return new Response(null, { status: 200 });
       }
 
       // Get kernel info
@@ -239,13 +256,22 @@ export async function handleRequest(req: Request): Promise<Response> {
           return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
         }
         
+        // Get or create history for this kernel
+        const history = kernelHistory.get(kernelId) || [];
+        
+        // Ensure the kernelHistory Map has an entry for this kernel
+        if (!kernelHistory.has(kernelId)) {
+          kernelHistory.set(kernelId, []);
+        }
+        
         return jsonResponse({
           id: kernelId,
           name: `Kernel-${kernelId.slice(0, 8)}`,
           mode: kernel.mode,
+          language: kernel.language || "python",
           created: kernel.created,
           status: kernel.kernel.status || "unknown",
-          history: kernelHistory.get(kernelId) || [],
+          history: history,
         });
       }
 
@@ -401,7 +427,7 @@ export async function handleRequest(req: Request): Promise<Response> {
         }
       }
 
-      // Execute code (non-streaming)
+      // Execute code (streaming)
       if (path.match(/^\/api\/kernels\/[\w-]+\/execute$/) && req.method === "POST") {
         const kernelId = path.split("/")[3];
         const { code } = await req.json();
@@ -419,23 +445,23 @@ export async function handleRequest(req: Request): Promise<Response> {
           // Create a session
           const session = await createExecutionSession(kernelId, code);
 
-          // Set up streaming response
+          // Set up readable stream
           const stream = new ReadableStream({
             async start(controller) {
               try {
-                // Create a function to send an event
-                const sendOutput = (data: any) => {
-                  controller.enqueue(new TextEncoder().encode(JSON.stringify(data) + "\n"));
+                // Create a function to send JSON data
+                const sendData = (data: any) => {
+                  controller.enqueue(new TextEncoder().encode(`${JSON.stringify(data)}\n`));
                 };
 
                 // Send any existing outputs first
                 for (const output of session.outputs) {
-                  sendOutput(output);
+                  sendData(output);
                 }
 
                 // Set up event listener for new outputs
                 const outputListener = (output: any) => {
-                  sendOutput(output);
+                  sendData(output);
                 };
 
                 // Add listener to session
@@ -447,24 +473,24 @@ export async function handleRequest(req: Request): Promise<Response> {
                   await session.promise;
                   controller.close();
                 } catch (error) {
-                  sendOutput({
+                  sendData({
                     type: "error",
-                    data: { message: error instanceof Error ? error.message : String(error) }
+                    data: { message: error instanceof Error ? error.message : String(error) },
                   });
                   controller.close();
-                }
-
-                // Clean up listener
-                const listenerIndex = session.listeners.indexOf(outputListener);
-                if (listenerIndex !== -1) {
-                  session.listeners.splice(listenerIndex, 1);
+                } finally {
+                  // Clean up listener
+                  const listenerIndex = session.listeners.indexOf(outputListener);
+                  if (listenerIndex !== -1) {
+                    session.listeners.splice(listenerIndex, 1);
+                  }
                 }
               } catch (error: unknown) {
-                const errorOutput = {
+                const errorData = JSON.stringify({
                   type: "error",
-                  data: { message: error instanceof Error ? error.message : String(error) }
-                };
-                controller.enqueue(new TextEncoder().encode(JSON.stringify(errorOutput) + "\n"));
+                  data: { message: error instanceof Error ? error.message : String(error) },
+                }) + '\n';
+                controller.enqueue(new TextEncoder().encode(errorData));
                 controller.close();
               }
             },
@@ -510,13 +536,42 @@ export async function handleRequest(req: Request): Promise<Response> {
           const stream = new ReadableStream({
             async start(controller) {
               try {
-                // Wait for results and stream them
-                const results = await session.promise;
-                for (const output of results) {
-                  const event = `data: ${JSON.stringify(output)}\n\n`;
-                  controller.enqueue(new TextEncoder().encode(event));
+                // Create a function to send an event
+                const sendEvent = (data: any) => {
+                  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`));
+                };
+
+                // Send any existing outputs first
+                for (const output of session.outputs) {
+                  sendEvent(output);
                 }
-                controller.close();
+
+                // Set up event listener for new outputs
+                const outputListener = (output: any) => {
+                  sendEvent(output);
+                };
+
+                // Add listener to session
+                session.listeners = session.listeners || [];
+                session.listeners.push(outputListener);
+
+                // Wait for completion or error
+                try {
+                  await session.promise;
+                  controller.close();
+                } catch (error) {
+                  sendEvent({
+                    type: "error",
+                    data: { message: error instanceof Error ? error.message : String(error) },
+                  });
+                  controller.close();
+                } finally {
+                  // Clean up listener
+                  const listenerIndex = session.listeners.indexOf(outputListener);
+                  if (listenerIndex !== -1) {
+                    session.listeners.splice(listenerIndex, 1);
+                  }
+                }
               } catch (error: unknown) {
                 const errorEvent = `data: ${JSON.stringify({
                   type: "error",

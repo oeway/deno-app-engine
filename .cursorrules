@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project aims to create a Deno-based code interpreter that mimics the behavior of a Jupyter kernel. It consists of:
+This project aims to create a Deno-based app engine that mimics the behavior of a Jupyter kernel. It consists of:
 
 1. A kernel manager running in Deno
 2. Direct integration with Pyodide (no WebWorkers)
