@@ -156,7 +156,6 @@ async function createExecutionSession(kernelId: string, code: string): Promise<E
         outputs: session.outputs,
       });
       kernelHistory.set(kernelId, history);
-      console.log(`Updated history for kernel ${kernelId}. History now has ${history.length} entries.`);
     } catch (error) {
       const errorOutput = {
         type: "error",
@@ -249,21 +248,17 @@ export async function handleRequest(req: Request): Promise<Response> {
       if (path === "/api/kernels" && req.method === "POST") {
         try {
           const body = await req.json();
-          console.log("Creating kernel with options:", body);
           
           const kernelId = await kernelManager.createKernel({
             id: body.id || crypto.randomUUID(),
             mode: body.mode || KernelMode.WORKER,
             lang: body.lang,
           });
-          console.log("Kernel created with ID:", kernelId, "and mode:", body.mode || KernelMode.WORKER);
           
           const kernel = kernelManager.getKernel(kernelId);
           if (!kernel) {
             throw new Error("Failed to get kernel after creation");
           }
-          
-          console.log("Kernel created and initialized successfully");
           
           // Initialize history for this kernel
           kernelHistory.set(kernelId, []);
@@ -346,18 +341,8 @@ export async function handleRequest(req: Request): Promise<Response> {
             return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
           }
 
-          console.log("Creating execution session...");
           const session = await createExecutionSession(kernelId, code);
-          console.log("Session created:", session);
-          const response = jsonResponse({ session_id: session.id });
-          console.log("Response content type:", response.headers.get("Content-Type"));
-          console.log("Response body:", await response.clone().json());
-          const headers: Record<string, string> = {};
-          response.headers.forEach((value, key) => {
-            headers[key] = value;
-          });
-          console.log("Response headers:", headers);
-          return response;
+          return jsonResponse({ session_id: session.id });
         } catch (error) {
           console.error("Error in execute/submit:", error);
           return jsonResponse(
@@ -383,9 +368,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             return jsonResponse({ error: "Session not found" }, Status.NotFound);
           }
 
-          console.log("Getting result for session:", sessionId);
           const result = await session.promise;
-          console.log("Result:", result);
           return jsonResponse(result);
         } catch (error) {
           console.error("Error in execute/result:", error);
@@ -498,22 +481,12 @@ export async function handleRequest(req: Request): Promise<Response> {
             return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
           }
 
-          console.log(`Starting execution stream for kernel ${kernelId}`);
-          console.log(`Kernel manager instance:`, typeof kernelManager);
-          console.log(`Kernel instance:`, kernel ? 'found' : 'not found');
-          console.log(`Kernel mode:`, kernel?.mode);
-          console.log(`Kernel language:`, kernel?.language);
-          console.log(`Kernel has worker:`, !!kernel?.worker);
-
           // Set up readable stream that directly uses kernelManager.executeStream
           const stream = new ReadableStream({
             async start(controller) {
-              console.log(`Stream controller started for kernel ${kernelId}`);
-              
               try {
                 const sendData = (data: any) => {
                   const jsonLine = JSON.stringify(data) + '\n';
-                  console.log(`Sending data for kernel ${kernelId}:`, jsonLine.trim());
                   controller.enqueue(new TextEncoder().encode(jsonLine));
                 };
 
@@ -522,21 +495,15 @@ export async function handleRequest(req: Request): Promise<Response> {
 
                 let outputCount = 0;
                 
-                console.log(`About to call kernelManager.executeStream for kernel ${kernelId} with code:`, code);
-                
                 // Use the kernel manager's executeStream method
                 for await (const output of kernelManager.executeStream(kernelId, code)) {
                   outputCount++;
-                  console.log(`Received output ${outputCount} for kernel ${kernelId}:`, JSON.stringify(output));
                   sendData(output);
                 }
-                
-                console.log(`ExecuteStream completed for kernel ${kernelId}, total outputs: ${outputCount}`);
                 
                 // Send completion marker
                 sendData({ type: "stream_complete", data: { message: "Execution completed", outputCount } });
                 
-                console.log(`Closing stream for kernel ${kernelId}`);
                 controller.close();
                 
               } catch (error) {

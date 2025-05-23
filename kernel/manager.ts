@@ -109,10 +109,12 @@ export class KernelManager extends EventEmitter {
   // Track execution timeouts for detecting stuck/dead kernels
   private executionTimeouts: Map<string, Map<string, number>> = new Map();
   
-  // Pool management
-  private pool: Map<string, IKernelInstance[]> = new Map();
+  // Pool management - now using promises for immediate response
+  private pool: Map<string, Promise<IKernelInstance>[]> = new Map();
   private poolConfig: IKernelPoolConfig;
   private isPreloading: boolean = false;
+  // Track which pool keys are currently being prefilled to prevent duplicates
+  private prefillingInProgress: Map<string, boolean> = new Map();
   
   // Allowed kernel types configuration
   private allowedKernelTypes: Array<{
@@ -175,51 +177,47 @@ export class KernelManager extends EventEmitter {
   }
   
   /**
-   * Get a kernel from the pool if available
+   * Get a kernel promise from the pool if available
    * @param mode Kernel mode
    * @param language Kernel language
-   * @returns Kernel instance or null if none available
+   * @returns Kernel promise or null if none available
    * @private
    */
-  private getFromPool(mode: KernelMode, language: KernelLanguage): IKernelInstance | null {
+  private getFromPool(mode: KernelMode, language: KernelLanguage): Promise<IKernelInstance> | null {
     if (!this.poolConfig.enabled) {
       return null;
     }
     
     const poolKey = this.getPoolKey(mode, language);
-    const poolKernels = this.pool.get(poolKey);
+    const poolPromises = this.pool.get(poolKey);
     
-    if (!poolKernels || poolKernels.length === 0) {
+    if (!poolPromises || poolPromises.length === 0) {
       return null;
     }
     
-    // Remove and return the first kernel from the pool
-    const kernel = poolKernels.shift()!;
+    // Remove and return the first promise from the pool (FIFO)
+    const kernelPromise = poolPromises.shift()!;
     
-    // Mark as taken from pool
-    kernel.isFromPool = true;
-    
-    // Trigger background refill if auto-refill is enabled and we still have kernels
-    // but are below the target size (don't refill when pool is completely empty)
-    if (this.poolConfig.autoRefill && poolKernels.length > 0 && poolKernels.length < this.poolConfig.poolSize) {
+    // Immediately trigger background refill to add one promise back
+    if (this.poolConfig.autoRefill) {
       setTimeout(() => {
-        this.refillPool(mode, language).catch(error => {
-          console.error(`Error refilling pool for ${poolKey}:`, error);
+        this.refillPoolSingle(mode, language).catch(error => {
+          console.error(`Error refilling single kernel for ${poolKey}:`, error);
         });
       }, 0);
     }
     
-    return kernel;
+    return kernelPromise;
   }
   
   /**
-   * Add a kernel to the pool
+   * Add a kernel promise to the pool
    * @param mode Kernel mode
    * @param language Kernel language
-   * @param kernel Kernel instance
+   * @param kernelPromise Kernel promise
    * @private
    */
-  private addToPool(mode: KernelMode, language: KernelLanguage, kernel: IKernelInstance): void {
+  private addToPool(mode: KernelMode, language: KernelLanguage, kernelPromise: Promise<IKernelInstance>): void {
     if (!this.poolConfig.enabled) {
       return;
     }
@@ -230,21 +228,57 @@ export class KernelManager extends EventEmitter {
       this.pool.set(poolKey, []);
     }
     
-    const poolKernels = this.pool.get(poolKey)!;
+    const poolPromises = this.pool.get(poolKey)!;
     
     // Only add if we haven't reached the pool size limit
-    if (poolKernels.length < this.poolConfig.poolSize) {
-      poolKernels.push(kernel);
+    if (poolPromises.length < this.poolConfig.poolSize) {
+      poolPromises.push(kernelPromise);
+      
+      // Handle promise rejection to prevent unhandled rejections
+      kernelPromise.catch(error => {
+        console.error(`Pool kernel promise rejected for ${poolKey}:`, error);
+        // Remove the failed promise from the pool
+        const index = poolPromises.indexOf(kernelPromise);
+        if (index !== -1) {
+          poolPromises.splice(index, 1);
+        }
+      });
     } else {
-      // Pool is full, destroy the excess kernel
-      kernel.destroy().catch(error => {
-        console.error("Error destroying excess pool kernel:", error);
+      // Pool is full, let the excess promise resolve and then destroy the kernel
+      kernelPromise.then(kernel => {
+        kernel.destroy().catch(error => {
+          console.error("Error destroying excess pool kernel:", error);
+        });
+      }).catch(error => {
+        console.error("Excess pool kernel promise rejected:", error);
       });
     }
   }
   
   /**
-   * Refill the pool for a specific configuration
+   * Refill the pool with a single kernel promise
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @private
+   */
+  private async refillPoolSingle(mode: KernelMode, language: KernelLanguage): Promise<void> {
+    if (!this.poolConfig.enabled) {
+      return;
+    }
+    
+    const poolKey = this.getPoolKey(mode, language);
+    const poolPromises = this.pool.get(poolKey) || [];
+    
+    // Only add one if we're below the pool size
+    if (poolPromises.length < this.poolConfig.poolSize) {
+      console.log(`Adding single kernel promise to pool for ${poolKey}`);
+      const kernelPromise = this.createPoolKernelPromise(mode, language);
+      this.addToPool(mode, language, kernelPromise);
+    }
+  }
+
+  /**
+   * Refill the pool for a specific configuration with parallel creation
    * @param mode Kernel mode
    * @param language Kernel language
    * @private
@@ -255,27 +289,66 @@ export class KernelManager extends EventEmitter {
     }
     
     const poolKey = this.getPoolKey(mode, language);
-    const poolKernels = this.pool.get(poolKey) || [];
-    const needed = this.poolConfig.poolSize - poolKernels.length;
     
-    if (needed <= 0) {
+    // Check if already prefilling this pool key to prevent duplicates
+    if (this.prefillingInProgress.get(poolKey)) {
+      console.log(`Pool refill already in progress for ${poolKey}, skipping`);
       return;
     }
     
-    console.log(`Refilling pool for ${poolKey}, creating ${needed} kernel(s)`);
+    // Set prefilling flag
+    this.prefillingInProgress.set(poolKey, true);
     
-    // Create kernels one by one to avoid overwhelming the system
-    for (let i = 0; i < needed; i++) {
-      try {
-        const poolKernel = await this.createPoolKernel(mode, language);
-        this.addToPool(mode, language, poolKernel);
-      } catch (error) {
-        console.error(`Error creating pool kernel for ${poolKey}:`, error);
-        // Continue trying to create other kernels
+    try {
+      const poolPromises = this.pool.get(poolKey) || [];
+      const needed = this.poolConfig.poolSize - poolPromises.length;
+      
+      if (needed <= 0) {
+        return;
       }
+      
+      console.log(`Refilling pool for ${poolKey}, creating ${needed} kernel promise(s) in parallel`);
+      
+      // Create all needed kernel promises in parallel
+      const newPromises = Array.from({ length: needed }, () => 
+        this.createPoolKernelPromise(mode, language)
+      );
+      
+      // Add all promises to the pool
+      for (const kernelPromise of newPromises) {
+        this.addToPool(mode, language, kernelPromise);
+      }
+      
+      console.log(`Successfully added ${needed} kernel promises to pool for ${poolKey}`);
+    } catch (error) {
+      console.error(`Error refilling pool for ${poolKey}:`, error);
+    } finally {
+      // Always clear the prefilling flag
+      this.prefillingInProgress.set(poolKey, false);
     }
   }
   
+  /**
+   * Create a kernel promise for the pool
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @returns Promise that resolves to a kernel instance
+   * @private
+   */
+  private createPoolKernelPromise(mode: KernelMode, language: KernelLanguage): Promise<IKernelInstance> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const kernel = await this.createPoolKernel(mode, language);
+        // Mark as taken from pool
+        kernel.isFromPool = true;
+        resolve(kernel);
+      } catch (error) {
+        console.error(`Error creating pool kernel for ${mode}-${language}:`, error);
+        reject(error);
+      }
+    });
+  }
+
   /**
    * Create a kernel specifically for the pool
    * @param mode Kernel mode
@@ -441,9 +514,9 @@ export class KernelManager extends EventEmitter {
   public getPoolStats(): Record<string, { available: number; total: number }> {
     const stats: Record<string, { available: number; total: number }> = {};
     
-    for (const [poolKey, kernels] of this.pool.entries()) {
+    for (const [poolKey, promises] of this.pool.entries()) {
       stats[poolKey] = {
-        available: kernels.length,
+        available: promises.length,
         total: this.poolConfig.poolSize
       };
     }
@@ -499,21 +572,21 @@ export class KernelManager extends EventEmitter {
       
       if (isPooledType) {
         // First try to get from existing pool
-        let poolKernel = this.getFromPool(mode, language);
+        let poolKernelPromise = this.getFromPool(mode, language);
         
-        if (poolKernel) {
-          console.log(`Using kernel from pool for ${id} (${mode}-${language})`);
-          return this.setupPoolKernel(poolKernel, id, options);
+        if (poolKernelPromise) {
+          console.log(`Using kernel promise from pool for ${id} (${mode}-${language})`);
+          return this.setupPoolKernelFromPromise(poolKernelPromise, id, options);
         }
         
         // Pool is empty, but this type should be pooled
-        // Wait for a new kernel to be created instead of falling back immediately
-        console.log(`Pool exhausted for ${poolKey}, creating new kernel for ${id}`);
+        // Create a new promise immediately and trigger background refill
+        console.log(`Pool exhausted for ${poolKey}, creating new kernel promise for ${id}`);
         
         try {
-          // Create a new kernel specifically for this request
-          const newKernel = await this.createPoolKernel(mode, language);
-          console.log(`Created new kernel for exhausted pool: ${id} (${mode}-${language})`);
+          // Create a new kernel promise specifically for this request
+          const newKernelPromise = this.createPoolKernelPromise(mode, language);
+          console.log(`Created new kernel promise for exhausted pool: ${id} (${mode}-${language})`);
           
           // Trigger background refill to replenish the pool for future requests
           if (this.poolConfig.autoRefill) {
@@ -524,18 +597,18 @@ export class KernelManager extends EventEmitter {
             }, 0);
           }
           
-          return this.setupPoolKernel(newKernel, id, options);
+          return this.setupPoolKernelFromPromise(newKernelPromise, id, options);
         } catch (error) {
-          console.error(`Failed to create kernel for exhausted pool: ${error}`);
+          console.error(`Failed to create kernel promise for exhausted pool: ${error}`);
           // Fall through to on-demand creation as last resort
         }
       } else {
         // This kernel type is not configured for pooling, try to get from pool anyway
         // in case there are kernels available from previous configurations
-        const poolKernel = this.getFromPool(mode, language);
-        if (poolKernel) {
-          console.log(`Using available kernel from pool for ${id} (${mode}-${language}) - not configured for pooling`);
-          return this.setupPoolKernel(poolKernel, id, options);
+        const poolKernelPromise = this.getFromPool(mode, language);
+        if (poolKernelPromise) {
+          console.log(`Using available kernel promise from pool for ${id} (${mode}-${language}) - not configured for pooling`);
+          return this.setupPoolKernelFromPromise(poolKernelPromise, id, options);
         }
       }
     }
@@ -546,14 +619,118 @@ export class KernelManager extends EventEmitter {
   }
   
   /**
-   * Setup a pool kernel with new ID and options
+   * Setup a pool kernel from a promise with new ID and options
+   * @param poolKernelPromise Kernel promise from pool
+   * @param id New kernel ID
+   * @param options Kernel options
+   * @returns Kernel ID (returned immediately while kernel is being prepared)
+   * @private
+   */
+  private setupPoolKernelFromPromise(
+    poolKernelPromise: Promise<IKernelInstance>, 
+    id: string, 
+    options: IManagerKernelOptions
+  ): string {
+    // Handle the promise asynchronously
+    poolKernelPromise.then(poolKernel => {
+      // Reassign the pool kernel with the new ID and options
+      const instance = this.reassignPoolKernel(poolKernel, id, options);
+      
+      // For worker kernels, we need to recreate the event handler with the new ID
+      if (instance.mode === KernelMode.WORKER && instance.worker) {
+        console.log(`[MANAGER] Updating worker event handler for reassigned kernel ${id}`);
+        
+        // Get the worker and create new message channel
+        const worker = instance.worker;
+        
+        // Create a new message channel for the reassigned kernel
+        const { port1, port2 } = new MessageChannel();
+        
+        // Send the new event port to the worker
+        worker.postMessage({
+          type: "SET_EVENT_PORT",
+          port: port2
+        }, [port2]);
+        
+        // Create a new event handler with the correct kernel ID
+        const eventHandler = (event: MessageEvent) => {
+          if (event.data && event.data.type) {
+            // Emit the event from the manager with kernel ID
+            // This structure matches the setupEventForwarding method for main thread kernels
+            super.emit(event.data.type, {
+              kernelId: id,
+              data: event.data.data
+            });
+          }
+        };
+        
+        // Listen for events from the worker with the new handler
+        port1.addEventListener('message', eventHandler);
+        port1.start();
+        
+        // Update the destroy function to clean up the new event handler
+        const originalDestroy = instance.destroy;
+        instance.destroy = async () => {
+          port1.removeEventListener('message', eventHandler);
+          port1.close();
+          return originalDestroy();
+        };
+      }
+      
+      // Store the kernel instance
+      this.kernels.set(id, instance);
+      
+      // Forward kernel events to manager (for main thread kernels)
+      this.setupEventForwarding(instance);
+      
+      // Initialize activity tracking
+      this.updateKernelActivity(id);
+      
+      // Set up inactivity timeout if specified and greater than 0
+      if (options.inactivityTimeout && options.inactivityTimeout > 0) {
+        console.log(`Setting up initial inactivity timeout for kernel ${id}: ${options.inactivityTimeout}ms`);
+        this.setupInactivityTimeout(id, options.inactivityTimeout);
+      } else if (options.inactivityTimeout === 0) {
+        console.log(`Inactivity timeout explicitly disabled for kernel ${id}`);
+      }
+      
+      // Setup handlers for stalled executions if maxExecutionTime is specified
+      if (options.maxExecutionTime && options.maxExecutionTime > 0) {
+        console.log(`Setting up execution monitoring for kernel ${id} with max execution time: ${options.maxExecutionTime}ms`);
+        this.setupStalledExecutionHandler(id);
+      }
+      
+      console.log(`Kernel ${id} is now ready and registered`);
+    }).catch(error => {
+      console.error(`Error setting up pool kernel ${id}:`, error);
+      // Emit an error event for this kernel
+      super.emit(KernelEvents.EXECUTE_ERROR, {
+        kernelId: id,
+        data: {
+          ename: "KernelSetupError",
+          evalue: `Failed to setup kernel: ${error.message}`,
+          traceback: [error.stack || error.message]
+        }
+      });
+    });
+    
+    // Return the ID immediately, even though the kernel is still being prepared
+    return id;
+  }
+
+  /**
+   * Setup a pool kernel with new ID and options (for already resolved kernels)
    * @param poolKernel Kernel from pool
    * @param id New kernel ID
    * @param options Kernel options
    * @returns Kernel ID
    * @private
    */
-  private setupPoolKernel(poolKernel: IKernelInstance, id: string, options: IManagerKernelOptions): string {
+  private setupPoolKernel(
+    poolKernel: IKernelInstance, 
+    id: string, 
+    options: IManagerKernelOptions
+  ): string {
     // Reassign the pool kernel with the new ID and options
     const instance = this.reassignPoolKernel(poolKernel, id, options);
     
@@ -1044,19 +1221,28 @@ export class KernelManager extends EventEmitter {
     
     const destroyPromises: Promise<void>[] = [];
     
-    for (const [poolKey, kernels] of this.pool.entries()) {
-      console.log(`Destroying ${kernels.length} kernels from pool ${poolKey}`);
+    for (const [poolKey, promises] of this.pool.entries()) {
+      console.log(`Destroying ${promises.length} kernel promises from pool ${poolKey}`);
       
-      for (const kernel of kernels) {
-        destroyPromises.push(kernel.destroy());
+      for (const kernelPromise of promises) {
+        // Handle each promise - if it resolves, destroy the kernel
+        const destroyPromise = kernelPromise.then(kernel => {
+          return kernel.destroy();
+        }).catch(error => {
+          console.error(`Error destroying pool kernel from promise:`, error);
+          // Don't re-throw to avoid unhandled rejections
+        });
+        
+        destroyPromises.push(destroyPromise);
       }
     }
     
     // Wait for all pool kernels to be destroyed
     await Promise.all(destroyPromises);
     
-    // Clear the pool
+    // Clear the pool and prefilling flags
     this.pool.clear();
+    this.prefillingInProgress.clear();
     
     console.log("Kernel pool destroyed");
   }
