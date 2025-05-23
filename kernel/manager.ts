@@ -1,4 +1,4 @@
-// Kernel Manager for Deno Code Interpreter
+// Kernel Manager for Deno App Engine
 // This file manages kernel instances in either main thread or worker mode
 
 import * as Comlink from "comlink";

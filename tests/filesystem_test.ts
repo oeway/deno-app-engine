@@ -1,4 +1,4 @@
-// Filesystem mounting test for Deno Code Interpreter
+// Filesystem mounting test for Deno App Engine
 
 import { assertEquals, assertExists } from "https://deno.land/std/testing/asserts.ts";
 import { Kernel, IKernelOptions } from "../kernel/index.ts";

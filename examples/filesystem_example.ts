@@ -1,6 +1,6 @@
 #!/usr/bin/env deno run --allow-read --allow-write --allow-env --unstable
 
-// Example script demonstrating filesystem mounting with the Deno Code Interpreter
+// Example script demonstrating filesystem mounting with the Deno App Engine
 // Run with: deno run --allow-read --allow-write --allow-env --unstable examples/filesystem_example.ts
 
 import { KernelManager, KernelMode, KernelEvents } from "../kernel/mod.ts";
@@ -61,7 +61,7 @@ function getDenoDirectories() {
 
 // Function to run the filesystem example
 async function run() {
-  console.log("Starting Deno Code Interpreter with filesystem mounting...");
+  console.log("Starting Deno App Engine with filesystem mounting...");
   
   // Create a kernel manager
   const manager = new KernelManager();

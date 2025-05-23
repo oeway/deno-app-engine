@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate _pypi.ts file and wheel files for the Deno Code Interpreter.
+Generate _pypi.ts file and wheel files for the Deno App Engine.
 """
 
 import os

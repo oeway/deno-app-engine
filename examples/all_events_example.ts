@@ -1,9 +1,9 @@
-// Example of using the ALL event handler in the Deno Code Interpreter kernel
+// Example of using the ALL event handler in the Deno App Engine kernel
 
 import { KernelManager, KernelMode, KernelEvents, IEventData } from "../kernel/mod.ts";
 
 async function runAllEventsExample() {
-  console.log("\nDeno Code Interpreter - ALL Events Example\n");
+  console.log("\nDeno App Engine - ALL Events Example\n");
   console.log("This example demonstrates using the ALL event handler\n");
   
   // Create a kernel manager

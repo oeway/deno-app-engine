@@ -1,4 +1,4 @@
-// Main entry point for the Deno Code Interpreter kernel module
+// Main entry point for the Deno App Engine kernel module
 // This file exports the public API
 
 // Export the kernel core components
@@ -9,7 +9,8 @@ export {
   KernelManager, 
   KernelMode,
   KernelLanguage,
-  type IKernelInstance
+  type IKernelInstance,
+  type IKernelManagerOptions
 } from "./manager.ts";
 
 // Export other interfaces

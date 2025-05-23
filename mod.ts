@@ -1,5 +1,5 @@
-// Deno Code Interpreter - Main module exports
-// This file exports the public API for the Deno Code Interpreter
+// Deno App Engine - Main module exports
+// This file exports the public API for the Deno App Engine
 
 import { Kernel, KernelEvents } from './kernel/index.ts';
 import type { 

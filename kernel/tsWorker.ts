@@ -1,4 +1,4 @@
-// TypeScript Web Worker for Deno Code Interpreter
+// TypeScript Web Worker for Deno App Engine
 // Simplified and elegant implementation
 import * as Comlink from "comlink";
 // @ts-ignore Importing from npm

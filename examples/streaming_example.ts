@@ -1,9 +1,9 @@
-// Example of using the streaming functionality of the Deno Code Interpreter kernel
+// Example of using the streaming functionality of the Deno App Engine kernel
 
 import { KernelManager, KernelMode } from "../kernel/mod.ts";
 
 async function runStreamingExample() {
-  console.log("\nDeno Code Interpreter - Streaming Example\n");
+  console.log("\nDeno App Engine - Streaming Example\n");
   console.log("This example demonstrates streaming output from a Python kernel\n");
   
   // Create a kernel manager

@@ -1,6 +1,6 @@
-# Deno Code Interpreter Configuration
+# Deno App Engine Configuration
 
-This document describes the environment variables used to configure the Deno Code Interpreter's kernel manager.
+This document describes the environment variables used to configure the Deno App Engine's kernel manager.
 
 ## Kernel Security Configuration
 

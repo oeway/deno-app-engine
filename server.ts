@@ -481,6 +481,11 @@ export async function handleRequest(req: Request): Promise<Response> {
             return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
           }
 
+          // Initialize history for this kernel if it doesn't exist
+          if (!kernelHistory.has(kernelId)) {
+            kernelHistory.set(kernelId, []);
+          }
+
           // Set up readable stream that directly uses kernelManager.executeStream
           const stream = new ReadableStream({
             async start(controller) {
@@ -494,15 +499,27 @@ export async function handleRequest(req: Request): Promise<Response> {
                 sendData({ type: "stream_start", data: { message: "Execution started" } });
 
                 let outputCount = 0;
+                const sessionId = crypto.randomUUID();
+                const outputs: any[] = [];
                 
                 // Use the kernel manager's executeStream method
                 for await (const output of kernelManager.executeStream(kernelId, code)) {
                   outputCount++;
+                  outputs.push(output);
                   sendData(output);
                 }
                 
                 // Send completion marker
                 sendData({ type: "stream_complete", data: { message: "Execution completed", outputCount } });
+                
+                // Add to kernel history
+                const history = kernelHistory.get(kernelId) || [];
+                history.push({
+                  id: sessionId,
+                  script: code,
+                  outputs: outputs,
+                });
+                kernelHistory.set(kernelId, history);
                 
                 controller.close();
                 

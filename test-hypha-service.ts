@@ -86,7 +86,7 @@ async function runStressTest() {
       s.id === serviceId || 
       s.id.includes(serviceId) || 
       s.id.includes('deno-app-engine') ||
-      s.name === 'Deno Code Interpreter'
+      s.name === 'Deno App Engine'
     );
     
     if (!service) {

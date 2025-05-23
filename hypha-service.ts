@@ -207,7 +207,7 @@ async function startHyphaService() {
   console.log("Connected to hypha server, registering service...");
   
   const svc = await server.registerService({
-    "name": "Deno Code Interpreter",
+    "name": "Deno App Engine",
     "id": "deno-app-engine",
     "type": "deno-app-engine",
     "config": {

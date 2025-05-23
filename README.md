@@ -1,4 +1,4 @@
-# Deno Code Interpreter
+# Deno App Engine
 
 A Deno-based app engine that provides Jupyter kernel-like functionality with Pyodide integration. This project enables running Python code in both main thread and worker contexts, with filesystem mounting capabilities and secure permission management.
 

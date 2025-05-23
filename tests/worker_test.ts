@@ -1,11 +1,11 @@
-// Worker test for Deno Code Interpreter
+// Worker test for Deno App Engine
 // This demonstrates using the kernel in a web worker via the KernelManager
 
 import { assertEquals, assertNotEquals } from "https://deno.land/std/assert/mod.ts";
 import { KernelManager, KernelMode, KernelEvents } from "../kernel/mod.ts";
 
 // Print header for the test
-console.log("Deno Code Interpreter (Worker Test)");
+console.log("Deno App Engine (Worker Test)");
 console.log("-----------------------------------");
 console.log("Testing kernel manager with worker mode...");
 

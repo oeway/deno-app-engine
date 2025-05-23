@@ -8,5 +8,5 @@ if ! command -v deno &> /dev/null; then
 fi
 
 # Start the server with necessary permissions
-echo "Starting Deno Code Interpreter server..."
+echo "Starting Deno App Engine server..."
 deno run --allow-net --allow-read --allow-write --allow-env server.ts 

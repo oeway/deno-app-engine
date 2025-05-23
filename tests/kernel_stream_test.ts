@@ -2,10 +2,25 @@
 // This tests the streaming output capabilities of the kernel
 
 import { assert } from "https://deno.land/std/assert/mod.ts";
-import { KernelManager, KernelMode, KernelEvents, KernelLanguage } from "../kernel/mod.ts";
+import { KernelManager, KernelMode, KernelEvents, KernelLanguage, IKernelManagerOptions } from "../kernel/mod.ts";
 
-// Create a single kernel manager instance for all tests
-const manager = new KernelManager();
+// Create a single kernel manager instance for all tests with test-friendly configuration
+const testManagerOptions: IKernelManagerOptions = {
+  allowedKernelTypes: [
+    { mode: KernelMode.MAIN_THREAD, language: KernelLanguage.PYTHON },
+    { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+    { mode: KernelMode.MAIN_THREAD, language: KernelLanguage.TYPESCRIPT },
+    { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+  ],
+  pool: {
+    enabled: false, // Disable pool for tests to avoid interference
+    poolSize: 2,
+    autoRefill: true,
+    preloadConfigs: []
+  }
+};
+
+const manager = new KernelManager(testManagerOptions);
 let kernelId: string;
 
 // Setup: Create a kernel for testing
