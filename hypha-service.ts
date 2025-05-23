@@ -393,6 +393,10 @@ async function startHyphaService() {
       // Get CPU usage
       const cpuUsage = await getCpuUsage();
       
+      // Get pool configuration and statistics
+      const poolConfig = kernelManager.getPoolConfig();
+      const poolStats = kernelManager.getPoolStats();
+      
       return {
         systemStats: {
           uptime: Math.round(uptime),
@@ -414,6 +418,16 @@ async function startHyphaService() {
             namespace: namespaceActiveExecutions
           },
           executionsByStatus
+        },
+        poolStats: {
+          config: {
+            enabled: poolConfig.enabled,
+            poolSize: poolConfig.poolSize,
+            autoRefill: poolConfig.autoRefill,
+            preloadConfigs: poolConfig.preloadConfigs.map(config => `${config.mode}-${config.language}`),
+            isPreloading: poolConfig.isPreloading
+          },
+          statistics: poolStats
         }
       };
     },

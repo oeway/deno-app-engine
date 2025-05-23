@@ -525,6 +525,29 @@ export class KernelManager extends EventEmitter {
   }
   
   /**
+   * Get pool configuration information
+   * @returns Pool configuration details
+   */
+  public getPoolConfig(): {
+    enabled: boolean;
+    poolSize: number;
+    autoRefill: boolean;
+    preloadConfigs: Array<{
+      mode: KernelMode;
+      language: KernelLanguage;
+    }>;
+    isPreloading: boolean;
+  } {
+    return {
+      enabled: this.poolConfig.enabled,
+      poolSize: this.poolConfig.poolSize,
+      autoRefill: this.poolConfig.autoRefill,
+      preloadConfigs: [...this.poolConfig.preloadConfigs], // Return a copy to prevent modification
+      isPreloading: this.isPreloading
+    };
+  }
+  
+  /**
    * Create a new kernel instance
    * @param options Options for creating the kernel
    * @param options.id Optional custom ID for the kernel
@@ -711,8 +734,8 @@ export class KernelManager extends EventEmitter {
         kernelId: id,
         data: {
           ename: "KernelSetupError",
-          evalue: `Failed to setup kernel: ${error.message}`,
-          traceback: [error.stack || error.message]
+          evalue: `Failed to setup kernel: ${error instanceof Error ? error.message : String(error)}`,
+          traceback: [error instanceof Error ? (error.stack || error.message) : String(error)]
         }
       });
       throw error; // Re-throw to let the caller handle it
