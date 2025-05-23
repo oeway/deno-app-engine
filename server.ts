@@ -1,9 +1,82 @@
-import { KernelManager, KernelMode } from "./kernel/mod.ts";
+import { KernelManager, KernelMode, KernelLanguage } from "./kernel/mod.ts";
+import type { IKernelManagerOptions } from "./kernel/manager.ts";
 import { Status } from "https://deno.land/std@0.201.0/http/http_status.ts";
 import { contentType } from "https://deno.land/std/media_types/mod.ts";
 
-// Create a global kernel manager instance
-const kernelManager = new KernelManager();
+// Configure kernel manager options from environment variables
+function getKernelManagerOptions(): IKernelManagerOptions {
+  // Parse allowed kernel types from environment variable
+  // Format: "worker-python,worker-typescript,main_thread-python"
+  const allowedTypesEnv = Deno.env.get("ALLOWED_KERNEL_TYPES");
+  let allowedKernelTypes: Array<{ mode: KernelMode; language: KernelLanguage }> = [];
+  
+  if (allowedTypesEnv) {
+    allowedKernelTypes = allowedTypesEnv.split(",").map(typeStr => {
+      const [modeStr, langStr] = typeStr.trim().split("-");
+      
+      const mode = modeStr === "main_thread" ? KernelMode.MAIN_THREAD : KernelMode.WORKER;
+      const language = langStr === "typescript" ? KernelLanguage.TYPESCRIPT : KernelLanguage.PYTHON;
+      
+      return { mode, language };
+    });
+  } else {
+    // Default: only worker kernels for security
+    allowedKernelTypes = [
+      { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+    ];
+  }
+  
+  // Parse pool configuration from environment variables
+  const poolEnabled = Deno.env.get("KERNEL_POOL_ENABLED") === "true";
+  const poolSize = parseInt(Deno.env.get("KERNEL_POOL_SIZE") || "2");
+  const autoRefill = Deno.env.get("KERNEL_POOL_AUTO_REFILL") !== "false"; // Default true
+  
+  // Parse preload configs from environment variable
+  // Format: "worker-python,main_thread-python"
+  const preloadConfigsEnv = Deno.env.get("KERNEL_POOL_PRELOAD_CONFIGS");
+  let preloadConfigs: Array<{ mode: KernelMode; language: KernelLanguage }> = [];
+  
+  if (preloadConfigsEnv) {
+    preloadConfigs = preloadConfigsEnv.split(",").map(typeStr => {
+      const [modeStr, langStr] = typeStr.trim().split("-");
+      
+      const mode = modeStr === "main_thread" ? KernelMode.MAIN_THREAD : KernelMode.WORKER;
+      const language = langStr === "typescript" ? KernelLanguage.TYPESCRIPT : KernelLanguage.PYTHON;
+      
+      return { mode, language };
+    });
+  } else {
+    // Default: preload Python worker kernels only
+    preloadConfigs = allowedKernelTypes.filter(type => 
+      type.language === KernelLanguage.PYTHON
+    );
+  }
+  
+  const options: IKernelManagerOptions = {
+    allowedKernelTypes,
+    pool: {
+      enabled: poolEnabled,
+      poolSize,
+      autoRefill,
+      preloadConfigs
+    }
+  };
+  
+  console.log("Kernel Manager Configuration:");
+  console.log(`- Allowed kernel types: ${allowedKernelTypes.map(t => `${t.mode}-${t.language}`).join(", ")}`);
+  console.log(`- Pool enabled: ${poolEnabled}`);
+  if (poolEnabled) {
+    console.log(`- Pool size: ${poolSize}`);
+    console.log(`- Auto refill: ${autoRefill}`);
+    console.log(`- Preload configs: ${preloadConfigs.map(t => `${t.mode}-${t.language}`).join(", ")}`);
+  }
+  
+  return options;
+}
+
+// Create a global kernel manager instance with configuration
+const kernelManager = new KernelManager(getKernelManagerOptions());
 
 // Store execution sessions and their results
 interface ExecutionSession {
@@ -190,36 +263,19 @@ export async function handleRequest(req: Request): Promise<Response> {
             throw new Error("Failed to get kernel after creation");
           }
           
-          console.log("Initializing kernel...");
-          try {
-            // Check how to initialize this kernel
-            if (typeof kernel.kernel.initialize === 'function') {
-              await kernel.kernel.initialize();
-            } else {
-              console.log("Direct initialize not available, assuming already initialized");
-            }
-            console.log("Kernel initialized successfully");
-            
-            // Initialize history for this kernel
-            kernelHistory.set(kernelId, []);
-            
-            return jsonResponse({
-              id: kernelId,
-              mode: kernel.mode,
-              language: kernel.language || "python",
-              status: kernel.kernel.status || "unknown",
-              created: kernel.created,
-              name: `Kernel-${kernelId.slice(0, 8)}`
-            });
-          } catch (error: unknown) {
-            console.error("Kernel initialization failed:", error);
-            // Clean up the failed kernel
-            await kernelManager.destroyKernel(kernelId);
-            return jsonResponse(
-              { error: error instanceof Error ? error.message : String(error) },
-              Status.InternalServerError
-            );
-          }
+          console.log("Kernel created and initialized successfully");
+          
+          // Initialize history for this kernel
+          kernelHistory.set(kernelId, []);
+          
+          return jsonResponse({
+            id: kernelId,
+            mode: kernel.mode,
+            language: kernel.language || "python",
+            status: kernel.kernel.status || "unknown",
+            created: kernel.created,
+            name: `Kernel-${kernelId.slice(0, 8)}`
+          });
         } catch (error: unknown) {
           console.error("Error creating kernel:", error);
           return jsonResponse(
@@ -442,50 +498,49 @@ export async function handleRequest(req: Request): Promise<Response> {
             return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
           }
 
-          // Create a session
-          const session = await createExecutionSession(kernelId, code);
+          console.log(`Starting execution stream for kernel ${kernelId}`);
+          console.log(`Kernel manager instance:`, typeof kernelManager);
+          console.log(`Kernel instance:`, kernel ? 'found' : 'not found');
+          console.log(`Kernel mode:`, kernel?.mode);
+          console.log(`Kernel language:`, kernel?.language);
+          console.log(`Kernel has worker:`, !!kernel?.worker);
 
-          // Set up readable stream
+          // Set up readable stream that directly uses kernelManager.executeStream
           const stream = new ReadableStream({
             async start(controller) {
+              console.log(`Stream controller started for kernel ${kernelId}`);
+              
               try {
-                // Create a function to send JSON data
                 const sendData = (data: any) => {
-                  controller.enqueue(new TextEncoder().encode(`${JSON.stringify(data)}\n`));
+                  const jsonLine = JSON.stringify(data) + '\n';
+                  console.log(`Sending data for kernel ${kernelId}:`, jsonLine.trim());
+                  controller.enqueue(new TextEncoder().encode(jsonLine));
                 };
 
-                // Send any existing outputs first
-                for (const output of session.outputs) {
+                // Send start marker
+                sendData({ type: "stream_start", data: { message: "Execution started" } });
+
+                let outputCount = 0;
+                
+                console.log(`About to call kernelManager.executeStream for kernel ${kernelId} with code:`, code);
+                
+                // Use the kernel manager's executeStream method
+                for await (const output of kernelManager.executeStream(kernelId, code)) {
+                  outputCount++;
+                  console.log(`Received output ${outputCount} for kernel ${kernelId}:`, JSON.stringify(output));
                   sendData(output);
                 }
-
-                // Set up event listener for new outputs
-                const outputListener = (output: any) => {
-                  sendData(output);
-                };
-
-                // Add listener to session
-                session.listeners = session.listeners || [];
-                session.listeners.push(outputListener);
-
-                // Wait for completion or error
-                try {
-                  await session.promise;
-                  controller.close();
-                } catch (error) {
-                  sendData({
-                    type: "error",
-                    data: { message: error instanceof Error ? error.message : String(error) },
-                  });
-                  controller.close();
-                } finally {
-                  // Clean up listener
-                  const listenerIndex = session.listeners.indexOf(outputListener);
-                  if (listenerIndex !== -1) {
-                    session.listeners.splice(listenerIndex, 1);
-                  }
-                }
-              } catch (error: unknown) {
+                
+                console.log(`ExecuteStream completed for kernel ${kernelId}, total outputs: ${outputCount}`);
+                
+                // Send completion marker
+                sendData({ type: "stream_complete", data: { message: "Execution completed", outputCount } });
+                
+                console.log(`Closing stream for kernel ${kernelId}`);
+                controller.close();
+                
+              } catch (error) {
+                console.error(`Stream error for kernel ${kernelId}:`, error);
                 const errorData = JSON.stringify({
                   type: "error",
                   data: { message: error instanceof Error ? error.message : String(error) },
@@ -507,6 +562,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             },
           });
         } catch (error) {
+          console.error(`Error setting up execution stream for kernel ${kernelId}:`, error);
           return jsonResponse(
             { error: error instanceof Error ? error.message : String(error) },
             Status.InternalServerError

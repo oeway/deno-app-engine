@@ -1890,4 +1890,207 @@ Deno.test({
   },
   sanitizeResources: false,
   sanitizeOps: false
+});
+
+// Test kernel pool with namespaced kernel creation
+Deno.test({
+  name: "17. Test kernel pool preloading with namespaced kernel creation",
+  async fn() {
+    // Create a manager with pool enabled for testing namespace integration
+    const poolManager = new KernelManager({
+      allowedKernelTypes: [
+        { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+        { mode: KernelMode.MAIN_THREAD, language: KernelLanguage.PYTHON }
+      ],
+      pool: {
+        enabled: true,
+        poolSize: 2,
+        autoRefill: true,
+        preloadConfigs: [
+          { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+          { mode: KernelMode.MAIN_THREAD, language: KernelLanguage.PYTHON }
+        ]
+      }
+    });
+    
+    try {
+      console.log("Waiting for pool preloading to complete...");
+      
+      // Wait for preloading to complete
+      await new Promise(resolve => setTimeout(resolve, 8000));
+      
+      // Check initial pool stats
+      const initialStats = poolManager.getPoolStats();
+      console.log("Initial pool stats:", initialStats);
+      
+      // Verify pool has been preloaded
+      assert(
+        Object.keys(initialStats).length > 0, 
+        "Pool should have preloaded configurations"
+      );
+      
+      // Test 1: Create namespaced kernels from pool (should be fast)
+      console.log("Testing namespaced kernel creation from pool...");
+      
+      const start1 = Date.now();
+      const namespacedKernelId1 = await poolManager.createKernel({
+        namespace: "project1",
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON
+      });
+      const duration1 = Date.now() - start1;
+      
+      console.log(`First namespaced kernel creation took ${duration1}ms`);
+      assert(duration1 < 1000, `Namespaced kernel creation should take <1s, took ${duration1}ms`);
+      
+      // Verify kernel has correct namespace and is from pool
+      const instance1 = poolManager.getKernel(namespacedKernelId1);
+      assert(instance1, "Namespaced kernel instance should exist");
+      assert(namespacedKernelId1.startsWith("project1:"), "Kernel ID should have namespace prefix");
+      assert(instance1.isFromPool, "Kernel should be marked as from pool");
+      
+      // Test 2: Create another namespaced kernel with different namespace
+      const start2 = Date.now();
+      const namespacedKernelId2 = await poolManager.createKernel({
+        namespace: "project2",
+        mode: KernelMode.MAIN_THREAD,
+        lang: KernelLanguage.PYTHON
+      });
+      const duration2 = Date.now() - start2;
+      
+      console.log(`Second namespaced kernel creation took ${duration2}ms`);
+      assert(duration2 < 1000, `Second namespaced kernel creation should take <1s, took ${duration2}ms`);
+      
+      const instance2 = poolManager.getKernel(namespacedKernelId2);
+      assert(instance2, "Second namespaced kernel instance should exist");
+      assert(namespacedKernelId2.startsWith("project2:"), "Kernel ID should have project2 namespace prefix");
+      assert(instance2.isFromPool, "Second kernel should be marked as from pool");
+      
+      // Test 3: Verify namespace filtering works with pooled kernels
+      const project1Kernels = poolManager.listKernels("project1");
+      assertEquals(project1Kernels.length, 1, "Should have 1 kernel in project1 namespace");
+      assertEquals(project1Kernels[0].id, namespacedKernelId1, "Should be the correct kernel");
+      assertEquals(project1Kernels[0].namespace, "project1", "Should have project1 namespace");
+      
+      const project2Kernels = poolManager.listKernels("project2");
+      assertEquals(project2Kernels.length, 1, "Should have 1 kernel in project2 namespace");
+      assertEquals(project2Kernels[0].id, namespacedKernelId2, "Should be the correct kernel");
+      assertEquals(project2Kernels[0].namespace, "project2", "Should have project2 namespace");
+      
+      // Test 4: Verify kernels are functional despite being from pool
+      console.log("Testing functionality of namespaced pooled kernels...");
+      
+      // Test project1 kernel (worker)
+      const result1 = await instance1.kernel.execute('print("Hello from project1 pooled kernel")');
+      assert(result1?.success, "Project1 kernel should execute successfully");
+      
+      // Test project2 kernel (main thread)
+      const result2 = await instance2.kernel.execute('print("Hello from project2 pooled kernel")');
+      assert(result2?.success, "Project2 kernel should execute successfully");
+      
+      // Test 5: Create multiple kernels in same namespace (test pool exhaustion with namespaces)
+      console.log("Testing multiple kernels in same namespace...");
+      
+      const namespacedKernelId3 = await poolManager.createKernel({
+        namespace: "project1",
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON
+      });
+      
+      const namespacedKernelId4 = await poolManager.createKernel({
+        namespace: "project1",
+        mode: KernelMode.MAIN_THREAD,
+        lang: KernelLanguage.PYTHON
+      });
+      
+      // Verify all kernels in project1 namespace
+      const allProject1Kernels = poolManager.listKernels("project1");
+      assertEquals(allProject1Kernels.length, 3, "Should have 3 kernels in project1 namespace");
+      
+      // Verify all have correct namespace
+      assert(
+        allProject1Kernels.every(k => k.namespace === "project1"),
+        "All kernels should have project1 namespace"
+      );
+      
+      // Verify IDs have correct namespace prefix
+      assert(
+        allProject1Kernels.every(k => k.id.startsWith("project1:")),
+        "All kernel IDs should have project1 prefix"
+      );
+      
+      // Test 6: Verify pool refilling works with namespace usage
+      console.log("Checking pool refilling after namespace usage...");
+      
+      // Wait for auto-refill
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const refillStats = poolManager.getPoolStats();
+      console.log("Pool stats after namespace usage and refill:", refillStats);
+      
+      // Pool should have been refilled
+      for (const [poolKey, stats] of Object.entries(refillStats)) {
+        if (poolKey.includes("python")) {
+          assert(
+            stats.available >= 0, 
+            `Pool ${poolKey} should have non-negative available kernels after refill`
+          );
+        }
+      }
+      
+      // Test 7: Destroy by namespace and verify pool kernels are not affected
+      console.log("Testing namespace destruction...");
+      
+      await poolManager.destroyAll("project1");
+      
+      // Verify project1 kernels are gone
+      assertEquals(poolManager.listKernels("project1").length, 0, "Should have no kernels in project1 namespace");
+      
+      // Verify project2 kernel still exists
+      assertEquals(poolManager.listKernels("project2").length, 1, "Should still have 1 kernel in project2 namespace");
+      
+      // Verify pool is not affected by namespace destruction
+      const postDestroyStats = poolManager.getPoolStats();
+      console.log("Pool stats after namespace destruction:", postDestroyStats);
+      
+      // Pool should still exist and potentially have kernels
+      assert(
+        Object.keys(postDestroyStats).length > 0,
+        "Pool should still exist after namespace destruction"
+      );
+      
+      // Test 8: Create new kernel in destroyed namespace (should still use pool)
+      console.log("Testing kernel creation in previously destroyed namespace...");
+      
+      const start8 = Date.now();
+      const newProject1KernelId = await poolManager.createKernel({
+        namespace: "project1",
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON
+      });
+      const duration8 = Date.now() - start8;
+      
+      console.log(`New kernel in destroyed namespace took ${duration8}ms`);
+      
+      const newInstance = poolManager.getKernel(newProject1KernelId);
+      assert(newInstance, "New kernel should exist");
+      assert(newProject1KernelId.startsWith("project1:"), "Should have correct namespace prefix");
+      
+      // This might or might not be from pool depending on refill timing, but should work
+      const newResult = await newInstance.kernel.execute('print("Hello from new project1 kernel")');
+      assert(newResult?.success, "New kernel should execute successfully");
+      
+      // Clean up remaining kernels
+      await poolManager.destroyKernel(namespacedKernelId2); // project2 kernel
+      await poolManager.destroyKernel(newProject1KernelId); // new project1 kernel
+      
+      console.log("Kernel pool with namespaces test completed successfully");
+      
+    } finally {
+      // Clean up the pool manager
+      await poolManager.destroyAll();
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
 }); 

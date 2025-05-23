@@ -1,5 +1,6 @@
 import { hyphaWebsocketClient } from "npm:hypha-rpc";
-import { KernelManager, KernelMode } from "./kernel/mod.ts";
+import { KernelManager, KernelMode, KernelLanguage } from "./kernel/mod.ts";
+import type { IKernelManagerOptions } from "./kernel/manager.ts";
 
 // Add type declaration for global variable
 declare global {
@@ -92,8 +93,8 @@ async function getCpuUsage(): Promise<number> {
 // Track service start time
 const serviceStartTime = Date.now();
 
-// Create a global kernel manager instance
-const kernelManager = new KernelManager();
+// Create a global kernel manager instance with configuration
+const kernelManager = new KernelManager(getKernelManagerOptions());
 
 // Store kernel execution history
 interface KernelHistory {
@@ -114,6 +115,78 @@ function ensureKernelId(id: string, namespace: string) {
         }
     }
     return namespace + ":" + id;
+}
+
+// Configure kernel manager options from environment variables
+function getKernelManagerOptions(): IKernelManagerOptions {
+  // Parse allowed kernel types from environment variable
+  // Format: "worker-python,worker-typescript,main_thread-python"
+  const allowedTypesEnv = Deno.env.get("ALLOWED_KERNEL_TYPES");
+  let allowedKernelTypes: Array<{ mode: KernelMode; language: KernelLanguage }> = [];
+  
+  if (allowedTypesEnv) {
+    allowedKernelTypes = allowedTypesEnv.split(",").map(typeStr => {
+      const [modeStr, langStr] = typeStr.trim().split("-");
+      
+      const mode = modeStr === "main_thread" ? KernelMode.MAIN_THREAD : KernelMode.WORKER;
+      const language = langStr === "typescript" ? KernelLanguage.TYPESCRIPT : KernelLanguage.PYTHON;
+      
+      return { mode, language };
+    });
+  } else {
+    // Default: only worker kernels for security
+    allowedKernelTypes = [
+      { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+    ];
+  }
+  
+  // Parse pool configuration from environment variables
+  const poolEnabled = Deno.env.get("KERNEL_POOL_ENABLED") === "true";
+  const poolSize = parseInt(Deno.env.get("KERNEL_POOL_SIZE") || "2");
+  const autoRefill = Deno.env.get("KERNEL_POOL_AUTO_REFILL") !== "false"; // Default true
+  
+  // Parse preload configs from environment variable
+  // Format: "worker-python,main_thread-python"
+  const preloadConfigsEnv = Deno.env.get("KERNEL_POOL_PRELOAD_CONFIGS");
+  let preloadConfigs: Array<{ mode: KernelMode; language: KernelLanguage }> = [];
+  
+  if (preloadConfigsEnv) {
+    preloadConfigs = preloadConfigsEnv.split(",").map(typeStr => {
+      const [modeStr, langStr] = typeStr.trim().split("-");
+      
+      const mode = modeStr === "main_thread" ? KernelMode.MAIN_THREAD : KernelMode.WORKER;
+      const language = langStr === "typescript" ? KernelLanguage.TYPESCRIPT : KernelLanguage.PYTHON;
+      
+      return { mode, language };
+    });
+  } else {
+    // Default: preload Python worker kernels only
+    preloadConfigs = allowedKernelTypes.filter(type => 
+      type.language === KernelLanguage.PYTHON
+    );
+  }
+  
+  const options: IKernelManagerOptions = {
+    allowedKernelTypes,
+    pool: {
+      enabled: poolEnabled,
+      poolSize,
+      autoRefill,
+      preloadConfigs
+    }
+  };
+  
+  console.log("Hypha Service Kernel Manager Configuration:");
+  console.log(`- Allowed kernel types: ${allowedKernelTypes.map(t => `${t.mode}-${t.language}`).join(", ")}`);
+  console.log(`- Pool enabled: ${poolEnabled}`);
+  if (poolEnabled) {
+    console.log(`- Pool size: ${poolSize}`);
+    console.log(`- Auto refill: ${autoRefill}`);
+    console.log(`- Preload configs: ${preloadConfigs.map(t => `${t.mode}-${t.language}`).join(", ")}`);
+  }
+  
+  return options;
 }
 
 async function startHyphaService() {

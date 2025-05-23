@@ -199,8 +199,9 @@ export class KernelManager extends EventEmitter {
     // Mark as taken from pool
     kernel.isFromPool = true;
     
-    // Trigger background refill if auto-refill is enabled
-    if (this.poolConfig.autoRefill) {
+    // Trigger background refill if auto-refill is enabled and we still have kernels
+    // but are below the target size (don't refill when pool is completely empty)
+    if (this.poolConfig.autoRefill && poolKernels.length > 0 && poolKernels.length < this.poolConfig.poolSize) {
       setTimeout(() => {
         this.refillPool(mode, language).catch(error => {
           console.error(`Error refilling pool for ${poolKey}:`, error);
@@ -489,44 +490,155 @@ export class KernelManager extends EventEmitter {
     
     // Try to get from pool if possible
     if (this.canUsePool(options)) {
-      const poolKernel = this.getFromPool(mode, language);
+      const poolKey = this.getPoolKey(mode, language);
       
-      if (poolKernel) {
-        console.log(`Using kernel from pool for ${id} (${mode}-${language})`);
+      // Check if this kernel type is configured for pooling
+      const isPooledType = this.poolConfig.preloadConfigs.some(config => 
+        config.mode === mode && config.language === language
+      );
+      
+      if (isPooledType) {
+        // First try to get from existing pool
+        let poolKernel = this.getFromPool(mode, language);
         
-        // Reassign the pool kernel with the new ID and options
-        const instance = this.reassignPoolKernel(poolKernel, id, options);
-        
-        // Store the kernel instance
-        this.kernels.set(id, instance);
-        
-        // Forward kernel events to manager (for main thread kernels)
-        this.setupEventForwarding(instance);
-        
-        // Initialize activity tracking
-        this.updateKernelActivity(id);
-        
-        // Set up inactivity timeout if specified and greater than 0
-        if (options.inactivityTimeout && options.inactivityTimeout > 0) {
-          console.log(`Setting up initial inactivity timeout for kernel ${id}: ${options.inactivityTimeout}ms`);
-          this.setupInactivityTimeout(id, options.inactivityTimeout);
-        } else if (options.inactivityTimeout === 0) {
-          console.log(`Inactivity timeout explicitly disabled for kernel ${id}`);
+        if (poolKernel) {
+          console.log(`Using kernel from pool for ${id} (${mode}-${language})`);
+          return this.setupPoolKernel(poolKernel, id, options);
         }
         
-        // Setup handlers for stalled executions if maxExecutionTime is specified
-        if (options.maxExecutionTime && options.maxExecutionTime > 0) {
-          console.log(`Setting up execution monitoring for kernel ${id} with max execution time: ${options.maxExecutionTime}ms`);
-          this.setupStalledExecutionHandler(id);
-        }
+        // Pool is empty, but this type should be pooled
+        // Wait for a new kernel to be created instead of falling back immediately
+        console.log(`Pool exhausted for ${poolKey}, creating new kernel for ${id}`);
         
-        return id;
+        try {
+          // Create a new kernel specifically for this request
+          const newKernel = await this.createPoolKernel(mode, language);
+          console.log(`Created new kernel for exhausted pool: ${id} (${mode}-${language})`);
+          
+          // Trigger background refill to replenish the pool for future requests
+          if (this.poolConfig.autoRefill) {
+            setTimeout(() => {
+              this.refillPool(mode, language).catch(error => {
+                console.error(`Error refilling exhausted pool for ${poolKey}:`, error);
+              });
+            }, 0);
+          }
+          
+          return this.setupPoolKernel(newKernel, id, options);
+        } catch (error) {
+          console.error(`Failed to create kernel for exhausted pool: ${error}`);
+          // Fall through to on-demand creation as last resort
+        }
+      } else {
+        // This kernel type is not configured for pooling, try to get from pool anyway
+        // in case there are kernels available from previous configurations
+        const poolKernel = this.getFromPool(mode, language);
+        if (poolKernel) {
+          console.log(`Using available kernel from pool for ${id} (${mode}-${language}) - not configured for pooling`);
+          return this.setupPoolKernel(poolKernel, id, options);
+        }
       }
     }
     
     // Fall back to creating a new kernel on-demand
     console.log(`Creating new kernel on-demand for ${id} (${mode}-${language})`);
+    return this.createOnDemandKernel(id, mode, language, options);
+  }
+  
+  /**
+   * Setup a pool kernel with new ID and options
+   * @param poolKernel Kernel from pool
+   * @param id New kernel ID
+   * @param options Kernel options
+   * @returns Kernel ID
+   * @private
+   */
+  private setupPoolKernel(poolKernel: IKernelInstance, id: string, options: IManagerKernelOptions): string {
+    // Reassign the pool kernel with the new ID and options
+    const instance = this.reassignPoolKernel(poolKernel, id, options);
     
+    // For worker kernels, we need to recreate the event handler with the new ID
+    if (instance.mode === KernelMode.WORKER && instance.worker) {
+      console.log(`[MANAGER] Updating worker event handler for reassigned kernel ${id}`);
+      
+      // Get the worker and create new message channel
+      const worker = instance.worker;
+      
+      // Create a new message channel for the reassigned kernel
+      const { port1, port2 } = new MessageChannel();
+      
+      // Send the new event port to the worker
+      worker.postMessage({
+        type: "SET_EVENT_PORT",
+        port: port2
+      }, [port2]);
+      
+      // Create a new event handler with the correct kernel ID
+      const eventHandler = (event: MessageEvent) => {
+        if (event.data && event.data.type) {
+          // Emit the event from the manager with kernel ID
+          // This structure matches the setupEventForwarding method for main thread kernels
+          super.emit(event.data.type, {
+            kernelId: id,
+            data: event.data.data
+          });
+        }
+      };
+      
+      // Listen for events from the worker with the new handler
+      port1.addEventListener('message', eventHandler);
+      port1.start();
+      
+      // Update the destroy function to clean up the new event handler
+      const originalDestroy = instance.destroy;
+      instance.destroy = async () => {
+        port1.removeEventListener('message', eventHandler);
+        port1.close();
+        return originalDestroy();
+      };
+    }
+    
+    // Store the kernel instance
+    this.kernels.set(id, instance);
+    
+    // Forward kernel events to manager (for main thread kernels)
+    this.setupEventForwarding(instance);
+    
+    // Initialize activity tracking
+    this.updateKernelActivity(id);
+    
+    // Set up inactivity timeout if specified and greater than 0
+    if (options.inactivityTimeout && options.inactivityTimeout > 0) {
+      console.log(`Setting up initial inactivity timeout for kernel ${id}: ${options.inactivityTimeout}ms`);
+      this.setupInactivityTimeout(id, options.inactivityTimeout);
+    } else if (options.inactivityTimeout === 0) {
+      console.log(`Inactivity timeout explicitly disabled for kernel ${id}`);
+    }
+    
+    // Setup handlers for stalled executions if maxExecutionTime is specified
+    if (options.maxExecutionTime && options.maxExecutionTime > 0) {
+      console.log(`Setting up execution monitoring for kernel ${id} with max execution time: ${options.maxExecutionTime}ms`);
+      this.setupStalledExecutionHandler(id);
+    }
+    
+    return id;
+  }
+  
+  /**
+   * Create a kernel on-demand (not from pool)
+   * @param id Kernel ID
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @param options Kernel options
+   * @returns Kernel ID
+   * @private
+   */
+  private async createOnDemandKernel(
+    id: string, 
+    mode: KernelMode, 
+    language: KernelLanguage, 
+    options: IManagerKernelOptions
+  ): Promise<string> {
     // Store options temporarily to be used in createWorkerKernel
     const tempInstance = {
       id,
@@ -811,6 +923,9 @@ export class KernelManager extends EventEmitter {
   }> {
     return Array.from(this.kernels.entries())
       .filter(([id]) => {
+        // Filter out pool kernels (temporary kernels with IDs starting with "pool-")
+        if (id.startsWith("pool-")) return false;
+        
         if (!namespace) return true;
         return id.startsWith(`${namespace}:`);
       })
@@ -1174,11 +1289,14 @@ export class KernelManager extends EventEmitter {
         let executionComplete = false;
         let executionResult: { success: boolean, result?: any, error?: Error } = { success: true };
         
+        console.log(`[MANAGER] Setting up event-based execution for kernel ${kernelId}`);
+        
         // Create a promise that will resolve when execution is complete
         const executionPromise = new Promise<{ success: boolean, result?: any, error?: Error }>((resolve) => {
           // Create event handlers
           const handleStreamEvent = (event: { kernelId: string, data: any }) => {
             if (event.kernelId === kernelId) {
+              console.log(`[MANAGER] Received stream event for kernel ${kernelId}:`, event.data);
               streamQueue.push({
                 type: 'stream',
                 data: event.data
@@ -1191,6 +1309,7 @@ export class KernelManager extends EventEmitter {
           
           const handleDisplayEvent = (event: { kernelId: string, data: any }) => {
             if (event.kernelId === kernelId) {
+              console.log(`[MANAGER] Received display event for kernel ${kernelId}:`, event.data);
               streamQueue.push({
                 type: 'display_data',
                 data: event.data
@@ -1203,6 +1322,7 @@ export class KernelManager extends EventEmitter {
           
           const handleResultEvent = (event: { kernelId: string, data: any }) => {
             if (event.kernelId === kernelId) {
+              console.log(`[MANAGER] Received result event for kernel ${kernelId}:`, event.data);
               streamQueue.push({
                 type: 'execute_result',
                 data: event.data
@@ -1233,6 +1353,8 @@ export class KernelManager extends EventEmitter {
             }
           };
           
+          console.log(`[MANAGER] Registering event handlers for kernel ${kernelId}`);
+          
           // Register all the event handlers
           super.on(KernelEvents.STREAM, handleStreamEvent);
           super.on(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
@@ -1240,15 +1362,18 @@ export class KernelManager extends EventEmitter {
           super.on(KernelEvents.EXECUTE_RESULT, handleResultEvent);
           super.on(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
           
+          console.log(`[MANAGER] Event handlers registered, starting execution for kernel ${kernelId}`);
+          
           // Execute the code
           // We need to wait for the execution to complete before returning the result
           try {
             // We know the execute method is available directly on the kernel object
             // because we mapped it in the IKernelInstance creation
             const executePromise = instance.kernel.execute(code, parent);
-            console.log(`[MANAGER] Execute called, got promise:`, typeof executePromise);
+            console.log(`[MANAGER] Execute called for kernel ${kernelId}, got promise:`, typeof executePromise);
             
             executePromise.then((result) => {
+              console.log(`[MANAGER] Execute completed for kernel ${kernelId} with result:`, result);
               executionComplete = true;
               executionResult = result;
               
@@ -1256,6 +1381,7 @@ export class KernelManager extends EventEmitter {
               this.updateKernelActivity(kernelId);
               
               // Cleanup event handlers
+              console.log(`[MANAGER] Cleaning up event handlers for kernel ${kernelId}`);
               super.off(KernelEvents.STREAM, handleStreamEvent);
               super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
               super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
@@ -1264,7 +1390,7 @@ export class KernelManager extends EventEmitter {
               
               resolve(result);
             }).catch((error) => {
-              console.error(`[MANAGER] Error in execute:`, error);
+              console.error(`[MANAGER] Error in execute for kernel ${kernelId}:`, error);
               executionComplete = true;
               const errorResult = {
                 success: false,
@@ -1276,7 +1402,7 @@ export class KernelManager extends EventEmitter {
               this.updateKernelActivity(kernelId);
               
               // Cleanup event handlers
-              console.log(`[MANAGER] Cleaning up event handlers after error`);
+              console.log(`[MANAGER] Cleaning up event handlers after error for kernel ${kernelId}`);
               super.off(KernelEvents.STREAM, handleStreamEvent);
               super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
               super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
@@ -1286,7 +1412,7 @@ export class KernelManager extends EventEmitter {
               resolve(errorResult);
             });
           } catch (error) {
-            console.error(`[MANAGER] Direct error calling execute:`, error);
+            console.error(`[MANAGER] Direct error calling execute for kernel ${kernelId}:`, error);
             executionComplete = true;
             const errorResult = {
               success: false,
@@ -1312,12 +1438,15 @@ export class KernelManager extends EventEmitter {
         const startTime = Date.now();
         const timeout = 60000; // 60 second timeout
         
+        console.log(`[MANAGER] Starting event monitoring loop for kernel ${kernelId}`);
+        
         // Monitor the stream queue and yield results
         while ((!executionComplete || streamQueue.length > 0) && 
                (Date.now() - startTime < timeout)) {
           // If there are items in the queue, yield them
           if (streamQueue.length > 0) {
             const event = streamQueue.shift();
+            console.log(`[MANAGER] Yielding event for kernel ${kernelId}:`, event);
             yield event;
             continue;
           }
@@ -1327,6 +1456,8 @@ export class KernelManager extends EventEmitter {
             await new Promise(resolve => setTimeout(resolve, 10));
           }
         }
+        
+        console.log(`[MANAGER] Event monitoring completed for kernel ${kernelId}. Complete: ${executionComplete}, Queue length: ${streamQueue.length}`);
         
         // Handle timeout
         if (!executionComplete && Date.now() - startTime >= timeout) {
@@ -1341,6 +1472,7 @@ export class KernelManager extends EventEmitter {
         
         // Wait for the final result
         const result = await executionPromise;
+        console.log(`[MANAGER] Final execution result for kernel ${kernelId}:`, result);
         
         // Complete execution tracking
         this.completeExecution(kernelId, executionId);

@@ -15,11 +15,22 @@ let eventPort: MessagePort | null = null;
 // Store kernel initialization options
 let kernelOptions: IKernelOptions = {};
 
+// Track current event listeners for cleanup
+let currentEventListeners: Map<string, (data: any) => void> = new Map();
+
 // Listen for messages to set up the event port and initialize kernel
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SET_EVENT_PORT" && event.data?.port) {
+    // Clean up old event listeners and port before setting up new ones
+    cleanupEventForwarding();
+    
+    // Set the new port
     eventPort = event.data.port;
-    setupEventForwarding();
+    
+    // If the kernel is already initialized, set up event forwarding immediately
+    if (kernel.isInitialized()) {
+      setupEventForwarding();
+    }
   } else if (event.data?.type === "INITIALIZE_KERNEL") {
     // Save the options for kernel initialization
     kernelOptions = event.data.options || {};
@@ -44,8 +55,10 @@ self.addEventListener("message", (event) => {
 // Initialize the kernel with provided options
 async function initializeKernel(options: IKernelOptions): Promise<void> {
   try {
-    console.log("Initializing kernel in worker with options:", options);
     await kernel.initialize(options);
+    
+    // Set up event forwarding AFTER kernel is initialized
+    setupEventForwarding();
     
     if (eventPort) {
       eventPort.postMessage({
@@ -59,23 +72,51 @@ async function initializeKernel(options: IKernelOptions): Promise<void> {
   }
 }
 
+// Clean up old event listeners and port
+function cleanupEventForwarding() {
+  if (currentEventListeners.size > 0) {
+    // Remove all current event listeners
+    for (const [eventType, listener] of currentEventListeners.entries()) {
+      (kernel as unknown as EventEmitter).off(eventType, listener);
+    }
+    
+    // Clear the listeners map
+    currentEventListeners.clear();
+  }
+  
+  // Close the old port if it exists
+  if (eventPort) {
+    eventPort.close();
+    eventPort = null;
+  }
+}
+
 // Set up event forwarding from kernel to main thread
 function setupEventForwarding() {
-  if (!eventPort) return;
+  if (!eventPort) {
+    console.error("[WORKER] Cannot set up event forwarding: no event port available");
+    return;
+  }
 
   // Forward all kernel events to the main thread
   Object.values(KernelEvents).forEach((eventType) => {
-    // Cast kernel to EventEmitter to access the 'on' method
-    (kernel as unknown as EventEmitter).on(eventType, (data: any) => {
+    // Create a listener function for this event type
+    const listener = (data: any) => {
       if (eventPort) {
         // Send just the event type and raw data
         // This matches the structure used in main thread mode
         eventPort.postMessage({
           type: eventType,
-          data: data // Keep data in same format as direct kernel events
+          data: data
         });
       }
-    });
+    };
+    
+    // Store the listener for later cleanup
+    currentEventListeners.set(eventType, listener);
+    
+    // Add the listener to the kernel
+    (kernel as unknown as EventEmitter).on(eventType, listener);
   });
 }
 
