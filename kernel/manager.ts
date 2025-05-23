@@ -576,7 +576,7 @@ export class KernelManager extends EventEmitter {
         
         if (poolKernelPromise) {
           console.log(`Using kernel promise from pool for ${id} (${mode}-${language})`);
-          return this.setupPoolKernelFromPromise(poolKernelPromise, id, options);
+          return await this.setupPoolKernelFromPromise(poolKernelPromise, id, options);
         }
         
         // Pool is empty, but this type should be pooled
@@ -597,7 +597,7 @@ export class KernelManager extends EventEmitter {
             }, 0);
           }
           
-          return this.setupPoolKernelFromPromise(newKernelPromise, id, options);
+          return await this.setupPoolKernelFromPromise(newKernelPromise, id, options);
         } catch (error) {
           console.error(`Failed to create kernel promise for exhausted pool: ${error}`);
           // Fall through to on-demand creation as last resort
@@ -608,7 +608,7 @@ export class KernelManager extends EventEmitter {
         const poolKernelPromise = this.getFromPool(mode, language);
         if (poolKernelPromise) {
           console.log(`Using available kernel promise from pool for ${id} (${mode}-${language}) - not configured for pooling`);
-          return this.setupPoolKernelFromPromise(poolKernelPromise, id, options);
+          return await this.setupPoolKernelFromPromise(poolKernelPromise, id, options);
         }
       }
     }
@@ -623,16 +623,18 @@ export class KernelManager extends EventEmitter {
    * @param poolKernelPromise Kernel promise from pool
    * @param id New kernel ID
    * @param options Kernel options
-   * @returns Kernel ID (returned immediately while kernel is being prepared)
+   * @returns Kernel ID (returned after kernel is ready)
    * @private
    */
-  private setupPoolKernelFromPromise(
+  private async setupPoolKernelFromPromise(
     poolKernelPromise: Promise<IKernelInstance>, 
     id: string, 
     options: IManagerKernelOptions
-  ): string {
-    // Handle the promise asynchronously
-    poolKernelPromise.then(poolKernel => {
+  ): Promise<string> {
+    try {
+      // Wait for the pool kernel to be ready
+      const poolKernel = await poolKernelPromise;
+      
       // Reassign the pool kernel with the new ID and options
       const instance = this.reassignPoolKernel(poolKernel, id, options);
       
@@ -701,7 +703,8 @@ export class KernelManager extends EventEmitter {
       }
       
       console.log(`Kernel ${id} is now ready and registered`);
-    }).catch(error => {
+      return id;
+    } catch (error) {
       console.error(`Error setting up pool kernel ${id}:`, error);
       // Emit an error event for this kernel
       super.emit(KernelEvents.EXECUTE_ERROR, {
@@ -712,10 +715,8 @@ export class KernelManager extends EventEmitter {
           traceback: [error.stack || error.message]
         }
       });
-    });
-    
-    // Return the ID immediately, even though the kernel is still being prepared
-    return id;
+      throw error; // Re-throw to let the caller handle it
+    }
   }
 
   /**
