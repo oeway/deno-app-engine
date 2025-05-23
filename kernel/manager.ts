@@ -28,6 +28,26 @@ interface WorkerOptions {
   };
 }
 
+// Interface for kernel pool configuration
+export interface IKernelPoolConfig {
+  enabled: boolean;
+  poolSize: number; // Number of kernels to keep ready per configuration
+  autoRefill: boolean; // Whether to automatically refill the pool when kernels are taken
+  preloadConfigs: Array<{
+    mode: KernelMode;
+    language: KernelLanguage;
+  }>; // Configurations to preload in the pool
+}
+
+// Interface for kernel manager options
+export interface IKernelManagerOptions {
+  pool?: IKernelPoolConfig;
+  allowedKernelTypes?: Array<{
+    mode: KernelMode;
+    language: KernelLanguage;
+  }>; // Restrict which kernel types can be created
+}
+
 // Interface for kernel instance
 export interface IKernelInstance {
   id: string;
@@ -37,6 +57,7 @@ export interface IKernelInstance {
   worker?: Worker;
   created: Date;
   options: IManagerKernelOptions;
+  isFromPool?: boolean; // Track if this kernel came from the pool
   destroy(): Promise<void>;
 }
 
@@ -88,11 +109,346 @@ export class KernelManager extends EventEmitter {
   // Track execution timeouts for detecting stuck/dead kernels
   private executionTimeouts: Map<string, Map<string, number>> = new Map();
   
-  constructor() {
+  // Pool management
+  private pool: Map<string, IKernelInstance[]> = new Map();
+  private poolConfig: IKernelPoolConfig;
+  private isPreloading: boolean = false;
+  
+  // Allowed kernel types configuration
+  private allowedKernelTypes: Array<{
+    mode: KernelMode;
+    language: KernelLanguage;
+  }>;
+  
+  constructor(options: IKernelManagerOptions = {}) {
     super();
     super.setMaxListeners(100); // Allow many listeners for kernel events
+    
+    // Set default allowed kernel types (worker mode only for security)
+    this.allowedKernelTypes = options.allowedKernelTypes || [
+      { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+    ];
+    
+    // Initialize pool configuration with defaults based on allowed types
+    const defaultPreloadConfigs = this.allowedKernelTypes.filter(type => 
+      type.language === KernelLanguage.PYTHON // Only preload Python kernels by default
+    );
+    
+    this.poolConfig = {
+      enabled: false,
+      poolSize: 2,
+      autoRefill: true,
+      preloadConfigs: defaultPreloadConfigs,
+      ...options.pool
+    };
+    
+    // Validate that pool preload configs are within allowed types
+    if (this.poolConfig.preloadConfigs) {
+      this.poolConfig.preloadConfigs = this.poolConfig.preloadConfigs.filter(config => {
+        const isAllowed = this.isKernelTypeAllowed(config.mode, config.language);
+        if (!isAllowed) {
+          console.warn(`Pool preload config ${config.mode}-${config.language} is not in allowedKernelTypes, skipping`);
+        }
+        return isAllowed;
+      });
+    }
+    
+    // Start preloading if pool is enabled
+    if (this.poolConfig.enabled) {
+      this.preloadPool().catch(error => {
+        console.error("Error preloading kernel pool:", error);
+      });
+    }
   }
   
+  
+  /**
+   * Generate a pool key for a given mode and language combination
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @returns Pool key string
+   * @private
+   */
+  private getPoolKey(mode: KernelMode, language: KernelLanguage): string {
+    return `${mode}-${language}`;
+  }
+  
+  /**
+   * Get a kernel from the pool if available
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @returns Kernel instance or null if none available
+   * @private
+   */
+  private getFromPool(mode: KernelMode, language: KernelLanguage): IKernelInstance | null {
+    if (!this.poolConfig.enabled) {
+      return null;
+    }
+    
+    const poolKey = this.getPoolKey(mode, language);
+    const poolKernels = this.pool.get(poolKey);
+    
+    if (!poolKernels || poolKernels.length === 0) {
+      return null;
+    }
+    
+    // Remove and return the first kernel from the pool
+    const kernel = poolKernels.shift()!;
+    
+    // Mark as taken from pool
+    kernel.isFromPool = true;
+    
+    // Trigger background refill if auto-refill is enabled
+    if (this.poolConfig.autoRefill) {
+      setTimeout(() => {
+        this.refillPool(mode, language).catch(error => {
+          console.error(`Error refilling pool for ${poolKey}:`, error);
+        });
+      }, 0);
+    }
+    
+    return kernel;
+  }
+  
+  /**
+   * Add a kernel to the pool
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @param kernel Kernel instance
+   * @private
+   */
+  private addToPool(mode: KernelMode, language: KernelLanguage, kernel: IKernelInstance): void {
+    if (!this.poolConfig.enabled) {
+      return;
+    }
+    
+    const poolKey = this.getPoolKey(mode, language);
+    
+    if (!this.pool.has(poolKey)) {
+      this.pool.set(poolKey, []);
+    }
+    
+    const poolKernels = this.pool.get(poolKey)!;
+    
+    // Only add if we haven't reached the pool size limit
+    if (poolKernels.length < this.poolConfig.poolSize) {
+      poolKernels.push(kernel);
+    } else {
+      // Pool is full, destroy the excess kernel
+      kernel.destroy().catch(error => {
+        console.error("Error destroying excess pool kernel:", error);
+      });
+    }
+  }
+  
+  /**
+   * Refill the pool for a specific configuration
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @private
+   */
+  private async refillPool(mode: KernelMode, language: KernelLanguage): Promise<void> {
+    if (!this.poolConfig.enabled) {
+      return;
+    }
+    
+    const poolKey = this.getPoolKey(mode, language);
+    const poolKernels = this.pool.get(poolKey) || [];
+    const needed = this.poolConfig.poolSize - poolKernels.length;
+    
+    if (needed <= 0) {
+      return;
+    }
+    
+    console.log(`Refilling pool for ${poolKey}, creating ${needed} kernel(s)`);
+    
+    // Create kernels one by one to avoid overwhelming the system
+    for (let i = 0; i < needed; i++) {
+      try {
+        const poolKernel = await this.createPoolKernel(mode, language);
+        this.addToPool(mode, language, poolKernel);
+      } catch (error) {
+        console.error(`Error creating pool kernel for ${poolKey}:`, error);
+        // Continue trying to create other kernels
+      }
+    }
+  }
+  
+  /**
+   * Create a kernel specifically for the pool
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @returns Kernel instance
+   * @private
+   */
+  private async createPoolKernel(mode: KernelMode, language: KernelLanguage): Promise<IKernelInstance> {
+    // Generate a temporary ID for the pool kernel
+    const tempId = `pool-${crypto.randomUUID()}`;
+    
+    // Create kernel with minimal configuration
+    const options: IManagerKernelOptions = {
+      mode,
+      lang: language
+    };
+    
+    // Store options temporarily - but don't store incomplete instance in kernels map
+    // Instead, we'll pass the options directly to the creation methods
+    let instance: IKernelInstance;
+    
+    try {
+      if (mode === KernelMode.MAIN_THREAD) {
+        // For main thread, we need to temporarily store the instance for createMainThreadKernel
+        const tempInstance = {
+          id: tempId,
+          options,
+          mode,
+          language
+        };
+        this.kernels.set(tempId, tempInstance as unknown as IKernelInstance);
+        
+        try {
+          instance = await this.createMainThreadKernel(tempId);
+        } finally {
+          // Always clean up the temporary instance
+          this.kernels.delete(tempId);
+        }
+      } else {
+        // For worker mode, we need to temporarily store the instance for createWorkerKernel
+        const tempInstance = {
+          id: tempId,
+          options,
+          mode,
+          language
+        };
+        this.kernels.set(tempId, tempInstance as unknown as IKernelInstance);
+        
+        try {
+          instance = await this.createWorkerKernel(tempId);
+        } finally {
+          // Always clean up the temporary instance
+          this.kernels.delete(tempId);
+        }
+      }
+    } catch (error) {
+      // Ensure cleanup on any error
+      this.kernels.delete(tempId);
+      throw error;
+    }
+    
+    return instance;
+  }
+  
+  /**
+   * Preload the kernel pool with configured kernel types
+   * @private
+   */
+  private async preloadPool(): Promise<void> {
+    if (!this.poolConfig.enabled || this.isPreloading) {
+      return;
+    }
+    
+    this.isPreloading = true;
+    console.log("Preloading kernel pool...");
+    
+    try {
+      // Preload kernels for each configured type
+      for (const config of this.poolConfig.preloadConfigs) {
+        try {
+          console.log(`Preloading ${config.mode}-${config.language} kernels...`);
+          await this.refillPool(config.mode, config.language);
+        } catch (error) {
+          console.error(`Error preloading ${config.mode}-${config.language}:`, error);
+          // Continue with other configurations
+        }
+      }
+      
+      console.log("Kernel pool preloading completed");
+    } catch (error) {
+      console.error("Error during kernel pool preloading:", error);
+    } finally {
+      this.isPreloading = false;
+    }
+  }
+  
+  /**
+   * Check if a kernel request can use the pool
+   * @param options Kernel creation options
+   * @returns True if the request can use pool
+   * @private
+   */
+  private canUsePool(options: IManagerKernelOptions): boolean {
+    // Don't use pool if it's disabled
+    if (!this.poolConfig.enabled) {
+      return false;
+    }
+    
+    // Don't use pool if custom filesystem or permissions are specified
+    if (options.filesystem || options.deno?.permissions) {
+      return false;
+    }
+    
+    // Don't use pool if custom timeouts are specified
+    if (options.inactivityTimeout !== undefined || options.maxExecutionTime !== undefined) {
+      return false;
+    }
+    
+    return true;
+  }
+  
+  /**
+   * Reassign a pool kernel with new ID and options
+   * @param poolKernel Kernel from pool
+   * @param newId New kernel ID
+   * @param options Kernel options
+   * @returns Updated kernel instance
+   * @private
+   */
+  private reassignPoolKernel(
+    poolKernel: IKernelInstance, 
+    newId: string, 
+    options: IManagerKernelOptions
+  ): IKernelInstance {
+    // Create a new instance object explicitly to avoid spread operator issues
+    const updatedInstance: IKernelInstance = {
+      id: newId,
+      kernel: poolKernel.kernel,
+      mode: poolKernel.mode,
+      language: poolKernel.language,
+      worker: poolKernel.worker,
+      created: new Date(), // Update creation time
+      options: { ...poolKernel.options, ...options },
+      isFromPool: true,
+      destroy: poolKernel.destroy // Preserve the original destroy function
+    };
+    
+    // Verify the destroy function is properly set
+    if (typeof updatedInstance.destroy !== 'function') {
+      console.error('Failed to preserve destroy function during pool kernel reassignment');
+      console.error('poolKernel.destroy type:', typeof poolKernel.destroy);
+      console.error('updatedInstance.destroy type:', typeof updatedInstance.destroy);
+      throw new Error(`Failed to preserve destroy function during pool kernel reassignment`);
+    }
+    
+    return updatedInstance;
+  }
+  
+  /**
+   * Get pool statistics for debugging/monitoring
+   * @returns Pool statistics
+   */
+  public getPoolStats(): Record<string, { available: number; total: number }> {
+    const stats: Record<string, { available: number; total: number }> = {};
+    
+    for (const [poolKey, kernels] of this.pool.entries()) {
+      stats[poolKey] = {
+        available: kernels.length,
+        total: this.poolConfig.poolSize
+      };
+    }
+    
+    return stats;
+  }
   
   /**
    * Create a new kernel instance
@@ -116,6 +472,13 @@ export class KernelManager extends EventEmitter {
     const mode = options.mode || KernelMode.WORKER;
     const language = options.lang || KernelLanguage.PYTHON;
     
+    // Check if the requested kernel type is allowed
+    if (!this.isKernelTypeAllowed(mode, language)) {
+      throw new Error(`Kernel type ${mode}-${language} is not allowed. Allowed types: ${
+        this.allowedKernelTypes.map(t => `${t.mode}-${t.language}`).join(', ')
+      }`);
+    }
+    
     // Apply namespace prefix if provided
     const id = options.namespace ? `${options.namespace}:${baseId}` : baseId;
     
@@ -123,6 +486,46 @@ export class KernelManager extends EventEmitter {
     if (this.kernels.has(id)) {
       throw new Error(`Kernel with ID ${id} already exists`);
     }
+    
+    // Try to get from pool if possible
+    if (this.canUsePool(options)) {
+      const poolKernel = this.getFromPool(mode, language);
+      
+      if (poolKernel) {
+        console.log(`Using kernel from pool for ${id} (${mode}-${language})`);
+        
+        // Reassign the pool kernel with the new ID and options
+        const instance = this.reassignPoolKernel(poolKernel, id, options);
+        
+        // Store the kernel instance
+        this.kernels.set(id, instance);
+        
+        // Forward kernel events to manager (for main thread kernels)
+        this.setupEventForwarding(instance);
+        
+        // Initialize activity tracking
+        this.updateKernelActivity(id);
+        
+        // Set up inactivity timeout if specified and greater than 0
+        if (options.inactivityTimeout && options.inactivityTimeout > 0) {
+          console.log(`Setting up initial inactivity timeout for kernel ${id}: ${options.inactivityTimeout}ms`);
+          this.setupInactivityTimeout(id, options.inactivityTimeout);
+        } else if (options.inactivityTimeout === 0) {
+          console.log(`Inactivity timeout explicitly disabled for kernel ${id}`);
+        }
+        
+        // Setup handlers for stalled executions if maxExecutionTime is specified
+        if (options.maxExecutionTime && options.maxExecutionTime > 0) {
+          console.log(`Setting up execution monitoring for kernel ${id} with max execution time: ${options.maxExecutionTime}ms`);
+          this.setupStalledExecutionHandler(id);
+        }
+        
+        return id;
+      }
+    }
+    
+    // Fall back to creating a new kernel on-demand
+    console.log(`Creating new kernel on-demand for ${id} (${mode}-${language})`);
     
     // Store options temporarily to be used in createWorkerKernel
     const tempInstance = {
@@ -452,6 +855,11 @@ export class KernelManager extends EventEmitter {
       throw new Error(`Kernel with ID ${id} not found`);
     }
     
+    // Verify the destroy function exists
+    if (typeof instance.destroy !== 'function') {
+      throw new Error(`Kernel ${id} is missing destroy function (type: ${typeof instance.destroy})`);
+    }
+    
     // Clear any inactivity timer
     this.clearInactivityTimeout(id);
     
@@ -492,8 +900,50 @@ export class KernelManager extends EventEmitter {
         return id.startsWith(`${namespace}:`);
       });
     
-    // Destroy all kernels
-    await Promise.all(ids.map(id => this.destroyKernel(id)));
+    // Destroy all kernels, but skip incomplete instances
+    const destroyPromises = ids.map(async (id) => {
+      const instance = this.kernels.get(id);
+      if (!instance || typeof instance.destroy !== 'function') {
+        console.warn(`Skipping incomplete kernel instance ${id} during destroyAll`);
+        // Just remove it from the map
+        this.kernels.delete(id);
+        return;
+      }
+      return this.destroyKernel(id);
+    });
+    
+    await Promise.all(destroyPromises);
+    
+    // If no namespace specified, also clean up the pool
+    if (!namespace) {
+      await this.destroyPool();
+    }
+  }
+  
+  /**
+   * Destroy all kernels in the pool
+   * @private
+   */
+  private async destroyPool(): Promise<void> {
+    console.log("Destroying kernel pool...");
+    
+    const destroyPromises: Promise<void>[] = [];
+    
+    for (const [poolKey, kernels] of this.pool.entries()) {
+      console.log(`Destroying ${kernels.length} kernels from pool ${poolKey}`);
+      
+      for (const kernel of kernels) {
+        destroyPromises.push(kernel.destroy());
+      }
+    }
+    
+    // Wait for all pool kernels to be destroyed
+    await Promise.all(destroyPromises);
+    
+    // Clear the pool
+    this.pool.clear();
+    
+    console.log("Kernel pool destroyed");
   }
   
   /**
@@ -1334,5 +1784,29 @@ export class KernelManager extends EventEmitter {
         error: error instanceof Error ? error : new Error(String(error))
       };
     }
+  }
+
+  /**
+   * Check if a kernel type is allowed
+   * @param mode Kernel mode
+   * @param language Kernel language
+   * @returns True if the kernel type is allowed
+   * @private
+   */
+  private isKernelTypeAllowed(mode: KernelMode, language: KernelLanguage): boolean {
+    return this.allowedKernelTypes.some(type => 
+      type.mode === mode && type.language === language
+    );
+  }
+  
+  /**
+   * Get the list of allowed kernel types
+   * @returns Array of allowed kernel type configurations
+   */
+  public getAllowedKernelTypes(): Array<{
+    mode: KernelMode;
+    language: KernelLanguage;
+  }> {
+    return [...this.allowedKernelTypes]; // Return a copy to prevent modification
   }
 }

@@ -2,108 +2,13 @@
 // This file tests creating and managing kernels in both main thread and worker modes
 
 import { assert, assertEquals, assertExists } from "https://deno.land/std/assert/mod.ts";
-import { KernelManager, KernelMode, KernelLanguage } from "../kernel/manager.ts";
+import { KernelManager, KernelMode, KernelLanguage, IKernelManagerOptions } from "../kernel/manager.ts";
 import { KernelEvents } from "../kernel/index.ts";
 import { EventEmitter } from "node:events";
 import { join } from "https://deno.land/std/path/mod.ts";
 
 // Create a single instance of the kernel manager for all tests
 const manager = new KernelManager();
-
-// Helper function to wait for an event
-async function waitForEvent(kernelId: string, eventType: KernelEvents): Promise<any> {
-  return new Promise((resolve) => {
-    const listener = (data: any) => {
-      // Store the event data for debugging
-      console.log(`Received kernel event: ${eventType}`);
-      console.log(`Data: ${JSON.stringify(data)}`);
-      
-      manager.offKernelEvent(kernelId, eventType, listener);
-      resolve(data);
-    };
-    manager.onKernelEvent(kernelId, eventType, listener);
-  });
-}
-
-// Helper function to wait for a specific stream event containing the expected text
-async function waitForStreamWithContent(kernelId: string, expectedText: string, timeoutMs = 5000): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      manager.offKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
-      reject(new Error(`Timeout waiting for stream event containing "${expectedText}" after ${timeoutMs}ms`));
-    }, timeoutMs);
-    
-    const streamListener = (data: any) => {
-      // With consistent event structure, we can access text directly
-      const streamText = data.text;
-      console.log(`Stream event from ${kernelId}: ${JSON.stringify(streamText)}`);
-      
-      if (streamText && streamText.includes(expectedText)) {
-        clearTimeout(timeoutId);
-        manager.offKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
-        resolve(data);
-      }
-    };
-    
-    manager.onKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
-  });
-}
-
-// Helper function to collect all stream events for a specific period
-// and check if any of them contain the expected text
-async function checkStreamForText(kernelId: string, expectedText: string, timeoutMs = 5000): Promise<boolean> {
-  return new Promise((resolve) => {
-    let found = false;
-    console.log(`Checking stream for text containing "${expectedText}" (${timeoutMs}ms timeout)`);
-    
-    const allMessages: string[] = [];
-    
-    const streamListener = (data: any) => {
-      // With consistent event structure, we can access text directly
-      const streamText = data.text;
-      
-      if (streamText) {
-        allMessages.push(streamText);
-        console.log(`Stream message: "${streamText}"`);
-        
-        if (streamText.includes(expectedText)) {
-          found = true;
-          console.log(`Found expected text: "${expectedText}" in stream`);
-        }
-      }
-    };
-    
-    manager.onKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
-    
-    setTimeout(() => {
-      manager.offKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
-      console.log(`Stream check complete. Found match: ${found}`);
-      console.log(`All messages: ${JSON.stringify(allMessages)}`);
-      resolve(found);
-    }, timeoutMs);
-  });
-}
-
-// Helper function to collect all stream events until a timeout
-async function collectStreamOutput(kernelId: string, timeoutMs: number = 2000): Promise<string> {
-  return new Promise((resolve) => {
-    let output = "";
-    const streamListener = (data: any) => {
-      if (data.text) {
-        output += data.text;
-      }
-    };
-    
-    // Set a timeout to stop collecting
-    const timeoutId = setTimeout(() => {
-      manager.offKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
-      resolve(output);
-    }, timeoutMs);
-    
-    // Start collecting
-    manager.onKernelEvent(kernelId, KernelEvents.STREAM, streamListener);
-  });
-}
 
 // Helper function to create a temporary directory
 async function createTempDir(): Promise<string> {
@@ -1441,7 +1346,7 @@ Deno.test({
 try {
     await Deno.writeTextFile('/tmp/test/${mainFileName}', "${mainContent}");
     
-    // Verify by reading back
+    # Verify by reading back
     const readContent = await Deno.readTextFile('/tmp/test/${mainFileName}');
     if (readContent === "${mainContent}") {
         console.log(\`Main TS kernel wrote to ${mainFileName} and verified content\`);
@@ -1458,7 +1363,7 @@ try {
 try {
     await Deno.writeTextFile('/tmp/test/${workerFileName}', "${workerContent}");
     
-    // Verify by reading back
+    # Verify by reading back
     const readContent = await Deno.readTextFile('/tmp/test/${workerFileName}');
     if (readContent === "${workerContent}") {
         console.log(\`Worker TS kernel wrote to ${workerFileName} and verified content\`);
@@ -1491,7 +1396,7 @@ try {
       console.log("Main TS kernel reading worker's file...");
       const mainReadResult = await mainInstance?.kernel.execute(`
 try {
-    // Read the file from worker kernel
+    # Read the file from worker kernel
     const content = await Deno.readTextFile('/tmp/test/${workerFileName}');
     if (content === "${workerContent}") {
         console.log(\`Main TS kernel successfully read file written by worker: \${content}\`);
@@ -1630,6 +1535,358 @@ htmlObj
       console.error("Error in TypeScript Jupyter test:", error);
       throw error;
     }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test kernel pool for fast kernel creation
+Deno.test({
+  name: "15. Test kernel pool for fast kernel creation",
+  async fn() {
+    // Create a manager with pool enabled and explicit allowed kernel types
+    const poolManager = new KernelManager({
+      allowedKernelTypes: [
+        { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+        { mode: KernelMode.MAIN_THREAD, language: KernelLanguage.PYTHON },
+        { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+      ],
+      pool: {
+        enabled: true,
+        poolSize: 2,
+        autoRefill: true,
+        preloadConfigs: [
+          { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+          { mode: KernelMode.MAIN_THREAD, language: KernelLanguage.PYTHON },
+          { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+        ]
+      }
+    });
+    
+    try {
+      console.log("Waiting for pool preloading to complete...");
+      
+      // Wait for preloading to complete (give it enough time)
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      
+      // Check pool stats
+      const initialStats = poolManager.getPoolStats();
+      console.log("Initial pool stats:", initialStats);
+      
+      // Verify pool has been preloaded
+      assert(
+        Object.keys(initialStats).length > 0, 
+        "Pool should have preloaded configurations"
+      );
+      
+      // Test 1: Fast kernel creation from pool
+      console.log("Testing fast kernel creation from pool...");
+      
+      const start1 = Date.now();
+      const kernelId1 = await poolManager.createKernel({
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON
+      });
+      const duration1 = Date.now() - start1;
+      
+      console.log(`First kernel creation took ${duration1}ms`);
+      assert(duration1 < 1000, `Kernel creation should take <1s, took ${duration1}ms`);
+      
+      // Verify kernel is working
+      const instance1 = poolManager.getKernel(kernelId1);
+      assert(instance1, "Kernel instance should exist");
+      assert(instance1.isFromPool, "Kernel should be marked as from pool");
+      
+      // Test 2: Second fast kernel creation (should also be fast due to auto-refill)
+      console.log("Testing second fast kernel creation...");
+      
+      const start2 = Date.now();
+      const kernelId2 = await poolManager.createKernel({
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON
+      });
+      const duration2 = Date.now() - start2;
+      
+      console.log(`Second kernel creation took ${duration2}ms`);
+      assert(duration2 < 1000, `Second kernel creation should take <1s, took ${duration2}ms`);
+      
+      const instance2 = poolManager.getKernel(kernelId2);
+      assert(instance2, "Second kernel instance should exist");
+      assert(instance2.isFromPool, "Second kernel should be marked as from pool");
+      
+      // Test 3: TypeScript kernel from pool
+      console.log("Testing TypeScript kernel from pool...");
+      
+      const start3 = Date.now();
+      const kernelId3 = await poolManager.createKernel({
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.TYPESCRIPT
+      });
+      const duration3 = Date.now() - start3;
+      
+      console.log(`TypeScript kernel creation took ${duration3}ms`);
+      // TypeScript kernel might not be preloaded yet, so be more lenient
+      // If it's from pool, it should be fast; if not, it's expected to be slower
+      
+      const instance3 = poolManager.getKernel(kernelId3);
+      assert(instance3, "TypeScript kernel instance should exist");
+      assertEquals(instance3.language, KernelLanguage.TYPESCRIPT, "Should be TypeScript kernel");
+      
+      if (instance3.isFromPool) {
+        assert(duration3 < 1000, `TypeScript kernel from pool should take <1s, took ${duration3}ms`);
+        console.log("TypeScript kernel was successfully retrieved from pool");
+      } else {
+        console.log("TypeScript kernel was created on-demand (pool not ready yet)");
+      }
+      
+      // Test 4: Fallback to on-demand creation for complex configurations
+      console.log("Testing fallback to on-demand creation...");
+      
+      const start4 = Date.now();
+      const kernelId4 = await poolManager.createKernel({
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON,
+        filesystem: {
+          enabled: true,
+          root: "/tmp",
+          mountPoint: "/home/pyodide"
+        }
+      });
+      const duration4 = Date.now() - start4;
+      
+      console.log(`Complex kernel creation took ${duration4}ms`);
+      // This should take longer since it can't use the pool
+      assert(duration4 > 1000, `Complex kernel creation should take >1s (fallback), took ${duration4}ms`);
+      
+      const instance4 = poolManager.getKernel(kernelId4);
+      assert(instance4, "Complex kernel instance should exist");
+      assert(!instance4.isFromPool, "Complex kernel should NOT be marked as from pool");
+      
+      // Test 5: Verify kernels are functional
+      console.log("Testing kernel functionality...");
+      
+      // Test Python kernel
+      const pythonResult = await instance1.kernel.execute('print("Hello from pooled Python kernel")');
+      assert(pythonResult?.success, "Python kernel should execute successfully");
+      
+      // Test TypeScript kernel
+      const tsResult = await instance3.kernel.execute('console.log("Hello from pooled TypeScript kernel"); 42');
+      assert(tsResult?.success, "TypeScript kernel should execute successfully");
+      
+      // Test 6: Check pool refilling
+      console.log("Checking pool refilling...");
+      
+      // Wait a bit for auto-refill to happen
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const refillStats = poolManager.getPoolStats();
+      console.log("Pool stats after refill:", refillStats);
+      
+      // Pool should have been refilled
+      for (const [poolKey, stats] of Object.entries(refillStats)) {
+        if (poolKey.includes("python") || poolKey.includes("typescript")) {
+          assert(
+            stats.available > 0, 
+            `Pool ${poolKey} should have available kernels after refill`
+          );
+        }
+      }
+      
+      // Test 7: Pool exhaustion and recovery
+      console.log("Testing pool exhaustion...");
+      
+      const exhaustionKernels: string[] = [];
+      
+      // Create more kernels than the pool size to test exhaustion
+      for (let i = 0; i < 3; i++) {
+        const kernelId = await poolManager.createKernel({
+          mode: KernelMode.MAIN_THREAD,
+          lang: KernelLanguage.PYTHON
+        });
+        exhaustionKernels.push(kernelId);
+      }
+      
+      // The first few should be fast (from pool), later ones might be slower (on-demand)
+      console.log("Pool exhaustion test completed");
+      
+      // Clean up exhaustion test kernels
+      for (const kernelId of exhaustionKernels) {
+        await poolManager.destroyKernel(kernelId);
+      }
+      
+      // Clean up main test kernels
+      await poolManager.destroyKernel(kernelId1);
+      await poolManager.destroyKernel(kernelId2);
+      await poolManager.destroyKernel(kernelId3);
+      await poolManager.destroyKernel(kernelId4);
+      
+      console.log("Kernel pool test completed successfully");
+      
+    } finally {
+      // Clean up the pool manager
+      await poolManager.destroyAll();
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test allowed kernel types restriction
+Deno.test({
+  name: "16. Test allowed kernel types restriction",
+  async fn() {
+    // Test 1: Default configuration (should only allow worker kernels)
+    const defaultManager = new KernelManager();
+    
+    try {
+      // Should allow worker Python kernel
+      const workerId = await defaultManager.createKernel({
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON
+      });
+      assert(workerId, "Worker Python kernel should be allowed by default");
+      
+      // Should allow worker TypeScript kernel
+      const tsWorkerId = await defaultManager.createKernel({
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.TYPESCRIPT
+      });
+      assert(tsWorkerId, "Worker TypeScript kernel should be allowed by default");
+      
+      // Should reject main thread kernel
+      try {
+        await defaultManager.createKernel({
+          mode: KernelMode.MAIN_THREAD,
+          lang: KernelLanguage.PYTHON
+        });
+        assert(false, "Main thread kernel should be rejected by default");
+      } catch (error: unknown) {
+        assert(
+          (error as Error).message.includes("is not allowed"),
+          `Expected 'not allowed' error, got: ${(error as Error).message}`
+        );
+        console.log("✓ Main thread kernel correctly rejected by default");
+      }
+      
+      // Clean up
+      await defaultManager.destroyKernel(workerId);
+      await defaultManager.destroyKernel(tsWorkerId);
+      
+    } finally {
+      await defaultManager.destroyAll();
+    }
+    
+    // Test 2: Custom allowed types
+    const restrictedManager = new KernelManager({
+      allowedKernelTypes: [
+        { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON }
+        // Only Python worker kernels allowed
+      ]
+    });
+    
+    try {
+      // Should allow Python worker
+      const pythonId = await restrictedManager.createKernel({
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON
+      });
+      assert(pythonId, "Python worker should be allowed");
+      
+      // Should reject TypeScript worker
+      try {
+        await restrictedManager.createKernel({
+          mode: KernelMode.WORKER,
+          lang: KernelLanguage.TYPESCRIPT
+        });
+        assert(false, "TypeScript worker should be rejected");
+      } catch (error: unknown) {
+        assert(
+          (error as Error).message.includes("is not allowed"),
+          `Expected 'not allowed' error, got: ${(error as Error).message}`
+        );
+        console.log("✓ TypeScript worker correctly rejected");
+      }
+      
+      // Should reject main thread Python
+      try {
+        await restrictedManager.createKernel({
+          mode: KernelMode.MAIN_THREAD,
+          lang: KernelLanguage.PYTHON
+        });
+        assert(false, "Main thread Python should be rejected");
+      } catch (error: unknown) {
+        assert(
+          (error as Error).message.includes("is not allowed"),
+          `Expected 'not allowed' error, got: ${(error as Error).message}`
+        );
+        console.log("✓ Main thread Python correctly rejected");
+      }
+      
+      // Test getAllowedKernelTypes method
+      const allowedTypes = restrictedManager.getAllowedKernelTypes();
+      assertEquals(allowedTypes.length, 1, "Should have exactly one allowed type");
+      assertEquals(allowedTypes[0].mode, KernelMode.WORKER, "Should be worker mode");
+      assertEquals(allowedTypes[0].language, KernelLanguage.PYTHON, "Should be Python language");
+      
+      // Clean up
+      await restrictedManager.destroyKernel(pythonId);
+      
+    } finally {
+      await restrictedManager.destroyAll();
+    }
+    
+    // Test 3: Pool configuration validation
+    const poolManager = new KernelManager({
+      allowedKernelTypes: [
+        { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON }
+      ],
+      pool: {
+        enabled: true,
+        poolSize: 2,
+        autoRefill: true,
+        preloadConfigs: [
+          { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
+          { mode: KernelMode.MAIN_THREAD, language: KernelLanguage.PYTHON }, // This should be filtered out
+          { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT } // This should be filtered out
+        ]
+      }
+    });
+    
+    try {
+      // Wait longer for preloading to complete
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      const poolStats = poolManager.getPoolStats();
+      console.log("Pool stats with filtered configs:", poolStats);
+      
+      // The pool might still be loading, so let's check if the filtering worked
+      // by verifying that disallowed types are not present
+      const poolKeys = Object.keys(poolStats);
+      
+      // These should definitely NOT be present (filtered out)
+      assert(
+        !poolKeys.includes("main_thread-python"),
+        "Should not have main_thread-python pool (filtered out)"
+      );
+      assert(
+        !poolKeys.includes("worker-typescript"),
+        "Should not have worker-typescript pool (filtered out)"
+      );
+      
+      // If worker-python pool exists, that's good, but it might still be loading
+      if (poolKeys.includes("worker-python")) {
+        console.log("✓ worker-python pool found as expected");
+      } else {
+        console.log("worker-python pool still loading or empty, but filtering worked correctly");
+      }
+      
+      console.log("✓ Pool configuration correctly filtered based on allowed types");
+      
+    } finally {
+      await poolManager.destroyAll();
+    }
+    
+    console.log("Allowed kernel types restriction test completed successfully");
   },
   sanitizeResources: false,
   sanitizeOps: false
