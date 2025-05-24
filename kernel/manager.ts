@@ -2151,4 +2151,93 @@ export class KernelManager extends EventEmitter {
   }> {
     return [...this.allowedKernelTypes]; // Return a copy to prevent modification
   }
+
+  /**
+   * Ping a kernel to reset its activity timer and extend the deadline
+   * @param id Kernel ID
+   * @returns True if the kernel was pinged successfully, false if not found
+   */
+  public pingKernel(id: string): boolean {
+    const instance = this.kernels.get(id);
+    if (!instance) {
+      return false;
+    }
+    
+    // Update kernel activity (this will reset the inactivity timer)
+    this.updateKernelActivity(id);
+    
+    console.log(`Kernel ${id} pinged - activity timer reset`);
+    return true;
+  }
+
+  /**
+   * Restart a kernel by destroying it and creating a new one with the same ID and configuration
+   * @param id Kernel ID
+   * @returns Promise resolving to true if the kernel was restarted successfully, false if not found
+   */
+  public async restartKernel(id: string): Promise<boolean> {
+    const instance = this.kernels.get(id);
+    if (!instance) {
+      console.warn(`Cannot restart kernel ${id}: kernel not found`);
+      return false;
+    }
+    
+    try {
+      console.log(`Restarting kernel ${id}...`);
+      
+      // Store the current configuration
+      const currentConfig = {
+        mode: instance.mode,
+        language: instance.language,
+        options: { ...instance.options }
+      };
+      
+      // Extract namespace from ID if present
+      let namespace: string | undefined;
+      let baseId: string;
+      
+      if (id.includes(':')) {
+        const parts = id.split(':');
+        namespace = parts[0];
+        baseId = parts[1];
+      } else {
+        baseId = id;
+      }
+      
+      console.log(`Destroying existing kernel ${id} before restart...`);
+      
+      // Destroy the existing kernel
+      await this.destroyKernel(id);
+      
+      console.log(`Creating new kernel with same configuration for ${id}...`);
+      
+      // Create a new kernel with the same configuration
+      const restartOptions: IManagerKernelOptions = {
+        id: baseId,
+        mode: currentConfig.mode,
+        lang: currentConfig.language,
+        namespace,
+        deno: currentConfig.options.deno,
+        filesystem: currentConfig.options.filesystem,
+        inactivityTimeout: currentConfig.options.inactivityTimeout,
+        maxExecutionTime: currentConfig.options.maxExecutionTime
+      };
+      
+      // Create the new kernel
+      const newKernelId = await this.createKernel(restartOptions);
+      
+      // Verify the new kernel has the same ID
+      if (newKernelId !== id) {
+        console.error(`Kernel restart failed: expected ID ${id}, got ${newKernelId}`);
+        return false;
+      }
+      
+      console.log(`Kernel ${id} restarted successfully`);
+      return true;
+      
+    } catch (error) {
+      console.error(`Error restarting kernel ${id}:`, error);
+      return false;
+    }
+  }
 }

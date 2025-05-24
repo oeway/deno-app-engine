@@ -266,6 +266,7 @@ async function startHyphaService() {
         return {
           id: kernelId,
           mode: kernel.mode,
+          language: kernel.language,
           created: kernel.created.toISOString(),
           name: `Kernel-${kernelId.split(":")[1].slice(0, 8)}`
         };
@@ -285,6 +286,7 @@ async function startHyphaService() {
         id: kernel.id,
         name: `Kernel-${kernel.id.split(":")[1].slice(0, 8)}`,
         mode: kernel.mode,
+        language: kernel.language,
         created: kernel.created.toISOString(),
       }));
     },
@@ -320,9 +322,58 @@ async function startHyphaService() {
         id: kernelId,
         name: `Kernel-${kernelId.split(":")[1].slice(0, 8)}`,
         mode: kernel.mode,
+        language: kernel.language,
         created: kernel.created.toISOString(),
         status: kernel.kernel.status || "unknown",
         history: kernelHistory.get(kernelId) || [],
+      };
+    },
+
+    async pingKernel({kernelId}: {kernelId: string}, context: {user: any, ws: string}) {
+      kernelId = ensureKernelId(kernelId, context.ws);
+      
+      // Verify kernel belongs to user's namespace
+      const kernel = kernelManager.getKernel(kernelId);
+      if (!kernel) {
+        throw new Error("Kernel not found or access denied");
+      }
+      
+      // Ping the kernel to reset activity timer
+      const success = kernelManager.pingKernel(kernelId);
+      
+      if (!success) {
+        throw new Error("Failed to ping kernel");
+      }
+      
+      console.log(`Kernel ${kernelId} pinged by user in workspace ${context.ws}`);
+      return { 
+        success: true, 
+        message: "Kernel activity timer reset",
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async restartKernel({kernelId}: {kernelId: string}, context: {user: any, ws: string}) {
+      kernelId = ensureKernelId(kernelId, context.ws);
+      
+      // Verify kernel belongs to user's namespace
+      const kernel = kernelManager.getKernel(kernelId);
+      if (!kernel) {
+        throw new Error("Kernel not found or access denied");
+      }
+      
+      // Restart the kernel
+      const success = await kernelManager.restartKernel(kernelId);
+      
+      if (!success) {
+        throw new Error("Failed to restart kernel");
+      }
+      
+      console.log(`Kernel ${kernelId} restarted by user in workspace ${context.ws}`);
+      return { 
+        success: true, 
+        message: "Kernel restarted successfully",
+        timestamp: new Date().toISOString()
       };
     },
 
