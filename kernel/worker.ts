@@ -21,6 +21,19 @@ let currentEventListeners: Map<string, (data: any) => void> = new Map();
 // Interrupt handling for worker
 let interruptBuffer: Uint8Array | null = null;
 
+// Global error handlers to prevent worker crashes
+self.addEventListener("error", (event) => {
+  console.error("[WORKER] Global error caught:", event.error);
+  // Simply prevent the error from crashing the worker
+  event.preventDefault();
+});
+
+self.addEventListener("unhandledrejection", (event) => {
+  console.error("[WORKER] Unhandled promise rejection:", event.reason);
+  // Simply prevent the rejection from crashing the worker
+  event.preventDefault();
+});
+
 // Listen for messages to set up the event port and initialize kernel
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SET_EVENT_PORT" && event.data?.port) {
@@ -54,13 +67,11 @@ self.addEventListener("message", (event) => {
     });
   } else if (event.data?.type === "SET_INTERRUPT_BUFFER") {
     // Handle interrupt buffer setup
-    console.log("[WORKER] Setting interrupt buffer");
     interruptBuffer = event.data.buffer;
     
     // Set the interrupt buffer in the kernel if it's initialized
     if (kernel.isInitialized() && interruptBuffer && typeof kernel.setInterruptBuffer === 'function') {
       kernel.setInterruptBuffer(interruptBuffer);
-      console.log("[WORKER] Interrupt buffer set in kernel");
     }
     
     if (eventPort) {
@@ -71,10 +82,8 @@ self.addEventListener("message", (event) => {
     }
   } else if (event.data?.type === "INTERRUPT_KERNEL") {
     // Handle interrupt request
-    console.log("[WORKER] Interrupt requested");
     
     if (interruptBuffer) {
-      console.log("[WORKER] Triggering interrupt via buffer");
       // Set interrupt signal (2 = SIGINT)
       interruptBuffer[0] = 2;
       
@@ -125,7 +134,6 @@ async function initializeKernel(options: IKernelOptions): Promise<void> {
     
     // Set up the interrupt buffer if it's available and the kernel supports it
     if (interruptBuffer && typeof kernel.setInterruptBuffer === 'function') {
-      console.log("[WORKER] Setting interrupt buffer after kernel initialization");
       kernel.setInterruptBuffer(interruptBuffer);
     }
     
@@ -203,12 +211,6 @@ self.addEventListener("beforeunload", async () => {
         data: { message: "Worker is shutting down" }
       });
     }
-    
-    // Clean up any Pyodide resources if kernel has them
-    if ((kernel as any).pyodide) {
-      console.log("Cleaning up Pyodide resources...");
-      // Any cleanup needed for Pyodide
-    }
   } catch (error) {
     console.error("Error during worker cleanup:", error);
   }
@@ -231,14 +233,22 @@ const simpleProxy = {
   },
   
   execute: async (code: string, parent?: any) => {
-      try {
+    try {
       const result = await kernel.execute(code, parent);
       return result;
     } catch (error) {
       console.error("[WORKER] Execute error:", error);
+      // Simple error handling - just propagate the error normally
       return {
         success: false,
-        error: error instanceof Error ? error : new Error(String(error))
+        error: error instanceof Error ? error : new Error(String(error)),
+        result: {
+          payload: [],
+          status: "error",
+          ename: error instanceof Error ? error.constructor.name : "Error",
+          evalue: error instanceof Error ? error.message : String(error),
+          traceback: error instanceof Error && error.stack ? error.stack.split('\n') : [String(error)]
+        }
       };
     }
   },
@@ -276,10 +286,8 @@ const simpleProxy = {
   // Interrupt functionality
   interrupt: async () => {
     try {
-      console.log("[WORKER] Interrupt method called");
       if (typeof kernel.interrupt === 'function') {
         const result = await kernel.interrupt();
-        console.log(`[WORKER] Kernel interrupt result: ${result}`);
         return result;
       } else {
         console.warn("[WORKER] Kernel does not support interrupt method");
@@ -287,16 +295,15 @@ const simpleProxy = {
       }
     } catch (error) {
       console.error("[WORKER] Interrupt error:", error);
+      // Don't let interrupt errors crash the worker
       return false;
     }
   },
   
   setInterruptBuffer: (buffer: Uint8Array) => {
     try {
-      console.log("[WORKER] setInterruptBuffer method called");
       if (typeof kernel.setInterruptBuffer === 'function') {
         kernel.setInterruptBuffer(buffer);
-        console.log("[WORKER] Interrupt buffer set via proxy");
         return true;
       } else {
         console.warn("[WORKER] Kernel does not support setInterruptBuffer method");

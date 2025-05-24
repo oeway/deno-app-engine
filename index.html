@@ -293,12 +293,6 @@
 
     <div class="example">
         <h2>3. Execute Code</h2>
-        <div class="section-header">
-            <select id="execute-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('execute'); synchronizeSelectors('execute')" aria-label="Select kernel for code execution">
-                <option value="">Select a kernel...</option>
-            </select>
-            <span id="execute-kernel-info" class="kernel-info"></span>
-        </div>
         <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute</span></p>
         <textarea id="execute-code" class="code-input" placeholder="Enter Python code to execute">import asyncio
 print("Starting execution stream test...")
@@ -355,10 +349,22 @@ while (true) {
         console.log('Received partial chunk:', chunk);
     }
 }</pre>
-        <button onclick="executeCode()" id="execute-button">
-            <span>Execute Code</span>
-            <div class="spinner"></div>
-        </button>
+        <div class="section-header">
+            <select id="execute-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('execute'); synchronizeSelectors('execute')" aria-label="Select kernel for code execution">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="execute-kernel-info" class="kernel-info"></span>
+        </div>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button onclick="executeCode()" id="execute-button">
+                <span>Execute Code</span>
+                <div class="spinner"></div>
+            </button>
+            <button onclick="interruptExecution('execute')" id="execute-interrupt-button" style="background: #EF4444;" disabled>
+                <span>Interrupt</span>
+                <div class="spinner"></div>
+            </button>
+        </div>
         <div class="response-container" id="execute-response">
             <div class="response-label">Response:</div>
             <div id="execute-output" class="output"></div>
@@ -368,12 +374,6 @@ while (true) {
 
     <div class="example">
         <h2>4. Stream Execution</h2>
-        <div class="section-header">
-            <select id="stream-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('stream'); synchronizeSelectors('stream')" aria-label="Select kernel for stream execution">
-                <option value="">Select a kernel...</option>
-            </select>
-            <span id="stream-kernel-info" class="kernel-info"></span>
-        </div>
         <p>Endpoints:</p>
         <p><span class="endpoint">POST /api/kernels/:id/execute/submit</span> - Submit code for execution</p>
         <p><span class="endpoint">GET /api/kernels/:id/execute/stream/:session_id</span> - Stream execution results</p>
@@ -432,10 +432,22 @@ eventSource.onerror = (error) => {
     console.error('Stream error:', error);
     eventSource.close();
 };</pre>
-        <button onclick="streamExecution()" id="stream-button">
-            <span>Stream Execution</span>
-            <div class="spinner"></div>
-        </button>
+        <div class="section-header">
+            <select id="stream-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('stream'); synchronizeSelectors('stream')" aria-label="Select kernel for stream execution">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="stream-kernel-info" class="kernel-info"></span>
+        </div>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button onclick="streamExecution()" id="stream-button">
+                <span>Stream Execution</span>
+                <div class="spinner"></div>
+            </button>
+            <button onclick="interruptExecution('stream')" id="stream-interrupt-button" style="background: #EF4444;" disabled>
+                <span>Interrupt</span>
+                <div class="spinner"></div>
+            </button>
+        </div>
         <div class="response-container" id="stream-response">
             <div class="response-label">Response:</div>
             <div id="stream-output" class="output"></div>
@@ -443,13 +455,129 @@ eventSource.onerror = (error) => {
     </div>
 
     <div class="example">
-        <h2>7. Create Matplotlib Plot</h2>
+        <h2>5. Get Kernel Info</h2>
+        <p>Endpoint: <span class="endpoint">GET /api/kernels/:id/info</span></p>
+        <pre>fetch(`/api/kernels/${kernelId}/info`);</pre>
         <div class="section-header">
-            <select id="matplotlib-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('matplotlib'); synchronizeSelectors('matplotlib')" aria-label="Select kernel for matplotlib plot">
+            <select id="info-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('info'); synchronizeSelectors('info')" aria-label="Select kernel for info">
                 <option value="">Select a kernel...</option>
             </select>
-            <span id="matplotlib-kernel-info" class="kernel-info"></span>
+            <span id="info-kernel-info" class="kernel-info"></span>
         </div>
+        <button onclick="getKernelInfo()" id="info-button">
+            <span>Get Info</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="info-response">
+            <div class="response-label">Response:</div>
+            <div id="info-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>6. Ping Kernel</h2>
+        <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/ping</span></p>
+        <p>Reset the kernel's activity timer to extend its lifetime and prevent automatic shutdown due to inactivity.</p>
+        <pre>fetch(`/api/kernels/${kernelId}/ping`, {
+    method: 'POST'
+});</pre>
+        <div class="section-header">
+            <select id="ping-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('ping'); synchronizeSelectors('ping')" aria-label="Select kernel to ping">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="ping-kernel-info" class="kernel-info"></span>
+        </div>
+        <button onclick="pingKernel()" id="ping-button">
+            <span>Ping Kernel</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="ping-response">
+            <div class="response-label">Response:</div>
+            <div id="ping-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>7. Restart Kernel</h2>
+        <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/restart</span></p>
+        <p>Restart the kernel, clearing all variables and state while preserving the kernel ID and configuration.</p>
+        <pre>fetch(`/api/kernels/${kernelId}/restart`, {
+    method: 'POST'
+});</pre>
+        <div class="section-header">
+            <select id="restart-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('restart'); synchronizeSelectors('restart')" aria-label="Select kernel to restart">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="restart-kernel-info" class="kernel-info"></span>
+        </div>
+        <button onclick="restartKernel()" id="restart-button">
+            <span>Restart Kernel</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="restart-response">
+            <div class="response-label">Response:</div>
+            <div id="restart-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>8. Interrupt Kernel</h2>
+        <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/interrupt</span></p>
+        <p>Interrupt currently running code execution in the kernel. This sends a SIGINT signal to stop the current operation.</p>
+        <pre>fetch(`/api/kernels/${kernelId}/interrupt`, {
+    method: 'POST'
+});</pre>
+        <p><strong>To test interrupts:</strong> First run the long-running code below in the Execute Code section, then immediately click the Interrupt button.</p>
+        <textarea id="interrupt-test-code" class="code-input" readonly style="height: 120px;" title="Example long-running code for testing interrupts">import asyncio
+import time
+
+print("Starting long-running task...")
+for i in range(100):
+    print(f"Step {i}/100...")
+    # This will be interrupted by the interrupt signal
+    await asyncio.sleep(2)  # 2 seconds per step = 200 seconds total
+    
+print("Task completed (this shouldn't be reached if interrupted)")</textarea>
+        <div class="section-header">
+            <select id="interrupt-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('interrupt'); synchronizeSelectors('interrupt')" aria-label="Select kernel to interrupt">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="interrupt-kernel-info" class="kernel-info"></span>
+        </div>
+        <button onclick="interruptKernel()" id="interrupt-button">
+            <span>Interrupt Kernel</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="interrupt-response">
+            <div class="response-label">Response:</div>
+            <div id="interrupt-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>12. Delete Kernel</h2>
+        <p>Endpoint: <span class="endpoint">DELETE /api/kernels/:id</span></p>
+        <pre>fetch(`/api/kernels/${kernelId}`, {
+    method: 'DELETE'
+});</pre>
+        <div class="section-header">
+            <select id="delete-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('delete'); synchronizeSelectors('delete')" aria-label="Select kernel to delete">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="delete-kernel-info" class="kernel-info"></span>
+        </div>
+        <button onclick="deleteKernel()" id="delete-button">
+            <span>Delete Kernel</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="delete-response">
+            <div class="response-label">Response:</div>
+            <div id="delete-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>10. Create Matplotlib Plot</h2>
         <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute</span></p>
         <textarea id="matplotlib-code" class="code-input" placeholder="Enter Python code to execute">import micropip
 await micropip.install('matplotlib')
@@ -483,10 +611,22 @@ plt.close()
 # Display the image in the notebook
 display(HTML(f'<img src="data:image/png;base64,{img_str}" />'))
 print("Plot generation complete!")</textarea>
-        <button onclick="executePlot('matplotlib')" id="matplotlib-button">
-            <span>Create Plot</span>
-            <div class="spinner"></div>
-        </button>
+        <div class="section-header">
+            <select id="matplotlib-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('matplotlib'); synchronizeSelectors('matplotlib')" aria-label="Select kernel for matplotlib plot">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="matplotlib-kernel-info" class="kernel-info"></span>
+        </div>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button onclick="executePlot('matplotlib')" id="matplotlib-button">
+                <span>Create Plot</span>
+                <div class="spinner"></div>
+            </button>
+            <button onclick="interruptExecution('matplotlib')" id="matplotlib-interrupt-button" style="background: #EF4444;" disabled>
+                <span>Interrupt</span>
+                <div class="spinner"></div>
+            </button>
+        </div>
         <div class="response-container" id="matplotlib-response">
             <div class="response-label">Response:</div>
             <div id="matplotlib-output" class="output"></div>
@@ -495,13 +635,7 @@ print("Plot generation complete!")</textarea>
     </div>
 
     <div class="example">
-        <h2>8. Create Plotly 3D Scatter Plot</h2>
-        <div class="section-header">
-            <select id="plotly-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('plotly'); synchronizeSelectors('plotly')" aria-label="Select kernel for plotly plot">
-                <option value="">Select a kernel...</option>
-            </select>
-            <span id="plotly-kernel-info" class="kernel-info"></span>
-        </div>
+        <h2>11. Create Plotly 3D Scatter Plot</h2>
         <p>Endpoint: <span class="endpoint">POST /api/kernels/:id/execute</span></p>
         <textarea id="plotly-code" class="code-input" placeholder="Enter Python code to execute">import micropip
 await micropip.install('plotly')
@@ -559,10 +693,22 @@ fig.update_layout(
 # Show the plot - this will render as HTML in Pyodide
 fig.show()
 print("3D helix scatter plot complete!")</textarea>
-        <button onclick="executePlot('plotly')" id="plotly-button">
-            <span>Create Plot</span>
-            <div class="spinner"></div>
-        </button>
+        <div class="section-header">
+            <select id="plotly-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('plotly'); synchronizeSelectors('plotly')" aria-label="Select kernel for plotly plot">
+                <option value="">Select a kernel...</option>
+            </select>
+            <span id="plotly-kernel-info" class="kernel-info"></span>
+        </div>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button onclick="executePlot('plotly')" id="plotly-button">
+                <span>Create Plot</span>
+                <div class="spinner"></div>
+            </button>
+            <button onclick="interruptExecution('plotly')" id="plotly-interrupt-button" style="background: #EF4444;" disabled>
+                <span>Interrupt</span>
+                <div class="spinner"></div>
+            </button>
+        </div>
         <div class="response-container" id="plotly-response">
             <div class="response-label">Response:</div>
             <div id="plotly-output" class="output"></div>
@@ -570,50 +716,6 @@ print("3D helix scatter plot complete!")</textarea>
         </div>
     </div>
 
-
-    <div class="example">
-        <h2>5. Get Kernel Info</h2>
-        <div class="section-header">
-            <select id="info-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('info'); synchronizeSelectors('info')" aria-label="Select kernel for info">
-                <option value="">Select a kernel...</option>
-            </select>
-            <span id="info-kernel-info" class="kernel-info"></span>
-        </div>
-        <p>Endpoint: <span class="endpoint">GET /api/kernels/:id/info</span></p>
-        <pre>fetch(`/api/kernels/${kernelId}/info`);</pre>
-        <button onclick="getKernelInfo()" id="info-button">
-            <span>Get Info</span>
-            <div class="spinner"></div>
-        </button>
-        <div class="response-container" id="info-response">
-            <div class="response-label">Response:</div>
-            <div id="info-output" class="output"></div>
-        </div>
-    </div>
-
-    <div class="example">
-        <h2>6. Delete Kernel</h2>
-        <div class="section-header">
-            <select id="delete-kernel-selector" class="kernel-selector" onchange="updateSelectedKernel('delete'); synchronizeSelectors('delete')" aria-label="Select kernel to delete">
-                <option value="">Select a kernel...</option>
-            </select>
-            <span id="delete-kernel-info" class="kernel-info"></span>
-        </div>
-        <p>Endpoint: <span class="endpoint">DELETE /api/kernels/:id</span></p>
-        <pre>fetch(`/api/kernels/${kernelId}`, {
-    method: 'DELETE'
-});</pre>
-        <button onclick="deleteKernel()" id="delete-button">
-            <span>Delete Kernel</span>
-            <div class="spinner"></div>
-        </button>
-        <div class="response-container" id="delete-response">
-            <div class="response-label">Response:</div>
-            <div id="delete-output" class="output"></div>
-        </div>
-    </div>
-
-    
     <div class="toast" id="toast"></div>
 
     <script>
@@ -622,7 +724,7 @@ print("3D helix scatter plot complete!")</textarea>
 
         // Function to update kernel selectors
         function updateKernelSelectors() {
-            const selectors = ['execute', 'stream', 'info', 'delete', 'matplotlib', 'plotly'].map(id => document.getElementById(`${id}-kernel-selector`));
+            const selectors = ['execute', 'stream', 'info', 'ping', 'restart', 'interrupt', 'delete', 'matplotlib', 'plotly'].map(id => document.getElementById(`${id}-kernel-selector`));
             
             // Clear existing options except the placeholder
             selectors.forEach(selector => {
@@ -658,7 +760,7 @@ print("3D helix scatter plot complete!")</textarea>
             const selectedId = sourceSelector.value;
             
             if (selectedId) {
-                const sections = ['execute', 'stream', 'info', 'delete', 'matplotlib', 'plotly'];
+                const sections = ['execute', 'stream', 'info', 'ping', 'restart', 'interrupt', 'delete', 'matplotlib', 'plotly'];
                 sections.forEach(section => {
                     if (section !== sourceSection) {
                         const selector = document.getElementById(`${section}-kernel-selector`);
@@ -700,6 +802,7 @@ print("3D helix scatter plot complete!")</textarea>
         function showSpinner(id) {
             const container = document.getElementById(`${id}-response`);
             const button = document.getElementById(`${id}-button`);
+            const interruptButton = document.getElementById(`${id}-interrupt-button`);
             const spinner = button.querySelector('.spinner');
             const output = document.getElementById(`${id}-output`);
             
@@ -708,14 +811,25 @@ print("3D helix scatter plot complete!")</textarea>
             output.style.display = 'none';
             container.querySelector('.response-label').style.display = 'none';
             button.disabled = true;
+            
+            // Enable interrupt button if it exists
+            if (interruptButton) {
+                interruptButton.disabled = false;
+            }
         }
 
         function hideSpinner(id) {
             const button = document.getElementById(`${id}-button`);
+            const interruptButton = document.getElementById(`${id}-interrupt-button`);
             const spinner = button.querySelector('.spinner');
             
             spinner.style.display = 'none';
             button.disabled = false;
+            
+            // Disable interrupt button if it exists
+            if (interruptButton) {
+                interruptButton.disabled = true;
+            }
         }
 
         function showOutput(data, id) {
@@ -760,7 +874,7 @@ print("3D helix scatter plot complete!")</textarea>
                 updateKernelSelectors();
                 
                 // Automatically select the newly created kernel in all selectors
-                const sections = ['execute', 'stream', 'info', 'delete', 'matplotlib', 'plotly'];
+                const sections = ['execute', 'stream', 'info', 'ping', 'restart', 'interrupt', 'delete', 'matplotlib', 'plotly'];
                 sections.forEach(section => {
                     const selector = document.getElementById(`${section}-kernel-selector`);
                     selector.value = data.id;
@@ -920,13 +1034,15 @@ print("3D helix scatter plot complete!")</textarea>
                     return data.data && data.data.text || '';
                     
                 case 'error':
-                    return `Error: ${data.data && data.data.message || 'Unknown error'}\n`;
-                
-                case 'execute_error':
-                    if (data.data && data.data.traceback) {
+                    if (data.data && data.data.ename && data.data.traceback) {
+                        const traceback = Array.isArray(data.data.traceback) 
+                            ? data.data.traceback.join('').replace(/\x1B\[[0-9;]*m/g, '') 
+                            : data.data.traceback.replace(/\x1B\[[0-9;]*m/g, '');
+                        return `Error: ${data.data.ename}: ${data.data.evalue}\n${traceback}\n`;
+                    } else if (data.data && data.data.ename && data.data.evalue) {
                         return `Error: ${data.data.ename}: ${data.data.evalue}\n`;
                     }
-                    return `Error: ${data.data && (data.data.ename + ': ' + data.data.evalue) || 'Unknown error'}\n`;
+                    return `Error: ${data.data && data.data.message || 'Unknown error'}\n`;
                     
                 case 'execute_result':
                     // Only add text if it's not something we're displaying visually
@@ -1000,7 +1116,9 @@ print("3D helix scatter plot complete!")</textarea>
                             } else if (data.type === 'execute_result') {
                                 formattedOutput = `Result: ${JSON.stringify(data.data.data)}\n`;
                             } else if (data.type === 'error') {
-                                formattedOutput = `Error: ${data.data.message}\n`;
+                                // the data.data is the same as above, we need to extract the traceback etc
+                                // and strip the ANSI escape codes
+                                formattedOutput = `Error: ${data.data.ename}: ${data.data.evalue}\n${data.data.traceback.replace(/\x1B\[[0-9;]*m/g, '')}\n`;
                             } else {
                                 formattedOutput = `${data.type}: ${JSON.stringify(data.data)}\n`;
                             }
@@ -1412,6 +1530,127 @@ print("3D helix scatter plot complete!")</textarea>
 
         // Initialize by listing kernels
         listKernels().catch(console.error);
+
+        // Ping kernel function
+        async function pingKernel() {
+            const selector = document.getElementById('ping-kernel-selector');
+            const kernelId = selector.value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, 'ping');
+                return;
+            }
+            showSpinner('ping');
+            try {
+                const response = await fetch(`/api/kernels/${kernelId}/ping`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                showOutput(data, 'ping');
+                showToast('Kernel pinged successfully!');
+            } catch (error) {
+                showOutput({ error: error.message }, 'ping');
+                showToast('Failed to ping kernel', 'error');
+            } finally {
+                hideSpinner('ping');
+            }
+        }
+
+        // Restart kernel function
+        async function restartKernel() {
+            const selector = document.getElementById('restart-kernel-selector');
+            const kernelId = selector.value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, 'restart');
+                return;
+            }
+            showSpinner('restart');
+            try {
+                const response = await fetch(`/api/kernels/${kernelId}/restart`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                showOutput(data, 'restart');
+                showToast('Kernel restarted successfully!');
+                
+                // Refresh kernel list to update any changed information
+                await listKernels();
+            } catch (error) {
+                showOutput({ error: error.message }, 'restart');
+                showToast('Failed to restart kernel', 'error');
+            } finally {
+                hideSpinner('restart');
+            }
+        }
+
+        // Interrupt kernel function
+        async function interruptKernel() {
+            const selector = document.getElementById('interrupt-kernel-selector');
+            const kernelId = selector.value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, 'interrupt');
+                return;
+            }
+            showSpinner('interrupt');
+            try {
+                const response = await fetch(`/api/kernels/${kernelId}/interrupt`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                showOutput(data, 'interrupt');
+                showToast('Kernel interrupted successfully!');
+            } catch (error) {
+                showOutput({ error: error.message }, 'interrupt');
+                showToast('Failed to interrupt kernel', 'error');
+            } finally {
+                hideSpinner('interrupt');
+            }
+        }
+
+        async function interruptExecution(section) {
+            const selector = document.getElementById(`${section}-kernel-selector`);
+            const kernelId = selector.value;
+
+            if (!kernelId) {
+                showToast('Please select a kernel first', 'error');
+                showOutput({ error: 'Please select a kernel first' }, section);
+                return;
+            }
+            try {
+                const response = await fetch(`/api/kernels/${kernelId}/interrupt`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                showToast('Kernel interrupted successfully!');
+            } catch (error) {
+                showToast('Failed to interrupt kernel', 'error');
+            }
+        }
     </script>
 </body>
 </html> 

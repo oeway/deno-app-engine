@@ -173,7 +173,6 @@ export class Kernel extends EventEmitter implements IKernel {
   
   private async _initializeInternal(): Promise<void> {
     try {
-      console.log("Loading Pyodide...");
       // Load Pyodide
       this.pyodide = await pyodideModule.loadPyodide();
       
@@ -247,11 +246,6 @@ export class Kernel extends EventEmitter implements IKernel {
         new URL(pyodide_kernelWheelUrl, baseUrl).href,
         new URL(ipykernelWheelUrl, baseUrl).href
       ];
-      
-      console.log(`Loading wheels from: ${baseUrl}`);
-      console.log(`allJsonPath: ${allJsonPath}`);
-      console.log(`wheelFiles: ${wheelFiles.join(", ")}`);
-      
       // Install the packages using micropip directly with local file URLs
       // First make our URLs available to Python
       this.pyodide.globals.set("piplite_wheel_url", wheelFiles[0]);
@@ -270,7 +264,6 @@ ipykernel_url = ipykernel_wheel_url
 all_json_url = all_json_url
 
 # Install piplite first (wheel needs to be available at a URL)
-print(f"Installing piplite from {piplite_url}")
 await micropip.install(piplite_url)
 
 # Now import piplite and use it
@@ -280,14 +273,8 @@ import piplite
 piplite.piplite._PIPLITE_URLS = [all_json_url]
 
 # Install other packages directly from wheel URLs
-print(f"Installing pyodide_kernel from {pyodide_kernel_url}")
 await micropip.install(pyodide_kernel_url)
-
-print(f"Installing ipykernel from {ipykernel_url}")
 await micropip.install(ipykernel_url)
-
-# Print status
-print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
 `);
     } catch (error) {
       console.error("Error in initPackageManager:", error);
@@ -577,8 +564,6 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
 
     try {
       this._status = "busy";
-      console.log("Executing Python code...");
-      
       // Set up parent header for message callbacks
       await this.setup(parent);
       
@@ -586,10 +571,9 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
       const result = await this._kernel.run(code);
       
       // Debug the result structure
-      console.debug("Python execution result structure:", JSON.stringify(result, null, 2));
+      console.debug("[KERNEL] Python execution result structure:", JSON.stringify(result, null, 2));
       
       // Check if there was a Python error - look for error status or error fields directly in result
-      // or inside a nested result object
       if (result && 
          ((result.status === 'error') || 
           (result.ename) || 
@@ -597,7 +581,36 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
         
         this._status = "active";
         
-        // Send the error as an execute_error event
+        // Check if this is a KeyboardInterrupt (from an interrupt signal)
+        if (result.ename && result.ename.includes('KeyboardInterrupt')) {
+
+          // Send stderr stream first (for Jupyter notebook UI compatibility)
+          this._sendMessage({
+            type: 'stream',
+            bundle: {
+              name: 'stderr',
+              text: `KeyboardInterrupt: ${result.evalue || 'Execution interrupted'}\n`
+            }
+          });
+          
+          // Send the error as an execute_error event
+          this._sendMessage({
+            type: 'execute_error',
+            bundle: {
+              ename: result.ename || 'KeyboardInterrupt',
+              evalue: result.evalue || 'Execution interrupted',
+              traceback: result.traceback || ['KeyboardInterrupt: Execution was interrupted by user']
+            }
+          });
+          
+          return { 
+            success: false, 
+            error: new Error('KeyboardInterrupt: Execution interrupted'),
+            result 
+          };
+        }
+        
+        // Send other errors as execute_error events
         this._sendMessage({
           type: 'execute_error',
           bundle: {
@@ -606,14 +619,14 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
             traceback: result.traceback || []
           }
         });
-        
-        return {
-          success: false,
+         
+        return { 
+          success: false, 
           error: new Error(`${result.ename || 'Error'}: ${result.evalue || 'Unknown error'}`),
-          result: result
+          result
         };
       }
-      
+    
       // Get the last expression value if available
       const lastExpr = this.pyodide.globals.get('_');
       if (lastExpr !== undefined && lastExpr !== null && String(lastExpr) !== 'None') {
@@ -633,38 +646,16 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
       // Format the result for the return value
       const formattedResult = this.formatResult(result);
       
-      // Check if the formatted result contains error information
-      if (formattedResult && 
-         ((formattedResult.status === 'error') || 
-          (formattedResult.ename) || 
-          (formattedResult.evalue))) {
-        
-        this._status = "active";
-        
-        // Send the error as an execute_error event if not already sent
-        this._sendMessage({
-          type: 'execute_error',
-          bundle: {
-            ename: formattedResult.ename || 'Error',
-            evalue: formattedResult.evalue || 'Unknown error',
-            traceback: formattedResult.traceback || []
-          }
-        });
-        
-        return {
-          success: false,
-          error: new Error(`${formattedResult.ename || 'Error'}: ${formattedResult.evalue || 'Unknown error'}`),
-          result: formattedResult
-        };
-      }
-      
       this._status = "active";
       return {
         success: true,
         result: formattedResult
       };
     } catch (error) {
-      console.error("JavaScript error during execution:", error);
+      console.error("[KERNEL] Execute error:", error);
+      
+      // Simple error handling - let the existing message system handle the specifics
+      this._status = "active";
       
       // Send the error as an execute_error event
       this._sendMessage({
@@ -676,7 +667,6 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
         }
       });
       
-      this._status = "active";
       return {
         success: false,
         error: error instanceof Error ? error : new Error(String(error))
@@ -925,8 +915,6 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
 
   // Interrupt functionality
   public async interrupt(): Promise<boolean> {
-    console.log("[KERNEL] Interrupt requested for main thread kernel");
-    
     if (!this.initialized || !this.pyodide) {
       console.warn("[KERNEL] Cannot interrupt: kernel not initialized");
       return false;
@@ -939,7 +927,6 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
     try {
       // If we have an interrupt buffer set up, try to use it
       if (this._interruptBuffer && this._interruptSupported) {
-        console.log("[KERNEL] Using interrupt buffer for main thread kernel");
         // Set interrupt signal (2 = SIGINT)
         this._interruptBuffer[0] = 2;
         
@@ -948,19 +935,24 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
         
         // Check if the interrupt was processed (buffer should be reset to 0)
         const wasProcessed = this._interruptBuffer[0] === 0;
-        console.log(`[KERNEL] Interrupt ${wasProcessed ? 'was' : 'was not'} processed`);
         return wasProcessed;
       } else {
         // Fallback: try to force a Python interrupt using the interpreter
-        console.log("[KERNEL] Attempting fallback interrupt method for main thread");
-        
+       
         if (this._interpreter && typeof this._interpreter.interrupt === 'function') {
           this._interpreter.interrupt();
           return true;
         }
         
-        // Last resort: emit a synthetic KeyboardInterrupt
-        console.log("[KERNEL] Emitting synthetic KeyboardInterrupt");
+        // Send stderr stream first (for Jupyter notebook UI compatibility)
+        this._sendMessage({
+          type: 'stream',
+          bundle: {
+            name: 'stderr',
+            text: 'KeyboardInterrupt: Execution interrupted by user\n'
+          }
+        });
+        
         this._sendMessage({
           type: 'execute_error',
           bundle: {
@@ -979,14 +971,12 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
   }
 
   public setInterruptBuffer(buffer: Uint8Array): void {
-    console.log("[KERNEL] Setting interrupt buffer for main thread kernel");
     this._interruptBuffer = buffer;
     
     try {
       if (this.pyodide && typeof this.pyodide.setInterruptBuffer === 'function') {
         this.pyodide.setInterruptBuffer(buffer);
         this._interruptSupported = true;
-        console.log("[KERNEL] Interrupt buffer set successfully");
       } else {
         console.warn("[KERNEL] pyodide.setInterruptBuffer not available, interrupt support limited");
         this._interruptSupported = false;

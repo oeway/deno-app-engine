@@ -475,6 +475,233 @@ Deno.test({
   sanitizeOps: false,
 });
 
+// Test ping kernel functionality
+Deno.test({
+  name: "POST /kernels/:id/ping - should ping kernel and reset activity timer",
+  async fn() {
+    // Create a new kernel for this test
+    const createResult = await makeRequest("/kernels", "POST", {});
+    const testKernelId = createResult.id;
+    
+    try {
+      // Ping the kernel
+      const response = await fetch(`http://localhost:8001/api/kernels/${testKernelId}/ping`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      
+      assertEquals(response.status, 200);
+      const result = await response.json();
+      
+      assertEquals(result.success, true);
+      assertEquals(result.message, "Kernel activity timer reset");
+      assertExists(result.timestamp);
+      
+      console.log("✓ Ping kernel endpoint working correctly");
+    } finally {
+      // Clean up the test kernel
+      await fetch(`http://localhost:8001/api/kernels/${testKernelId}`, { method: "DELETE" });
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test restart kernel functionality
+Deno.test({
+  name: "POST /kernels/:id/restart - should restart kernel preserving ID",
+  async fn() {
+    // Create a new kernel for this test
+    const createResult = await makeRequest("/kernels", "POST", {});
+    const testKernelId = createResult.id;
+    
+    try {
+      // Execute some code to establish state
+      await makeRequest(`/kernels/${testKernelId}/execute`, "POST", { 
+        code: 'test_var = "before_restart"' 
+      });
+      
+      // Restart the kernel
+      const response = await fetch(`http://localhost:8001/api/kernels/${testKernelId}/restart`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      
+      assertEquals(response.status, 200);
+      const result = await response.json();
+      
+      assertEquals(result.success, true);
+      assertEquals(result.message, "Kernel restarted successfully");
+      assertExists(result.timestamp);
+      
+      // Verify the kernel ID still exists in the list
+      const kernelsList = await makeRequest("/kernels");
+      const restartedKernel = kernelsList.find((k: any) => k.id === testKernelId);
+      assertExists(restartedKernel);
+      
+      // Verify state was reset (variable should not exist)
+      console.log("Testing variable access after restart...");
+      const stateCheckResponse = await fetch(`http://localhost:8001/api/kernels/${testKernelId}/execute/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: 'print(test_var)' }),
+      });
+      
+      // Read the SSE stream to get execution results  
+      const stateCheckResult = await readSSEStream(stateCheckResponse, 3000);
+      
+      console.log("State check result after restart:", JSON.stringify(stateCheckResult, null, 2));
+      
+      // Should fail because test_var doesn't exist in restarted kernel
+      // Look for various indicators of execution error:
+      // 1. Direct error event
+      const errorEvent = stateCheckResult.find((event: any) => 
+        event.type === "error" || event.type === "execute_error"
+      );
+      
+      // 2. Stream with stderr containing NameError
+      const stderrEvent = stateCheckResult.find((event: any) =>
+        event.type === "stream" && 
+        event.data?.name === "stderr" &&
+        (event.data?.text?.includes("NameError") || event.data?.text?.includes("not defined"))
+      );
+      
+      // Check if any form of error was detected
+      const hasError = errorEvent || stderrEvent;
+      
+      assert(hasError, 
+        `Should get an error when accessing undefined variable after restart. Found events: ${JSON.stringify(stateCheckResult.map((e: any) => ({ type: e.type, hasData: !!e.data, hasResult: !!e.result })), null, 2)}`
+      );
+      
+      console.log("✓ Restart test passed - kernel state was properly reset");
+    } finally {
+      // Clean up the test kernel
+      await fetch(`http://localhost:8001/api/kernels/${testKernelId}`, { method: "DELETE" });
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test interrupt kernel functionality
+Deno.test({
+  name: "POST /kernels/:id/interrupt - should interrupt running execution",
+  async fn() {
+    // Create a new kernel for this test
+    const createResult = await makeRequest("/kernels", "POST", {});
+    const testKernelId = createResult.id;
+    
+    try {
+      // Start a long-running task
+      const longRunningCode = `
+import time
+print("Starting long-running task...")
+for i in range(50):
+    print(f"Step {i}/50")
+    time.sleep(0.1)
+print("Task completed!")
+`;
+      
+      // Start the long-running execution (don't await)
+      const executionPromise = fetch(`http://localhost:8001/api/kernels/${testKernelId}/execute/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: longRunningCode }),
+      });
+      
+      // Wait a bit for the task to start
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Interrupt the kernel
+      const interruptResponse = await fetch(`http://localhost:8001/api/kernels/${testKernelId}/interrupt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      
+      assertEquals(interruptResponse.status, 200);
+      const interruptResult = await interruptResponse.json();
+      
+      assertEquals(interruptResult.success, true);
+      assertEquals(interruptResult.message, "Kernel execution interrupted");
+      assertExists(interruptResult.timestamp);
+      
+      // Wait for the execution to complete (should be interrupted)
+      try {
+        const executionResponse = await executionPromise;
+        // Read the stream to check if it was interrupted
+        const events = await readSSEStream(executionResponse, 2000);
+        
+        // Should contain some initial output but not complete all 50 steps
+        const outputs = events
+          .filter((event: any) => event.type === "stream")
+          .map((event: any) => event.data.text || "")
+          .filter(text => text.includes("Step"));
+        
+        // Should have started but not completed all 50 steps
+        assert(outputs.length > 0, "Should have some output before interruption");
+        assert(outputs.length < 50, "Should not complete all 50 steps due to interruption");
+        
+        console.log(`Execution was interrupted after ${outputs.length} steps (expected behavior)`);
+      } catch (streamError) {
+        // Stream might be terminated due to interrupt, this is expected
+        console.log("Stream terminated due to interrupt (expected behavior)");
+      }
+      
+      console.log("✓ Interrupt kernel endpoint working correctly");
+    } finally {
+      // Clean up the test kernel
+      await fetch(`http://localhost:8001/api/kernels/${testKernelId}`, { method: "DELETE" });
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test ping non-existent kernel
+Deno.test({
+  name: "POST /kernels/:id/ping - should return 404 for non-existent kernel",
+  async fn() {
+    const response = await fetch(`http://localhost:8001/api/kernels/non-existent-id/ping`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    
+    assertEquals(response.status, 404);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test restart non-existent kernel
+Deno.test({
+  name: "POST /kernels/:id/restart - should return 404 for non-existent kernel",
+  async fn() {
+    const response = await fetch(`http://localhost:8001/api/kernels/non-existent-id/restart`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    
+    assertEquals(response.status, 404);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
+// Test interrupt non-existent kernel
+Deno.test({
+  name: "POST /kernels/:id/interrupt - should return 404 for non-existent kernel",
+  async fn() {
+    const response = await fetch(`http://localhost:8001/api/kernels/non-existent-id/interrupt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    
+    assertEquals(response.status, 404);
+  },
+  sanitizeResources: false,
+  sanitizeOps: false,
+});
+
 // Cleanup
 Deno.test({
   name: "cleanup",

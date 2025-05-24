@@ -641,6 +641,109 @@ export async function handleRequest(req: Request): Promise<Response> {
         }
       }
 
+      // Ping kernel to reset activity timer
+      if (path.match(/^\/api\/kernels\/[\w-]+\/ping$/) && req.method === "POST") {
+        const kernelId = path.split("/")[3];
+        
+        try {
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+          }
+          
+          const success = kernelManager.pingKernel(kernelId);
+          
+          if (!success) {
+            return jsonResponse({ error: "Failed to ping kernel" }, Status.InternalServerError);
+          }
+          
+          return jsonResponse({ 
+            success: true, 
+            message: "Kernel activity timer reset",
+            timestamp: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error(`Error pinging kernel ${kernelId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Restart kernel
+      if (path.match(/^\/api\/kernels\/[\w-]+\/restart$/) && req.method === "POST") {
+        const kernelId = path.split("/")[3];
+        
+        try {
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+          }
+          
+          // Clean up sessions for this kernel
+          for (const [sessionId, session] of sessions.entries()) {
+            if (session.kernelId === kernelId) {
+              sessions.delete(sessionId);
+            }
+          }
+          
+          // Clean up history
+          kernelHistory.delete(kernelId);
+          
+          const success = await kernelManager.restartKernel(kernelId);
+          
+          if (!success) {
+            return jsonResponse({ error: "Failed to restart kernel" }, Status.InternalServerError);
+          }
+          
+          // Reinitialize history for the restarted kernel
+          kernelHistory.set(kernelId, []);
+          
+          return jsonResponse({ 
+            success: true, 
+            message: "Kernel restarted successfully",
+            timestamp: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error(`Error restarting kernel ${kernelId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Interrupt kernel execution
+      if (path.match(/^\/api\/kernels\/[\w-]+\/interrupt$/) && req.method === "POST") {
+        const kernelId = path.split("/")[3];
+        
+        try {
+          const kernel = kernelManager.getKernel(kernelId);
+          if (!kernel) {
+            return jsonResponse({ error: "Kernel not found" }, Status.NotFound);
+          }
+          
+          const success = await kernelManager.interruptKernel(kernelId);
+          
+          if (!success) {
+            return jsonResponse({ error: "Failed to interrupt kernel" }, Status.InternalServerError);
+          }
+          
+          return jsonResponse({ 
+            success: true, 
+            message: "Kernel execution interrupted",
+            timestamp: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error(`Error interrupting kernel ${kernelId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
       // Not found
       return jsonResponse({ error: "Not found" }, Status.NotFound);
     }
