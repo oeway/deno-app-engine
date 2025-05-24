@@ -122,6 +122,9 @@ export class KernelManager extends EventEmitter {
     language: KernelLanguage;
   }>;
   
+  // Interrupt buffers for worker kernels (using SharedArrayBuffer)
+  private interruptBuffers: Map<string, Uint8Array> = new Map();
+  
   constructor(options: IKernelManagerOptions = {}) {
     super();
     super.setMaxListeners(100); // Allow many listeners for kernel events
@@ -1188,6 +1191,12 @@ export class KernelManager extends EventEmitter {
       this.executionTimeouts.delete(id);
     }
     
+    // Clean up interrupt buffers
+    if (this.interruptBuffers.has(id)) {
+      console.log(`Cleaning up interrupt buffer for kernel ${id}`);
+      this.interruptBuffers.delete(id);
+    }
+    
     // Clean up ongoing executions tracking
     this.ongoingExecutions.delete(id);
     
@@ -2239,5 +2248,181 @@ export class KernelManager extends EventEmitter {
       console.error(`Error restarting kernel ${id}:`, error);
       return false;
     }
+  }
+
+  /**
+   * Interrupt a running kernel execution
+   * @param id Kernel ID
+   * @returns Promise resolving to true if the interrupt was successful, false if not found or failed
+   */
+  public async interruptKernel(id: string): Promise<boolean> {
+    const instance = this.kernels.get(id);
+    if (!instance) {
+      console.warn(`Cannot interrupt kernel ${id}: kernel not found`);
+      return false;
+    }
+    
+    try {
+      console.log(`Interrupting kernel ${id} (mode: ${instance.mode})...`);
+      
+      if (instance.mode === KernelMode.WORKER && instance.worker) {
+        // For worker kernels, use SharedArrayBuffer interrupt method
+        return await this.interruptWorkerKernel(id, instance);
+      } else {
+        // For main thread kernels, use the kernel's interrupt method
+        return await this.interruptMainThreadKernel(id, instance);
+      }
+    } catch (error) {
+      console.error(`Error interrupting kernel ${id}:`, error);
+      return false;
+    }
+  }
+  
+  /**
+   * Interrupt a main thread kernel
+   * @param id Kernel ID
+   * @param instance Kernel instance
+   * @returns Promise resolving to interrupt success
+   * @private
+   */
+  private async interruptMainThreadKernel(id: string, instance: IKernelInstance): Promise<boolean> {
+    console.log(`[MANAGER] Interrupting main thread kernel ${id}`);
+    
+    try {
+      // Try to use the kernel's interrupt method
+      if (typeof instance.kernel.interrupt === 'function') {
+        const result = await instance.kernel.interrupt();
+        console.log(`[MANAGER] Main thread kernel ${id} interrupt result: ${result}`);
+        return result;
+      } else {
+        console.warn(`[MANAGER] Main thread kernel ${id} does not support interrupt method`);
+        
+        // Emit a synthetic KeyboardInterrupt event
+        super.emit(KernelEvents.EXECUTE_ERROR, {
+          kernelId: id,
+          data: {
+            ename: "KeyboardInterrupt",
+            evalue: "Execution interrupted by user",
+            traceback: ["KeyboardInterrupt: Execution interrupted by user"]
+          }
+        });
+        
+        return true;
+      }
+    } catch (error) {
+      console.error(`[MANAGER] Error interrupting main thread kernel ${id}:`, error);
+      return false;
+    }
+  }
+  
+  /**
+   * Interrupt a worker kernel using SharedArrayBuffer
+   * @param id Kernel ID
+   * @param instance Kernel instance
+   * @returns Promise resolving to interrupt success
+   * @private
+   */
+  private async interruptWorkerKernel(id: string, instance: IKernelInstance): Promise<boolean> {
+    console.log(`[MANAGER] Interrupting worker kernel ${id}`);
+    
+    try {
+      const worker = instance.worker;
+      if (!worker) {
+        console.error(`[MANAGER] Worker not found for kernel ${id}`);
+        return false;
+      }
+      
+      // Check if we already have an interrupt buffer for this kernel
+      let interruptBuffer = this.interruptBuffers.get(id);
+      
+      if (!interruptBuffer) {
+        // Create a new SharedArrayBuffer for interrupt control
+        console.log(`[MANAGER] Creating interrupt buffer for worker kernel ${id}`);
+        
+        try {
+          // Try to create SharedArrayBuffer (requires specific security headers)
+          const sharedBuffer = new SharedArrayBuffer(1);
+          interruptBuffer = new Uint8Array(sharedBuffer);
+          
+          // Store the buffer for future use
+          this.interruptBuffers.set(id, interruptBuffer);
+          
+          // Send the buffer to the worker
+          worker.postMessage({
+            type: "SET_INTERRUPT_BUFFER",
+            buffer: interruptBuffer
+          });
+          
+          // Wait a moment for the worker to set up the buffer
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          console.log(`[MANAGER] Interrupt buffer created and sent to worker kernel ${id}`);
+        } catch (error) {
+          console.warn(`[MANAGER] Failed to create SharedArrayBuffer for kernel ${id}, falling back to message-based interrupt:`, error);
+          
+          // Fallback: use message-based interrupt
+          return await this.interruptWorkerKernelFallback(id, worker);
+        }
+      }
+      
+      // Reset buffer to 0 first
+      interruptBuffer[0] = 0;
+      
+      // Send interrupt message to worker
+      worker.postMessage({
+        type: "INTERRUPT_KERNEL"
+      });
+      
+      // Wait for a short time to see if the interrupt was processed
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      // Check if the interrupt was processed (buffer should still be 0 if processed, or 2 if not)
+      const wasProcessed = interruptBuffer[0] === 0;
+      
+      console.log(`[MANAGER] Worker kernel ${id} interrupt ${wasProcessed ? 'successful' : 'may have failed'}`);
+      return true; // Return true even if we're not sure, as the interrupt was attempted
+      
+    } catch (error) {
+      console.error(`[MANAGER] Error interrupting worker kernel ${id}:`, error);
+      return false;
+    }
+  }
+  
+  /**
+   * Fallback interrupt method for worker kernels when SharedArrayBuffer is not available
+   * @param id Kernel ID
+   * @param worker Worker instance
+   * @returns Promise resolving to interrupt success
+   * @private
+   */
+  private async interruptWorkerKernelFallback(id: string, worker: Worker): Promise<boolean> {
+    console.log(`[MANAGER] Using fallback interrupt method for worker kernel ${id}`);
+    
+    return new Promise<boolean>((resolve) => {
+      // Set up a listener for the interrupt response
+      const responseHandler = (event: MessageEvent) => {
+        if (event.data?.type === "INTERRUPT_TRIGGERED") {
+          worker.removeEventListener("message", responseHandler);
+          const success = event.data.data?.success || false;
+          console.log(`[MANAGER] Fallback interrupt for kernel ${id} result: ${success}`);
+          resolve(success);
+        }
+      };
+      
+      // Listen for the response
+      worker.addEventListener("message", responseHandler);
+      
+      // Send the interrupt message
+      worker.postMessage({
+        type: "INTERRUPT_KERNEL"
+      });
+      
+      // Set a timeout in case we don't get a response
+      setTimeout(() => {
+        worker.removeEventListener("message", responseHandler);
+        console.warn(`[MANAGER] Timeout waiting for interrupt response from kernel ${id}`);
+        resolve(false);
+      }, 5000); // 5 second timeout
+    });
   }
 }

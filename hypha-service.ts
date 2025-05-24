@@ -377,6 +377,30 @@ async function startHyphaService() {
       };
     },
 
+    async interruptKernel({kernelId}: {kernelId: string}, context: {user: any, ws: string}) {
+      kernelId = ensureKernelId(kernelId, context.ws);
+      
+      // Verify kernel belongs to user's namespace
+      const kernel = kernelManager.getKernel(kernelId);
+      if (!kernel) {
+        throw new Error("Kernel not found or access denied");
+      }
+      
+      // Interrupt the kernel
+      const success = await kernelManager.interruptKernel(kernelId);
+      
+      if (!success) {
+        throw new Error("Failed to interrupt kernel");
+      }
+      
+      console.log(`Kernel ${kernelId} interrupted by user in workspace ${context.ws}`);
+      return { 
+        success: true, 
+        message: "Kernel execution interrupted",
+        timestamp: new Date().toISOString()
+      };
+    },
+
     async getStatus(context: {user: any, ws: string}) {
       // Get total kernels across all namespaces
       const allKernels = kernelManager.getKernelIds();

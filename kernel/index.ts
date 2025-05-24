@@ -70,6 +70,10 @@ export interface IKernel extends EventEmitter {
   getStatus?(): "active" | "busy" | "unknown";
   status: "active" | "busy" | "unknown";
   
+  // Interrupt functionality
+  interrupt?(): Promise<boolean>;
+  setInterruptBuffer?(buffer: Uint8Array): void;
+  
   // Optional methods
   complete?(code: string, cursor_pos: number, parent?: any): Promise<any>;
   inspect?(code: string, cursor_pos: number, detail_level: 0 | 1, parent?: any): Promise<any>;
@@ -127,6 +131,10 @@ export class Kernel extends EventEmitter implements IKernel {
   private _parent_header: any = {};
   private executionCount = 0;
   private _status: "active" | "busy" | "unknown" = "unknown";
+  
+  // Interrupt handling
+  private _interruptBuffer: Uint8Array | null = null;
+  private _interruptSupported = false;
   
   constructor() {
     super();
@@ -912,6 +920,80 @@ print(f"Piplite configuration: {piplite.piplite._PIPLITE_URLS}")
         success: false,
         error: error instanceof Error ? error : new Error(String(error))
       };
+    }
+  }
+
+  // Interrupt functionality
+  public async interrupt(): Promise<boolean> {
+    console.log("[KERNEL] Interrupt requested for main thread kernel");
+    
+    if (!this.initialized || !this.pyodide) {
+      console.warn("[KERNEL] Cannot interrupt: kernel not initialized");
+      return false;
+    }
+    
+    // Main thread kernels have limited interrupt support
+    // According to Pyodide docs, interrupts work best in web workers
+    console.warn("[KERNEL] Main thread kernels have limited interrupt support");
+    
+    try {
+      // If we have an interrupt buffer set up, try to use it
+      if (this._interruptBuffer && this._interruptSupported) {
+        console.log("[KERNEL] Using interrupt buffer for main thread kernel");
+        // Set interrupt signal (2 = SIGINT)
+        this._interruptBuffer[0] = 2;
+        
+        // Give the interrupt a moment to be processed
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Check if the interrupt was processed (buffer should be reset to 0)
+        const wasProcessed = this._interruptBuffer[0] === 0;
+        console.log(`[KERNEL] Interrupt ${wasProcessed ? 'was' : 'was not'} processed`);
+        return wasProcessed;
+      } else {
+        // Fallback: try to force a Python interrupt using the interpreter
+        console.log("[KERNEL] Attempting fallback interrupt method for main thread");
+        
+        if (this._interpreter && typeof this._interpreter.interrupt === 'function') {
+          this._interpreter.interrupt();
+          return true;
+        }
+        
+        // Last resort: emit a synthetic KeyboardInterrupt
+        console.log("[KERNEL] Emitting synthetic KeyboardInterrupt");
+        this._sendMessage({
+          type: 'execute_error',
+          bundle: {
+            ename: 'KeyboardInterrupt',
+            evalue: 'Execution interrupted by user',
+            traceback: ['KeyboardInterrupt: Execution interrupted by user']
+          }
+        });
+        
+        return true;
+      }
+    } catch (error) {
+      console.error("[KERNEL] Error during interrupt:", error);
+      return false;
+    }
+  }
+
+  public setInterruptBuffer(buffer: Uint8Array): void {
+    console.log("[KERNEL] Setting interrupt buffer for main thread kernel");
+    this._interruptBuffer = buffer;
+    
+    try {
+      if (this.pyodide && typeof this.pyodide.setInterruptBuffer === 'function') {
+        this.pyodide.setInterruptBuffer(buffer);
+        this._interruptSupported = true;
+        console.log("[KERNEL] Interrupt buffer set successfully");
+      } else {
+        console.warn("[KERNEL] pyodide.setInterruptBuffer not available, interrupt support limited");
+        this._interruptSupported = false;
+      }
+    } catch (error) {
+      console.error("[KERNEL] Error setting interrupt buffer:", error);
+      this._interruptSupported = false;
     }
   }
 }

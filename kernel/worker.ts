@@ -18,6 +18,9 @@ let kernelOptions: IKernelOptions = {};
 // Track current event listeners for cleanup
 let currentEventListeners: Map<string, (data: any) => void> = new Map();
 
+// Interrupt handling for worker
+let interruptBuffer: Uint8Array | null = null;
+
 // Listen for messages to set up the event port and initialize kernel
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SET_EVENT_PORT" && event.data?.port) {
@@ -49,6 +52,69 @@ self.addEventListener("message", (event) => {
         });
       }
     });
+  } else if (event.data?.type === "SET_INTERRUPT_BUFFER") {
+    // Handle interrupt buffer setup
+    console.log("[WORKER] Setting interrupt buffer");
+    interruptBuffer = event.data.buffer;
+    
+    // Set the interrupt buffer in the kernel if it's initialized
+    if (kernel.isInitialized() && interruptBuffer && typeof kernel.setInterruptBuffer === 'function') {
+      kernel.setInterruptBuffer(interruptBuffer);
+      console.log("[WORKER] Interrupt buffer set in kernel");
+    }
+    
+    if (eventPort) {
+      eventPort.postMessage({
+        type: "INTERRUPT_BUFFER_SET",
+        data: { success: true }
+      });
+    }
+  } else if (event.data?.type === "INTERRUPT_KERNEL") {
+    // Handle interrupt request
+    console.log("[WORKER] Interrupt requested");
+    
+    if (interruptBuffer) {
+      console.log("[WORKER] Triggering interrupt via buffer");
+      // Set interrupt signal (2 = SIGINT)
+      interruptBuffer[0] = 2;
+      
+      if (eventPort) {
+        eventPort.postMessage({
+          type: "INTERRUPT_TRIGGERED",
+          data: { success: true, method: "buffer" }
+        });
+      }
+    } else {
+      console.log("[WORKER] No interrupt buffer available, trying kernel.interrupt()");
+      
+      // Fallback to kernel interrupt method
+      if (typeof kernel.interrupt === 'function') {
+        kernel.interrupt().then(success => {
+          if (eventPort) {
+            eventPort.postMessage({
+              type: "INTERRUPT_TRIGGERED",
+              data: { success, method: "kernel" }
+            });
+          }
+        }).catch(error => {
+          console.error("[WORKER] Error during kernel interrupt:", error);
+          if (eventPort) {
+            eventPort.postMessage({
+              type: "INTERRUPT_TRIGGERED",
+              data: { success: false, error: error.message, method: "kernel" }
+            });
+          }
+        });
+      } else {
+        console.warn("[WORKER] No interrupt method available");
+        if (eventPort) {
+          eventPort.postMessage({
+            type: "INTERRUPT_TRIGGERED",
+            data: { success: false, error: "No interrupt method available", method: "none" }
+          });
+        }
+      }
+    }
   }
 });
 
@@ -56,6 +122,12 @@ self.addEventListener("message", (event) => {
 async function initializeKernel(options: IKernelOptions): Promise<void> {
   try {
     await kernel.initialize(options);
+    
+    // Set up the interrupt buffer if it's available and the kernel supports it
+    if (interruptBuffer && typeof kernel.setInterruptBuffer === 'function') {
+      console.log("[WORKER] Setting interrupt buffer after kernel initialization");
+      kernel.setInterruptBuffer(interruptBuffer);
+    }
     
     // Set up event forwarding AFTER kernel is initialized
     setupEventForwarding();
@@ -198,6 +270,41 @@ const simpleProxy = {
     } catch (error) {
       console.error("[WORKER] getStatus error:", error);
       return "unknown";
+    }
+  },
+  
+  // Interrupt functionality
+  interrupt: async () => {
+    try {
+      console.log("[WORKER] Interrupt method called");
+      if (typeof kernel.interrupt === 'function') {
+        const result = await kernel.interrupt();
+        console.log(`[WORKER] Kernel interrupt result: ${result}`);
+        return result;
+      } else {
+        console.warn("[WORKER] Kernel does not support interrupt method");
+        return false;
+      }
+    } catch (error) {
+      console.error("[WORKER] Interrupt error:", error);
+      return false;
+    }
+  },
+  
+  setInterruptBuffer: (buffer: Uint8Array) => {
+    try {
+      console.log("[WORKER] setInterruptBuffer method called");
+      if (typeof kernel.setInterruptBuffer === 'function') {
+        kernel.setInterruptBuffer(buffer);
+        console.log("[WORKER] Interrupt buffer set via proxy");
+        return true;
+      } else {
+        console.warn("[WORKER] Kernel does not support setInterruptBuffer method");
+        return false;
+      }
+    } catch (error) {
+      console.error("[WORKER] setInterruptBuffer error:", error);
+      return false;
     }
   }
 };
