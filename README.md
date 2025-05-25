@@ -46,6 +46,144 @@ cd deno-app-engine
 deno run --allow-read --allow-write --allow-run kernel/check-wheels.ts
 ```
 
+## Running the HTTP Server
+
+The HTTP server provides a REST API for kernel management and code execution.
+
+### Using the Shell Script
+
+The easiest way to start the HTTP server is using the provided shell script:
+
+```bash
+# Make the script executable (first time only)
+chmod +x start-server.sh
+
+# Start the server
+./start-server.sh
+```
+
+The script will:
+- Check if Deno is installed
+- Start the server with necessary permissions on port 8000
+- Enable all required permissions: `--allow-net --allow-read --allow-write --allow-env`
+
+### Manual HTTP Server Start
+
+You can also start the HTTP server manually:
+
+```bash
+# Start HTTP server on default port 8000
+deno run --allow-net --allow-read --allow-write --allow-env server.ts
+```
+
+### HTTP Server Environment Variables
+
+The HTTP server can be configured using these environment variables:
+
+```bash
+# Allowed kernel types (comma-separated: mode-language pairs)
+# Default: "worker-python,worker-typescript"
+export ALLOWED_KERNEL_TYPES="worker-python,worker-typescript,main_thread-python"
+
+# Enable kernel pooling for better performance
+# Default: false
+export KERNEL_POOL_ENABLED="true"
+
+# Number of kernels to keep ready in the pool
+# Default: 2
+export KERNEL_POOL_SIZE="4"
+
+# Automatically refill the pool when kernels are taken
+# Default: true
+export KERNEL_POOL_AUTO_REFILL="true"
+
+# Kernel types to preload in the pool (comma-separated)
+# Default: Same as ALLOWED_KERNEL_TYPES filtered to Python kernels
+export KERNEL_POOL_PRELOAD_CONFIGS="worker-python,main_thread-python"
+```
+
+### HTTP Server Example Configuration
+
+```bash
+# Production security configuration
+export ALLOWED_KERNEL_TYPES="worker-python,worker-typescript"
+export KERNEL_POOL_ENABLED="true"
+export KERNEL_POOL_SIZE="6"
+
+# Start the HTTP server
+./start-server.sh
+```
+
+## Running the Hypha Service
+
+The Hypha service provides integration with the Hypha ecosystem for distributed computing and collaboration.
+
+### Manual Hypha Service Start
+
+```bash
+# Start Hypha service
+deno run --allow-net --allow-read --allow-write --allow-env hypha-service.ts
+```
+
+### Hypha Service Environment Variables
+
+The Hypha service uses all the kernel configuration variables from the HTTP server, plus these additional ones:
+
+```bash
+# Hypha server URL
+# Default: "https://hypha.aicell.io"
+export HYPHA_SERVER_URL="https://your-hypha-server.com"
+
+# Hypha workspace name
+# Optional - if not set, will use default workspace
+export HYPHA_WORKSPACE="my-workspace"
+
+# Hypha authentication token
+# Optional - if not set, will attempt interactive login
+export HYPHA_TOKEN="your-auth-token"
+
+# Kernel configuration (same as HTTP server)
+export ALLOWED_KERNEL_TYPES="worker-python,worker-typescript"
+export KERNEL_POOL_ENABLED="true"
+export KERNEL_POOL_SIZE="4"
+export KERNEL_POOL_AUTO_REFILL="true"
+export KERNEL_POOL_PRELOAD_CONFIGS="worker-python"
+```
+
+### Hypha Service Example Configuration
+
+```bash
+# Set up Hypha connection
+export HYPHA_SERVER_URL="https://hypha.aicell.io"
+export HYPHA_WORKSPACE="my-team"
+export HYPHA_TOKEN="your-auth-token"
+
+# Configure kernels for security
+export ALLOWED_KERNEL_TYPES="worker-python"
+export KERNEL_POOL_ENABLED="true"
+export KERNEL_POOL_SIZE="4"
+
+# Start the Hypha service
+deno run --allow-net --allow-read --allow-write --allow-env hypha-service.ts
+```
+
+## Kernel Types Reference
+
+The kernel type format is `mode-language` where:
+
+**Modes:**
+- `worker`: Runs in a Web Worker (recommended for security)
+- `main_thread`: Runs in the main thread (less secure, better debugging)
+
+**Languages:**
+- `python`: Python execution with Pyodide
+- `typescript`: TypeScript execution (experimental)
+
+**Examples:**
+- `worker-python`: Python kernel in Web Worker
+- `main_thread-python`: Python kernel in main thread
+- `worker-typescript`: TypeScript kernel in Web Worker
+
 ## Usage
 
 ### Basic Example
@@ -137,6 +275,132 @@ manager.onKernelEvent(kernelId, KernelEvents.EXECUTE_ERROR, (data) => {
 });
 ```
 
+### Kernel Management Functions
+
+The kernel manager provides several functions for controlling kernel lifecycle and execution:
+
+#### Ping Kernel
+
+Reset the inactivity timer to prevent automatic shutdown of idle kernels:
+
+```typescript
+// Ping a kernel to reset its activity timer
+const success = manager.pingKernel(kernelId);
+
+if (success) {
+  console.log("Kernel activity timer reset");
+} else {
+  console.log("Kernel not found");
+}
+
+// Use case: Keep a kernel alive during periods of expected inactivity
+setInterval(() => {
+  if (shouldKeepKernelAlive) {
+    manager.pingKernel(kernelId);
+  }
+}, 60000); // Ping every minute
+```
+
+#### Restart Kernel
+
+Restart a kernel while preserving its ID and configuration. This destroys the existing kernel and creates a new one with the same settings:
+
+```typescript
+// Restart a kernel to clear its state
+const success = await manager.restartKernel(kernelId);
+
+if (success) {
+  console.log("Kernel restarted successfully");
+  
+  // The kernel now has a fresh Python environment
+  // All variables and imports are cleared
+  const result = await manager.execute(kernelId, 'print("Fresh start!")');
+} else {
+  console.log("Failed to restart kernel or kernel not found");
+}
+
+// Use case: Clear corrupted state or memory leaks
+const kernelId = await manager.createKernel({
+  mode: KernelMode.MAIN_THREAD,
+  inactivityTimeout: 30 * 60 * 1000 // 30 minutes
+});
+
+// After heavy computation that might have corrupted state
+await manager.execute(kernelId, 'import numpy as np; large_array = np.ones((10000, 10000))');
+
+// Restart to free memory and reset state
+await manager.restartKernel(kernelId);
+
+// Kernel configuration (mode, timeouts, filesystem mounts) is preserved
+const kernel = manager.getKernel(kernelId);
+console.log("Mode preserved:", kernel?.mode); // Still MAIN_THREAD
+```
+
+#### Interrupt Kernel
+
+Interrupt any currently running execution in a kernel. This is useful for stopping long-running or stuck operations:
+
+```typescript
+// Interrupt a running execution
+const success = await manager.interruptKernel(kernelId);
+
+if (success) {
+  console.log("Kernel execution interrupted");
+} else {
+  console.log("Failed to interrupt kernel or kernel not found");
+}
+
+// Use case: Stop a long-running computation
+const kernelId = await manager.createKernel({ mode: KernelMode.WORKER });
+
+// Start a long-running computation
+const executionPromise = manager.execute(kernelId, `
+import time
+for i in range(1000000):
+    # Simulate heavy computation
+    time.sleep(0.001)
+    if i % 10000 == 0:
+        print(f"Progress: {i}")
+`);
+
+// After some time, interrupt the execution
+setTimeout(async () => {
+  const interrupted = await manager.interruptKernel(kernelId);
+  console.log("Interrupt successful:", interrupted);
+}, 5000); // Interrupt after 5 seconds
+
+// The execution will be interrupted and throw a KeyboardInterrupt error
+try {
+  await executionPromise;
+} catch (error) {
+  console.log("Execution was interrupted:", error);
+}
+```
+
+#### Interrupt Behavior by Kernel Mode
+
+The interrupt mechanism works differently depending on the kernel mode:
+
+- **Main Thread Kernels**: Limited interrupt support. Uses the kernel's built-in interrupt method if available, otherwise emits a synthetic KeyboardInterrupt event.
+
+- **Worker Kernels**: More robust interrupt support using SharedArrayBuffer when available, with fallback to message-based interruption.
+
+```typescript
+// For worker kernels with better interrupt support
+const workerKernelId = await manager.createKernel({
+  mode: KernelMode.WORKER
+});
+
+// For main thread kernels with limited interrupt support  
+const mainThreadKernelId = await manager.createKernel({
+  mode: KernelMode.MAIN_THREAD
+});
+
+// Both can be interrupted, but worker kernels are more reliable
+await manager.interruptKernel(workerKernelId);    // More reliable
+await manager.interruptKernel(mainThreadKernelId); // Limited support
+```
+
 ### Worker with Restricted Permissions
 
 ```typescript
@@ -176,6 +440,9 @@ The main class for managing kernel instances.
 - `executeStream(id, code, parent?)`: Executes code with streaming results
 - `onKernelEvent(id, event, listener)`: Registers an event listener
 - `offKernelEvent(id, event, listener)`: Removes an event listener
+- `pingKernel(id)`: Resets kernel activity timer to prevent inactivity shutdown
+- `restartKernel(id)`: Restarts a kernel while preserving its ID and configuration
+- `interruptKernel(id)`: Interrupts any running execution in the kernel
 
 ### Inactivity and Execution Management
 
