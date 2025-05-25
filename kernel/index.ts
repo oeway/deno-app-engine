@@ -575,23 +575,27 @@ await micropip.install(ipykernel_url)
       
       // Execute the code using the IPython interpreter
       const result = await this._kernel.run(code);
-      // Check if there was a Python error - look for error status or error fields directly in result
-      if (result && 
-         ((result.status === 'error') || 
-          (result.ename) || 
-          (result.evalue))) {
+      
+      // Format the result for consistent structure
+      const formattedResult = this.formatResult(result);
+      
+      // Check if there was a Python error - look for error status or error fields
+      if (formattedResult && 
+         ((formattedResult.status === 'error') || 
+          (formattedResult.ename) || 
+          (formattedResult.evalue))) {
         
         this._status = "active";
         
         // Check if this is a KeyboardInterrupt (from an interrupt signal)
-        if (result.ename && result.ename.includes('KeyboardInterrupt')) {
+        if (formattedResult.ename && formattedResult.ename.includes('KeyboardInterrupt')) {
 
           // Send stderr stream first (for Jupyter notebook UI compatibility)
           this._sendMessage({
             type: 'stream',
             bundle: {
               name: 'stderr',
-              text: `KeyboardInterrupt: ${result.evalue || 'Execution interrupted'}\n`
+              text: `KeyboardInterrupt: ${formattedResult.evalue || 'Execution interrupted'}\n`
             }
           });
           
@@ -599,16 +603,16 @@ await micropip.install(ipykernel_url)
           this._sendMessage({
             type: 'execute_error',
             bundle: {
-              ename: result.ename || 'KeyboardInterrupt',
-              evalue: result.evalue || 'Execution interrupted',
-              traceback: result.traceback || ['KeyboardInterrupt: Execution was interrupted by user']
+              ename: formattedResult.ename || 'KeyboardInterrupt',
+              evalue: formattedResult.evalue || 'Execution interrupted',
+              traceback: formattedResult.traceback || ['KeyboardInterrupt: Execution was interrupted by user']
             }
           });
           
           return { 
             success: false, 
             error: new Error('KeyboardInterrupt: Execution interrupted'),
-            result 
+            result: formattedResult 
           };
         }
         
@@ -616,16 +620,16 @@ await micropip.install(ipykernel_url)
         this._sendMessage({
           type: 'execute_error',
           bundle: {
-            ename: result.ename || 'Error',
-            evalue: result.evalue || 'Unknown error',
-            traceback: result.traceback || []
+            ename: formattedResult.ename || 'Error',
+            evalue: formattedResult.evalue || 'Unknown error',
+            traceback: formattedResult.traceback || []
           }
         });
          
         return { 
           success: false, 
-          error: new Error(`${result.ename || 'Error'}: ${result.evalue || 'Unknown error'}`),
-          result
+          error: new Error(`${formattedResult.ename || 'Error'}: ${formattedResult.evalue || 'Unknown error'}`),
+          result: formattedResult
         };
       }
     
@@ -644,9 +648,6 @@ await micropip.install(ipykernel_url)
           });
         }
       }
-      
-      // Format the result for the return value
-      const formattedResult = this.formatResult(result);
       
       this._status = "active";
       return {
