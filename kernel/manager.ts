@@ -129,6 +129,34 @@ export class KernelManager extends EventEmitter {
   // Interrupt buffers for worker kernels (using SharedArrayBuffer)
   private interruptBuffers: Map<string, Uint8Array> = new Map();
   
+  /**
+   * Helper function to check if an error is a KeyboardInterrupt
+   * @private
+   */
+  private isKeyboardInterrupt(error: any): boolean {
+    return error && 
+           typeof error === 'object' && 
+           (('type' in error && error.type === "KeyboardInterrupt") ||
+            ('message' in error && typeof error.message === 'string' && error.message.includes("KeyboardInterrupt")));
+  }
+  
+  /**
+   * Helper function to create a standardized KeyboardInterrupt error result
+   * @private
+   */
+  private createKeyboardInterruptResult(): { success: boolean; error: Error; result: any } {
+    return {
+      success: false,
+      error: new Error("KeyboardInterrupt: Execution interrupted by user"),
+      result: {
+        status: "error",
+        ename: "KeyboardInterrupt",
+        evalue: "Execution interrupted by user",
+        traceback: ["KeyboardInterrupt: Execution interrupted by user"]
+      }
+    };
+  }
+  
   constructor(options: IKernelManagerOptions = {}) {
     super();
     super.setMaxListeners(100); // Allow many listeners for kernel events
@@ -1178,7 +1206,6 @@ export class KernelManager extends EventEmitter {
     
     // Clean up interrupt buffers
     if (this.interruptBuffers.has(id)) {
-      console.log(`Cleaning up interrupt buffer for kernel ${id}`);
       this.interruptBuffers.delete(id);
     }
     
@@ -1235,12 +1262,10 @@ export class KernelManager extends EventEmitter {
    * @private
    */
   private async destroyPool(): Promise<void> {
-    console.log("Destroying kernel pool...");
     
     const destroyPromises: Promise<void>[] = [];
     
     for (const [poolKey, promises] of this.pool.entries()) {
-      console.log(`Destroying ${promises.length} kernel promises from pool ${poolKey}`);
       
       for (const kernelPromise of promises) {
         // Handle each promise - if it resolves, destroy the kernel
@@ -1261,8 +1286,6 @@ export class KernelManager extends EventEmitter {
     // Clear the pool and prefilling flags
     this.pool.clear();
     this.prefillingInProgress.clear();
-    
-    console.log("Kernel pool destroyed");
   }
   
   /**
@@ -1606,11 +1629,24 @@ export class KernelManager extends EventEmitter {
             }).catch((error) => {
               console.error(`Error in execute for kernel ${kernelId}:`, error);
               
-              // Simple error handling
-              const errorResult = {
-                success: false,
-                error: error instanceof Error ? error : new Error(String(error))
-              };
+              // Check if this is a KeyboardInterrupt and handle it specially
+              let errorResult;
+              if (this.isKeyboardInterrupt(error)) {
+                console.log(`KeyboardInterrupt caught in executeStream for kernel ${kernelId}`);
+                errorResult = this.createKeyboardInterruptResult();
+                
+                // Also push to stream queue for immediate feedback
+                streamQueue.push({
+                  type: 'error',
+                  data: errorResult.result
+                });
+              } else {
+                // Handle other errors normally
+                errorResult = {
+                  success: false,
+                  error: error instanceof Error ? error : new Error(String(error))
+                };
+              }
               
               executionComplete = true;
               executionResult = errorResult;
@@ -1727,6 +1763,15 @@ export class KernelManager extends EventEmitter {
     const executionId = `exec-${crypto.randomUUID()}`;
     const startTime = Date.now();
     
+    // Reset interrupt buffer for worker kernels before each new execution
+    // This ensures the kernel can be interrupted multiple times
+    const instance = this.kernels.get(kernelId);
+    if (instance && instance.mode === KernelMode.WORKER && this.interruptBuffers.has(kernelId)) {
+      const interruptBuffer = this.interruptBuffers.get(kernelId)!;
+      // Reset buffer to 0 (no interrupt signal) to ensure clean state
+      interruptBuffer[0] = 0;
+    }
+    
     // Get or create the set of ongoing executions for this kernel
     if (!this.ongoingExecutions.has(kernelId)) {
       this.ongoingExecutions.set(kernelId, new Set());
@@ -1750,7 +1795,6 @@ export class KernelManager extends EventEmitter {
     this.updateKernelActivity(kernelId);
     
     // If maxExecutionTime is set, create a timeout to detect stuck/dead kernels
-    const instance = this.kernels.get(kernelId);
     if (instance && instance.options.maxExecutionTime && instance.options.maxExecutionTime > 0) {
       // Get or create the map of execution timeouts for this kernel
       if (!this.executionTimeouts.has(kernelId)) {
@@ -2530,7 +2574,6 @@ export class KernelManager extends EventEmitter {
     console.warn(`Handling stuck execution ${executionId} on kernel ${kernelId} (runtime: ${actualRuntime}ms)`);
     
     // Strategy 1: Try to interrupt the kernel first
-    console.log(`Attempting to interrupt stuck kernel ${kernelId}...`);
     const interruptSuccess = await this.interruptKernel(kernelId);
     
     if (interruptSuccess) {
@@ -2788,7 +2831,6 @@ export class KernelManager extends EventEmitter {
           if (event.data?.type === "INTERRUPT_BUFFER_SET") {
             worker.removeEventListener("message", handler);
             clearTimeout(timeout);
-            console.log(`✅ Interrupt buffer automatically set up for kernel ${id}`);
             resolve();
           }
         };

@@ -575,10 +575,6 @@ await micropip.install(ipykernel_url)
       
       // Execute the code using the IPython interpreter
       const result = await this._kernel.run(code);
-      
-      // Debug the result structure
-      console.debug("[KERNEL] Python execution result structure:", JSON.stringify(result, null, 2));
-      
       // Check if there was a Python error - look for error status or error fields directly in result
       if (result && 
          ((result.status === 'error') || 

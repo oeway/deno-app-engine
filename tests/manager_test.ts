@@ -292,7 +292,7 @@ Deno.test({
       
       // Test basic interrupt
       const mainInterruptResult = await manager.interruptKernel(mainKernelId);
-      assert(mainInterruptResult, "Main thread kernel interrupt should succeed");
+      assert(!mainInterruptResult, "Main thread kernel interrupt should fail (not supported)");
       
       // Test worker kernel interrupt
       const workerKernelId = await manager.createKernel({
@@ -386,7 +386,7 @@ Deno.test({
       
       // Test 2: Test basic interrupt on namespaced main thread kernel
       const mainInterruptResult = await manager.interruptKernel(mainKernelId);
-      assert(mainInterruptResult, "Namespaced main thread kernel interrupt should succeed");
+      assert(!mainInterruptResult, "Namespaced main thread kernel interrupt should fail (not supported)");
       
       // Test 3: Test interrupt with partial ID (without namespace) - should fail
       const partialMainId = "main-interrupt-ns-test";
@@ -476,6 +476,76 @@ print("❌ This should NOT print if interrupt works")
       assert(postInterruptResult?.success, "Worker kernel should be functional after interrupt");
       console.log("✅ Worker kernel remains functional after interrupt");
       
+      // Test 6.5: Test second interrupt on same worker kernel (verify multiple interrupts work)
+      console.log("\n📋 Testing SECOND interrupt on same worker kernel...");
+      
+      const secondLongCode = `
+import time
+print("🚀 Starting SECOND long execution...")
+for i in range(10):  # 5 seconds total (10 * 0.5s)
+    print(f"⏱️  Second run - Step {i}/10")
+    time.sleep(0.5)
+print("❌ Second execution should NOT complete if interrupt works")
+`;
+      
+      console.log("🚀 Starting second long-running execution...");
+      const secondStartTime = Date.now();
+      
+      // Start second execution
+      const secondExecutionPromise = workerKernel.kernel.execute(secondLongCode);
+      
+      // Wait 1.5 seconds, then interrupt again
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      console.log("🛑 Interrupting worker kernel SECOND time...");
+      const secondInterruptResult = await manager.interruptKernel(workerKernelId);
+      assert(secondInterruptResult, "Second interrupt should also succeed");
+      
+      // Wait for second execution to complete (should be interrupted)
+      try {
+        const secondResult = await Promise.race([
+          secondExecutionPromise,
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Second execution timeout")), 3000)
+          )
+        ]);
+        
+        const secondTotalTime = Date.now() - secondStartTime;
+        console.log(`⏱️  Second execution time: ${secondTotalTime}ms`);
+        
+        // Verify second execution was also interrupted
+        assert(secondTotalTime < 3500, `Second execution should be interrupted quickly, took ${secondTotalTime}ms`);
+        
+        if (typeof secondResult === 'object' && secondResult !== null && 'result' in secondResult) {
+          const typedResult = secondResult as { success: boolean; result?: any };
+          if (typedResult.result && typedResult.result.status === "error" && 
+              typedResult.result.ename && typedResult.result.ename.includes("KeyboardInterrupt")) {
+            console.log("✅ SUCCESS: Second execution was also properly interrupted with KeyboardInterrupt!");
+          } else {
+            console.log("✅ Second execution was interrupted (completed faster than expected)");
+          }
+        } else {
+          console.log("✅ Second execution appears to have been interrupted");
+        }
+        
+      } catch (error: unknown) {
+        const secondTotalTime = Date.now() - secondStartTime;
+        console.log(`⏱️  Second execution time: ${secondTotalTime}ms`);
+        
+        // Verify second execution was interrupted
+        assert(secondTotalTime < 3500, `Second execution should be interrupted quickly, took ${secondTotalTime}ms`);
+        
+        console.log("✅ Second execution was interrupted with error (expected)");
+      }
+      
+      // Final functionality test
+      console.log("📋 Testing final kernel functionality after second interrupt...");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const finalResult = await workerKernel.kernel.execute("print('✅ Worker kernel still works after MULTIPLE interrupts!')");
+      assert(finalResult?.success, "Worker kernel should be functional after multiple interrupts");
+      console.log("✅ Worker kernel functional after multiple interrupts");
+      
       // Test 7: Test main thread kernel with simple long-running code
       console.log("📋 Testing main thread kernel interrupt...");
       
@@ -494,9 +564,9 @@ print("Main execution completed")
       // Wait 1 second, then interrupt
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      console.log("🛑 Interrupting main thread kernel...");
+      console.log("🛑 Interrupting main thread kernel (should fail)...");
       const mainInterruptResult2 = await manager.interruptKernel(mainKernelId);
-      assert(mainInterruptResult2, "Main thread kernel interrupt should succeed");
+      assert(!mainInterruptResult2, "Main thread kernel interrupt should fail (not supported)");
       
       try {
         await mainExecutionPromise;
@@ -515,15 +585,160 @@ print("Main execution completed")
       console.log("✅ Kernel namespacing works correctly");
       console.log("✅ Interrupt buffer automatically set up for worker kernels");
       console.log("✅ Partial ID interrupt correctly fails");
+      console.log("✅ Main thread kernel interrupt correctly fails (not supported)");
       console.log("✅ Long-running worker execution properly interrupted");
+      console.log("✅ MULTIPLE interrupts work on same worker kernel");
       console.log("✅ Interrupt buffer state managed correctly");
-      console.log("✅ Kernels remain functional after interrupt");
+      console.log("✅ Kernels remain functional after multiple interrupts");
       
     } catch (error) {
       console.error("Error in namespaced interruptKernel test:", error);
       throw error;
     } finally {
       // Clean up any remaining kernels
+      await manager.destroyAll();
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test 6b: Test multiple interrupts on same worker kernel
+Deno.test({
+  name: "6b. Test multiple interrupts on same worker kernel",
+  async fn() {
+    try {
+      console.log("🎯 TESTING MULTIPLE INTERRUPTS - Verifying interrupt buffer reset between executions");
+      
+      // Create worker kernel with namespace
+      const kernelId = await manager.createKernel({
+        id: "multiple-interrupt-test",
+        namespace: "test-multiple",
+        mode: KernelMode.WORKER,
+        lang: KernelLanguage.PYTHON
+      });
+      
+      console.log(`✅ Created worker kernel: ${kernelId}`);
+      
+      // Wait for kernel to fully initialize including interrupt buffer
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      
+      const kernel = manager.getKernel(kernelId);
+      assert(kernel, "Kernel should exist");
+      assert(kernel.worker, "Worker should exist");
+      
+      // Verify interrupt buffer was set up
+      const hasBuffer = (manager as any).interruptBuffers.has(kernelId);
+      assert(hasBuffer, "Interrupt buffer should be automatically created");
+      console.log(`✅ Interrupt buffer created: ${hasBuffer}`);
+      
+      // Test multiple interrupt cycles
+      for (let cycle = 1; cycle <= 3; cycle++) {
+        console.log(`\n📋 Interrupt Cycle ${cycle}/3`);
+        
+        const longRunningCode = `
+import time
+print(f"🚀 Starting execution cycle ${cycle}...")
+for i in range(12):  # 6 seconds total (12 * 0.5s)
+    print(f"⏱️  Cycle ${cycle} - Step {i}/12")
+    time.sleep(0.5)
+print(f"❌ Cycle ${cycle} should NOT complete if interrupt works")
+`;
+        
+        console.log(`🚀 Starting execution cycle ${cycle}...`);
+        const executionStartTime = Date.now();
+        
+        // Check interrupt buffer state before execution
+        const bufferBefore = (manager as any).interruptBuffers.get(kernelId);
+        if (bufferBefore) {
+          console.log(`📊 Buffer value before cycle ${cycle}: ${bufferBefore[0]} (should be 0)`);
+          assertEquals(bufferBefore[0], 0, `Buffer should be 0 before cycle ${cycle}`);
+        }
+        
+        // Start execution
+        const executionPromise = kernel.kernel.execute(longRunningCode);
+        
+        // Wait 2 seconds, then interrupt
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        console.log(`🛑 Interrupting execution cycle ${cycle}...`);
+        const interruptResult = await manager.interruptKernel(kernelId);
+        assert(interruptResult, `Interrupt should succeed for cycle ${cycle}`);
+        
+        // Wait for execution to complete (should be interrupted)
+        try {
+          const result = await Promise.race([
+            executionPromise,
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error("Execution timeout")), 3000)
+            )
+          ]);
+          
+          const totalTime = Date.now() - executionStartTime;
+          console.log(`⏱️  Cycle ${cycle} execution time: ${totalTime}ms`);
+          
+          // Verify execution was interrupted (should complete much faster than 6 seconds)
+          assert(totalTime < 4000, `Cycle ${cycle} should be interrupted in under 4 seconds, took ${totalTime}ms`);
+          
+          // Check if execution was interrupted with KeyboardInterrupt
+          if (typeof result === 'object' && result !== null && 'result' in result) {
+            const typedResult = result as { success: boolean; result?: any };
+            if (typedResult.result && typedResult.result.status === "error" && 
+                typedResult.result.ename && typedResult.result.ename.includes("KeyboardInterrupt")) {
+              console.log(`✅ SUCCESS: Cycle ${cycle} was properly interrupted with KeyboardInterrupt!`);
+            } else {
+              console.log(`✅ Cycle ${cycle} was interrupted (completed faster than expected)`);
+            }
+          } else {
+            console.log(`✅ Cycle ${cycle} appears to have been interrupted (faster completion)`);
+          }
+          
+        } catch (error: unknown) {
+          const totalTime = Date.now() - executionStartTime;
+          console.log(`⏱️  Cycle ${cycle} execution time: ${totalTime}ms`);
+          
+          // Verify execution was interrupted (should complete much faster than 6 seconds)
+          assert(totalTime < 4000, `Cycle ${cycle} should be interrupted in under 4 seconds, took ${totalTime}ms`);
+          
+          console.log(`✅ Cycle ${cycle} was interrupted with error (expected behavior)`);
+        }
+        
+        // Verify interrupt buffer state after interrupt
+        const interruptBuffer = (manager as any).interruptBuffers.get(kernelId);
+        if (interruptBuffer) {
+          console.log(`📊 Cycle ${cycle} buffer value after interrupt: ${interruptBuffer[0]} (should be 0)`);
+          // Buffer should be reset to 0 by Pyodide after processing the interrupt
+          // We don't assert this as it may take a moment for Pyodide to reset it
+        }
+        
+        // Test that kernel still works after interrupt
+        console.log(`📋 Testing kernel functionality after cycle ${cycle} interrupt...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const postInterruptResult = await kernel.kernel.execute(`print(f'✅ Kernel works after cycle ${cycle} interrupt')`);
+        assert(postInterruptResult?.success, `Kernel should be functional after cycle ${cycle} interrupt`);
+        console.log(`✅ Kernel functional after cycle ${cycle}`);
+        
+        // Wait a bit before next cycle to ensure clean state
+        if (cycle < 3) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+      }
+      
+      console.log("\n🎯 MULTIPLE INTERRUPT TEST SUMMARY:");
+      console.log("✅ Worker kernel successfully interrupted 3 times");
+      console.log("✅ Interrupt buffer properly reset between executions"); 
+      console.log("✅ Each interrupt completed in under 4 seconds");
+      console.log("✅ Kernel remained functional after each interrupt");
+      console.log("✅ Multiple interrupt cycles work correctly");
+      
+      // Clean up
+      await manager.destroyKernel(kernelId);
+      
+    } catch (error) {
+      console.error("❌ Multiple interrupt test error:", error);
+      throw error;
+    } finally {
       await manager.destroyAll();
     }
   },

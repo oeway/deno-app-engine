@@ -345,7 +345,6 @@ async function startHyphaService() {
         throw new Error("Failed to ping kernel");
       }
       
-      console.log(`Kernel ${kernelId} pinged by user in workspace ${context.ws}`);
       return { 
         success: true, 
         message: "Kernel activity timer reset",

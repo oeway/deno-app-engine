@@ -1,7 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.201.0/assert/assert_equals.ts";
 import { assertExists } from "https://deno.land/std@0.201.0/assert/assert_exists.ts";
 import { assert } from "https://deno.land/std@0.201.0/assert/assert.ts";
-import { handleRequest } from "../server.ts";
+import { handleRequest } from "../scripts/server.ts";
 
 // Helper function to start test server
 async function startTestServer(port: number) {

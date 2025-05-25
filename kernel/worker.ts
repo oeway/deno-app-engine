@@ -21,16 +21,54 @@ let currentEventListeners: Map<string, (data: any) => void> = new Map();
 // Interrupt handling for worker
 let interruptBuffer: Uint8Array | null = null;
 
+// Helper function to check if an error is a KeyboardInterrupt
+function isKeyboardInterrupt(error: any): boolean {
+  return error && 
+         typeof error === 'object' && 
+         (error.type === "KeyboardInterrupt" || 
+          (error.message && error.message.includes("KeyboardInterrupt")));
+}
+
+// Helper function to create KeyboardInterrupt error result
+function createKeyboardInterruptResult() {
+  return {
+    success: false,
+    error: new Error("KeyboardInterrupt: Execution interrupted by user"),
+    result: {
+      payload: [],
+      status: "error",
+      ename: "KeyboardInterrupt",
+      evalue: "Execution interrupted by user",
+      traceback: ["KeyboardInterrupt: Execution interrupted by user"]
+    }
+  };
+}
+
 // Global error handlers to prevent worker crashes
 self.addEventListener("error", (event) => {
   console.error("[WORKER] Global error caught:", event.error);
-  // Simply prevent the error from crashing the worker
   event.preventDefault();
 });
 
 self.addEventListener("unhandledrejection", (event) => {
-  console.error("[WORKER] Unhandled promise rejection:", event.reason);
-  // Simply prevent the rejection from crashing the worker
+  if (isKeyboardInterrupt(event.reason)) {
+    console.log("[WORKER] KeyboardInterrupt caught in unhandled rejection handler - this is expected during interrupts");
+    
+    // Send interrupt acknowledgment if we have an event port
+    if (eventPort) {
+      eventPort.postMessage({
+        type: KernelEvents.EXECUTE_ERROR,
+        data: {
+          ename: "KeyboardInterrupt",
+          evalue: "Execution interrupted by user",
+          traceback: ["KeyboardInterrupt: Execution interrupted by user"]
+        }
+      });
+    }
+  } else {
+    console.error("[WORKER] Unhandled promise rejection:", event.reason);
+  }
+  
   event.preventDefault();
 });
 
@@ -95,7 +133,6 @@ self.addEventListener("message", (event) => {
     
     if (interruptBuffer) {
       // Set interrupt signal (2 = SIGINT)
-      console.log("[WORKER] Setting interrupt signal in buffer");
       interruptBuffer[0] = 2;
       
       const responseMessage = {
@@ -263,7 +300,14 @@ const simpleProxy = {
       return result;
     } catch (error) {
       console.error("[WORKER] Execute error:", error);
-      // Simple error handling - just propagate the error normally
+      
+      // Check if this is a KeyboardInterrupt and handle it specially
+      if (isKeyboardInterrupt(error)) {
+        console.log("[WORKER] KeyboardInterrupt caught in execute method");
+        return createKeyboardInterruptResult();
+      }
+      
+      // Handle other errors normally
       return {
         success: false,
         error: error instanceof Error ? error : new Error(String(error)),
