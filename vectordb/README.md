@@ -1,341 +1,253 @@
-# Vector Database Module
+# VectorDB Activity Monitoring
 
-A production-ready vector database module for the Deno App Engine that provides semantic search capabilities using the Voy search engine and Transformers.js embeddings.
-
-> **Note**: Tests have been moved to the `tests/` folder for better organization. Use `deno task test-vectordb` to run unit tests.
+The VectorDB module now includes comprehensive activity monitoring capabilities similar to the kernel manager. This allows for automatic offloading of inactive vector database instances to disk and resuming them when needed.
 
 ## Features
 
-- **Multi-instance Management**: Create and manage multiple vector database instances
-- **Web Worker Isolation**: Each vector index runs in its own web worker for performance and isolation
-- **Automatic Text Embedding**: Automatic text-to-vector conversion using Transformers.js
-- **Namespace Support**: Workspace-based isolation for multi-tenant applications
-- **Real-time Events**: Event-driven architecture with real-time notifications
-- **Semantic Search**: High-performance vector similarity search using Voy
-- **CRUD Operations**: Full create, read, update, delete operations for documents
-- **Resource Management**: Automatic cleanup and resource leak prevention
-- **Production Ready**: Comprehensive error handling and edge case management
+- **Activity Tracking**: Monitor when vector indices are accessed (queries, document additions/removals)
+- **Automatic Offloading**: Inactive indices are automatically offloaded to disk after a configurable timeout
+- **Resume from Offload**: When an offloaded index is requested again, it's automatically resumed from disk
+- **Manual Management**: Manual offloading, ping functionality, and timeout configuration
+- **Namespace Support**: Activity monitoring works with namespaced indices
 
-## Architecture
+## Configuration
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  VectorDBManager│    │   Web Workers    │    │  Voy Search     │
-│                 │    │                  │    │  Engine         │
-│ - Event System  │◄──►│ - Vector Ops     │◄──►│                 │
-│ - Embeddings    │    │ - Document Store │    │ - k-NN Search   │
-│ - Namespaces    │    │ - Query Handler  │    │ - Serialization │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
+### Environment Variables
 
-## Quick Start
-
-```typescript
-import { VectorDBManager, type IDocument } from "./vectordb/mod.ts";
-
-// Create manager
-const manager = new VectorDBManager({
-  defaultEmbeddingModel: "mixedbread-ai/mxbai-embed-xsmall-v1",
-  maxInstances: 10
-});
-
-// Create vector index
-const indexId = await manager.createIndex({
-  id: "my-documents",
-  namespace: "workspace1"
-});
-
-// Add documents
-const documents: IDocument[] = [
-  {
-    id: "doc1",
-    text: "Machine learning is transforming technology",
-    metadata: { category: "AI", author: "John" }
-  },
-  {
-    id: "doc2", 
-    text: "Vector databases enable semantic search",
-    metadata: { category: "Database", author: "Jane" }
-  }
-];
-
-await manager.addDocuments(indexId, documents);
-
-// Query documents
-const results = await manager.queryIndex(
-  indexId, 
-  "artificial intelligence", 
-  { k: 5, includeMetadata: true }
-);
-
-console.log("Search results:", results);
-```
-
-## API Reference
-
-### VectorDBManager
-
-#### Constructor Options
-
-```typescript
-interface IVectorDBManagerOptions {
-  defaultEmbeddingModel?: string;  // Default: "mixedbread-ai/mxbai-embed-xsmall-v1"
-  maxInstances?: number;           // Default: 50
-  allowedNamespaces?: string[];    // Optional namespace restrictions
-}
-```
-
-#### Methods
-
-##### `createIndex(options: IVectorDBOptions): Promise<string>`
-
-Creates a new vector database index.
-
-```typescript
-const indexId = await manager.createIndex({
-  id: "documents",
-  namespace: "workspace1",
-  embeddingModel: "mixedbread-ai/mxbai-embed-xsmall-v1"
-});
-```
-
-##### `addDocuments(instanceId: string, documents: IDocument[]): Promise<void>`
-
-Adds documents to a vector index.
-
-```typescript
-await manager.addDocuments(indexId, [
-  { id: "doc1", text: "Document content", metadata: { type: "article" } }
-]);
-```
-
-##### `queryIndex(instanceId: string, query: string | number[], options?: IQueryOptions): Promise<IQueryResult[]>`
-
-Queries a vector index with text or vector.
-
-```typescript
-const results = await manager.queryIndex(indexId, "search query", {
-  k: 10,
-  threshold: 0.7,
-  includeMetadata: true
-});
-```
-
-##### `removeDocuments(instanceId: string, documentIds: string[]): Promise<void>`
-
-Removes documents from a vector index.
-
-```typescript
-await manager.removeDocuments(indexId, ["doc1", "doc2"]);
-```
-
-##### `destroyIndex(instanceId: string): Promise<void>`
-
-Destroys a vector index and cleans up resources.
-
-```typescript
-await manager.destroyIndex(indexId);
-```
-
-##### `listInstances(namespace?: string): Array<InstanceInfo>`
-
-Lists all vector database instances, optionally filtered by namespace.
-
-```typescript
-const instances = manager.listInstances("workspace1");
-```
-
-##### `getStats(): ManagerStats`
-
-Gets statistics about the vector database manager.
-
-```typescript
-const stats = manager.getStats();
-console.log(`Total instances: ${stats.totalInstances}`);
-```
-
-### Events
-
-The VectorDBManager emits events for all operations:
-
-```typescript
-import { VectorDBEvents } from "./vectordb/mod.ts";
-
-manager.on(VectorDBEvents.INDEX_CREATED, (event) => {
-  console.log(`Index created: ${event.instanceId}`);
-});
-
-manager.on(VectorDBEvents.DOCUMENT_ADDED, (event) => {
-  console.log(`Added ${event.data.count} documents`);
-});
-
-manager.on(VectorDBEvents.QUERY_COMPLETED, (event) => {
-  console.log(`Query returned ${event.data.resultCount} results`);
-});
-```
-
-Available events:
-- `INDEX_CREATED`
-- `INDEX_DESTROYED` 
-- `DOCUMENT_ADDED`
-- `DOCUMENT_REMOVED`
-- `QUERY_COMPLETED`
-- `ERROR`
-
-## Data Types
-
-### IDocument
-
-```typescript
-interface IDocument {
-  id: string;
-  text?: string;           // Text content (will be embedded automatically)
-  vector?: number[];       // Pre-computed vector (384 dimensions)
-  metadata?: Record<string, any>;  // Optional metadata
-}
-```
-
-### IQueryOptions
-
-```typescript
-interface IQueryOptions {
-  k?: number;              // Number of results to return (default: 10)
-  threshold?: number;      // Similarity threshold (default: 0)
-  includeMetadata?: boolean; // Include metadata in results (default: true)
-}
-```
-
-### IQueryResult
-
-```typescript
-interface IQueryResult {
-  id: string;
-  score: number;           // Similarity score (0-1)
-  metadata?: Record<string, any>;
-  text?: string;
-}
-```
-
-## Embedding Models
-
-The module supports any Transformers.js compatible embedding model. Recommended models:
-
-- **mixedbread-ai/mxbai-embed-xsmall-v1** (384 dimensions) - Default, fast and efficient
-- **sentence-transformers/all-MiniLM-L6-v2** (384 dimensions) - Good general purpose
-- **sentence-transformers/all-mpnet-base-v2** (768 dimensions) - Higher quality
-
-For testing, use `"mock-model"` to generate deterministic mock embeddings.
-
-## Namespace Support
-
-Namespaces provide workspace isolation:
-
-```typescript
-// Create indices in different namespaces
-const workspace1Index = await manager.createIndex({
-  id: "docs",
-  namespace: "workspace1"
-});
-
-const workspace2Index = await manager.createIndex({
-  id: "docs", 
-  namespace: "workspace2"
-});
-
-// List instances by namespace
-const workspace1Instances = manager.listInstances("workspace1");
-```
-
-## Performance Considerations
-
-- **Batch Operations**: Add documents in batches for better performance
-- **Worker Isolation**: Each index runs in a separate web worker
-- **Memory Management**: Automatic cleanup prevents memory leaks
-- **Embedding Caching**: Embeddings are generated once and cached
-- **Concurrent Operations**: Supports concurrent queries across indices
-
-## Testing
-
-The module includes comprehensive tests:
+When using the Hypha service, configure activity monitoring via environment variables:
 
 ```bash
-# Run unit tests (mock embeddings)
-deno task test-vectordb
+# Directory to store offloaded indices (default: ./vectordb_offload)
+VECTORDB_OFFLOAD_DIRECTORY="./my_vectordb_offload"
 
-# Run integration tests
-deno task test-vectordb-integration
+# Default inactivity timeout in milliseconds (default: 1800000 = 30 minutes)
+VECTORDB_DEFAULT_INACTIVITY_TIMEOUT="3600000"  # 1 hour
 
-# Run stress tests
-deno task test-vectordb-stress
-
-# Run all tests including vector database
-deno task test
+# Enable/disable activity monitoring globally (default: true)
+VECTORDB_ACTIVITY_MONITORING="true"
 ```
 
-## Error Handling
-
-The module provides comprehensive error handling:
-
-- **Instance Limits**: Enforces maximum number of instances
-- **Duplicate IDs**: Prevents duplicate index creation
-- **Invalid Documents**: Validates document structure
-- **Resource Cleanup**: Automatic cleanup on errors
-- **Timeout Handling**: Configurable timeouts for operations
-
-## Integration with Hypha Service
-
-The vector database integrates seamlessly with the Hypha service:
-
-```typescript
-// In hypha-service.ts
-const vectorDBManager = new VectorDBManager({
-  defaultEmbeddingModel: "mixedbread-ai/mxbai-embed-xsmall-v1",
-  maxInstances: 100
-});
-
-// Service methods automatically handle namespaces
-async createVectorIndex(options, context) {
-  return await vectorDBManager.createIndex({
-    ...options,
-    namespace: context.ws  // Workspace isolation
-  });
-}
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Threading Issues with Transformers.js**
-   - Use mock embeddings for testing: `defaultEmbeddingModel: "mock-model"`
-   - Real embeddings may have mutex lock issues in some Deno environments
-
-2. **Voy Search Engine Errors**
-   - Ensure embeddings are diverse enough (avoid identical vectors)
-   - Use smaller batch sizes for large datasets
-   - Check embedding dimensions match (384 for default model)
-
-3. **Memory Issues**
-   - Monitor instance count and document count
-   - Use `destroyAll()` for cleanup in tests
-   - Set appropriate `maxInstances` limit
-
-### Debug Mode
-
-Enable debug logging:
+### VectorDBManager Options
 
 ```typescript
 const manager = new VectorDBManager({
-  defaultEmbeddingModel: "mock-model", // For debugging
-  maxInstances: 5
-});
-
-// Monitor events
-manager.on(VectorDBEvents.ERROR, (event) => {
-  console.error("VectorDB Error:", event);
+  // Standard options
+  defaultEmbeddingModel: "mixedbread-ai/mxbai-embed-xsmall-v1",
+  maxInstances: 50,
+  allowedNamespaces: ["workspace1", "workspace2"],
+  
+  // Activity monitoring options
+  offloadDirectory: "./vectordb_offload",
+  defaultInactivityTimeout: 30 * 60 * 1000, // 30 minutes
+  enableActivityMonitoring: true
 });
 ```
 
-## License
+### Index-Level Configuration
 
-This module is part of the Deno App Engine project and follows the same license terms. 
+```typescript
+// Create an index with custom activity monitoring settings
+const indexId = await manager.createIndex({
+  id: "my-index",
+  namespace: "workspace1",
+  
+  // Activity monitoring options
+  enableActivityMonitoring: true,  // Enable for this index
+  inactivityTimeout: 60 * 60 * 1000, // 1 hour timeout
+});
+
+// Create an index that never gets offloaded
+const persistentIndexId = await manager.createIndex({
+  id: "persistent-index",
+  enableActivityMonitoring: false, // Disable activity monitoring
+});
+```
+
+## API Methods
+
+### Activity Monitoring
+
+```typescript
+// Get last activity time
+const lastActivity = manager.getLastActivityTime(indexId);
+console.log(`Last activity: ${new Date(lastActivity).toISOString()}`);
+
+// Get time until offload
+const timeUntilOffload = manager.getTimeUntilOffload(indexId);
+console.log(`Time until offload: ${timeUntilOffload}ms`);
+
+// Ping an index to reset activity timer
+const success = manager.pingInstance(indexId);
+
+// Set/update inactivity timeout
+manager.setInactivityTimeout(indexId, 2 * 60 * 60 * 1000); // 2 hours
+```
+
+### Manual Offloading
+
+```typescript
+// Manually offload an index
+await manager.manualOffload(indexId);
+
+// List offloaded indices
+const offloadedIndices = await manager.listOffloadedIndices("workspace1");
+for (const index of offloadedIndices) {
+  console.log(`${index.id}: ${index.documentCount} documents, offloaded at ${index.offloadedAt}`);
+}
+
+// Delete an offloaded index from disk
+await manager.deleteOffloadedIndex(indexId);
+```
+
+### Global Settings
+
+```typescript
+// Enable/disable activity monitoring globally
+manager.setActivityMonitoring(false); // Disables all timers
+manager.setActivityMonitoring(true);  // Re-enables based on index settings
+
+// Get comprehensive stats including activity monitoring
+const stats = manager.getStats();
+console.log(stats.activityMonitoring);
+// {
+//   enabled: true,
+//   defaultTimeout: 1800000,
+//   activeTimers: 5,
+//   offloadDirectory: "./vectordb_offload"
+// }
+```
+
+## Events
+
+Listen for activity monitoring events:
+
+```typescript
+manager.on(VectorDBEvents.INDEX_OFFLOADED, (event) => {
+  console.log(`Index ${event.instanceId} offloaded with ${event.data.documentCount} documents`);
+});
+
+manager.on(VectorDBEvents.INDEX_RESUMED, (event) => {
+  console.log(`Index ${event.instanceId} resumed from offload`);
+});
+```
+
+## Hypha Service API
+
+### Create Index with Activity Monitoring
+
+```javascript
+// Create index with custom timeout
+const result = await hyphaService.createVectorIndex({
+  id: "my-index",
+  embeddingModel: "mixedbread-ai/mxbai-embed-xsmall-v1",
+  inactivityTimeout: 3600000, // 1 hour
+  enableActivityMonitoring: true
+});
+```
+
+### Activity Management
+
+```javascript
+// Ping an index to reset timer
+await hyphaService.pingVectorIndex({ indexId: "my-index" });
+
+// Set timeout
+await hyphaService.setVectorIndexTimeout({ 
+  indexId: "my-index", 
+  timeout: 7200000 // 2 hours
+});
+
+// Manual offload
+await hyphaService.manualOffloadVectorIndex({ indexId: "my-index" });
+
+// List offloaded indices
+const offloaded = await hyphaService.listOffloadedVectorIndices();
+
+// Delete offloaded index
+await hyphaService.deleteOffloadedVectorIndex({ indexId: "my-index" });
+```
+
+### Enhanced Index Information
+
+```javascript
+// Get detailed index info including activity monitoring
+const info = await hyphaService.getVectorIndexInfo({ indexId: "my-index" });
+console.log(info.activityMonitoring);
+// {
+//   lastActivity: "2024-01-15T10:30:00.000Z",
+//   timeUntilOffload: 1500000,
+//   inactivityTimeout: 1800000,
+//   enabled: true
+// }
+```
+
+## File Structure
+
+When indices are offloaded, they create files in the offload directory:
+
+```
+vectordb_offload/
+├── workspace1:my-index.metadata.json    # Index metadata
+├── workspace1:my-index.documents.json   # Document data
+├── workspace2:other-index.metadata.json
+└── workspace2:other-index.documents.json
+```
+
+### Metadata Format
+
+```json
+{
+  "id": "workspace1:my-index",
+  "created": "2024-01-15T09:00:00.000Z",
+  "offloadedAt": "2024-01-15T10:30:00.000Z",
+  "options": {
+    "namespace": "workspace1",
+    "embeddingModel": "mixedbread-ai/mxbai-embed-xsmall-v1",
+    "enableActivityMonitoring": true,
+    "inactivityTimeout": 1800000
+  },
+  "documentCount": 150,
+  "embeddingDimension": 384,
+  "documentsFile": "./vectordb_offload/workspace1:my-index.documents.json",
+  "indexFile": "./vectordb_offload/workspace1:my-index.documents.json"
+}
+```
+
+## Best Practices
+
+### Timeout Configuration
+
+- **Development**: Short timeouts (5-10 minutes) for quick iteration
+- **Production**: Longer timeouts (30-60 minutes) to avoid unnecessary offloading
+- **Persistent indices**: Disable activity monitoring for frequently used indices
+
+### Resource Management
+
+- Monitor the offload directory size
+- Periodically clean up old offloaded indices
+- Use appropriate timeouts based on usage patterns
+
+### Performance Considerations
+
+- Resuming from offload takes time (worker initialization + document loading)
+- Consider keeping frequently accessed indices in memory
+- Use ping functionality for long-running processes
+
+## Example Usage
+
+See `examples/vectordb-activity-monitoring.ts` for a complete demonstration of all features.
+
+```bash
+# Run the example
+deno run --allow-read --allow-write --allow-net --allow-env examples/vectordb-activity-monitoring.ts
+```
+
+## Migration Guide
+
+Existing VectorDB indices will continue to work without changes. To enable activity monitoring:
+
+1. Update VectorDBManager configuration to include activity monitoring options
+2. Optionally set `enableActivityMonitoring: true` when creating new indices
+3. Configure appropriate timeouts based on your usage patterns
+
+Activity monitoring is backward compatible and can be enabled/disabled at any time. 

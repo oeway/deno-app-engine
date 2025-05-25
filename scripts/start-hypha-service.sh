@@ -10,4 +10,4 @@ fi
 # Start the server with necessary permissions
 echo "Starting Deno App Engine service..."
 
-deno run --allow-net --allow-read --allow-write --allow-env scripts/hypha-service.ts
+deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi scripts/hypha-service.ts

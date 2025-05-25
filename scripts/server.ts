@@ -79,11 +79,27 @@ function getKernelManagerOptions(): IKernelManagerOptions {
 // Create a global kernel manager instance with configuration
 const kernelManager = new KernelManager(getKernelManagerOptions());
 
+// Configure vector database manager options from environment variables
+const vectorDBOffloadDirectory = Deno.env.get("VECTORDB_OFFLOAD_DIRECTORY") || "./vectordb_offload";
+const vectorDBDefaultTimeout = parseInt(Deno.env.get("VECTORDB_DEFAULT_INACTIVITY_TIMEOUT") || "1800000"); // 30 minutes default
+const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") !== "false"; // Default true
+
 // Create a global vector database manager instance
 const vectorDBManager = new VectorDBManager({
-  defaultEmbeddingModel: "mock-model", // Use mock for demo to avoid threading issues
-  maxInstances: 10
+  defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mock-model", // Use mock for demo to avoid threading issues
+  maxInstances: parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES") || "10"),
+  allowedNamespaces: undefined, // Allow all namespaces for now
+  offloadDirectory: vectorDBOffloadDirectory,
+  defaultInactivityTimeout: vectorDBDefaultTimeout,
+  enableActivityMonitoring: vectorDBActivityMonitoring
 });
+
+console.log("Server VectorDB Manager Configuration:");
+console.log(`- Embedding model: ${Deno.env.get("EMBEDDING_MODEL") || "mock-model"}`);
+console.log(`- Max instances: ${parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES") || "10")}`);
+console.log(`- Offload directory: ${vectorDBOffloadDirectory}`);
+console.log(`- Default inactivity timeout: ${vectorDBDefaultTimeout}ms (${Math.round(vectorDBDefaultTimeout / 60000)} minutes)`);
+console.log(`- Activity monitoring enabled: ${vectorDBActivityMonitoring}`);
 
 // Store execution sessions and their results
 interface ExecutionSession {
@@ -761,8 +777,29 @@ export async function handleRequest(req: Request): Promise<Response> {
       // List vector database instances
       if (path === "/api/vectordb/instances" && req.method === "GET") {
         try {
-          const instances = vectorDBManager.listInstances();
-          return jsonResponse(instances);
+          const url = new URL(req.url);
+          const namespace = url.searchParams.get("namespace") || undefined;
+          
+          const instances = vectorDBManager.listInstances(namespace);
+          const enhancedInstances = instances.map(instance => {
+            const lastActivity = vectorDBManager.getLastActivityTime(instance.id);
+            const timeUntilOffload = vectorDBManager.getTimeUntilOffload(instance.id);
+            const inactivityTimeout = vectorDBManager.getInactivityTimeout(instance.id);
+            const instanceObj = vectorDBManager.getInstance(instance.id);
+            
+            return {
+              ...instance,
+              isFromOffload: instanceObj?.isFromOffload || false,
+              activityMonitoring: {
+                lastActivity: lastActivity ? new Date(lastActivity).toISOString() : undefined,
+                timeUntilOffload: timeUntilOffload,
+                inactivityTimeout: inactivityTimeout,
+                enabled: instanceObj?.options.enableActivityMonitoring !== false && vectorDBActivityMonitoring
+              }
+            };
+          });
+          
+          return jsonResponse(enhancedInstances);
         } catch (error) {
           console.error("Error listing vector database instances:", error);
           return jsonResponse(
@@ -793,7 +830,9 @@ export async function handleRequest(req: Request): Promise<Response> {
           const indexId = await vectorDBManager.createIndex({
             id: body.id || crypto.randomUUID(),
             namespace: body.namespace || "default",
-            embeddingModel: body.embeddingModel
+            embeddingModel: body.embeddingModel,
+            inactivityTimeout: body.inactivityTimeout,
+            enableActivityMonitoring: body.enableActivityMonitoring
           });
           
           const instance = vectorDBManager.getInstance(indexId);
@@ -805,7 +844,11 @@ export async function handleRequest(req: Request): Promise<Response> {
             namespace: namespace,
             documentCount: instance?.documentCount || 0,
             embeddingDimension: instance?.embeddingDimension,
-            created: new Date().toISOString()
+            created: new Date().toISOString(),
+            activityMonitoring: {
+              enabled: body.enableActivityMonitoring !== false && vectorDBActivityMonitoring,
+              timeout: body.inactivityTimeout || vectorDBDefaultTimeout
+            }
           });
         } catch (error) {
           console.error("Error creating vector database index:", error);
@@ -907,6 +950,173 @@ export async function handleRequest(req: Request): Promise<Response> {
           });
         } catch (error) {
           console.error(`Error deleting index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Ping vector database index to reset activity timer
+      if (path.match(/^\/api\/vectordb\/indices\/[^\/]+\/ping$/) && req.method === "POST") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          const success = vectorDBManager.pingInstance(indexId);
+          
+          if (!success) {
+            return jsonResponse({ error: "Failed to ping vector index or index not found" }, Status.NotFound);
+          }
+          
+          return jsonResponse({ 
+            success: true, 
+            message: "Vector index activity timer reset",
+            timestamp: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error(`Error pinging vector index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Set vector database index inactivity timeout
+      if (path.match(/^\/api\/vectordb\/indices\/[^\/]+\/timeout$/) && req.method === "POST") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          const body = await req.json();
+          const timeout = body.timeout;
+          
+          if (typeof timeout !== "number" || timeout < 0) {
+            return jsonResponse({ error: "Invalid timeout value" }, Status.BadRequest);
+          }
+          
+          const success = vectorDBManager.setInactivityTimeout(indexId, timeout);
+          
+          if (!success) {
+            return jsonResponse({ error: "Vector index not found" }, Status.NotFound);
+          }
+          
+          return jsonResponse({ 
+            success: true, 
+            message: `Inactivity timeout set to ${timeout}ms`,
+            timeout: timeout,
+            timestamp: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error(`Error setting timeout for vector index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Manual offload vector database index
+      if (path.match(/^\/api\/vectordb\/indices\/[^\/]+\/offload$/) && req.method === "POST") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          await vectorDBManager.manualOffload(indexId);
+          
+          return jsonResponse({ 
+            success: true, 
+            message: "Vector index offloaded successfully",
+            timestamp: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error(`Error offloading vector index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // List offloaded vector database indices
+      if (path === "/api/vectordb/offloaded" && req.method === "GET") {
+        try {
+          const url = new URL(req.url);
+          const namespace = url.searchParams.get("namespace") || undefined;
+          
+          const offloadedIndices = await vectorDBManager.listOffloadedIndices(namespace);
+          
+          return jsonResponse({
+            indices: offloadedIndices.map(index => ({
+              id: index.id,
+              namespace: index.namespace,
+              created: index.created.toISOString(),
+              offloadedAt: index.offloadedAt.toISOString(),
+              documentCount: index.documentCount,
+              embeddingDimension: index.embeddingDimension
+            })),
+            count: offloadedIndices.length
+          });
+        } catch (error) {
+          console.error("Error listing offloaded vector indices:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Delete offloaded vector database index
+      if (path.match(/^\/api\/vectordb\/offloaded\/[^\/]+$/) && req.method === "DELETE") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          await vectorDBManager.deleteOffloadedIndex(indexId);
+          
+          return jsonResponse({
+            success: true,
+            message: `Offloaded vector index ${indexId} deleted successfully`
+          });
+        } catch (error) {
+          console.error(`Error deleting offloaded vector index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Get vector database index info with activity monitoring data
+      if (path.match(/^\/api\/vectordb\/indices\/[^\/]+\/info$/) && req.method === "GET") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          const instance = vectorDBManager.getInstance(indexId);
+          if (!instance) {
+            return jsonResponse({ error: "Vector index not found" }, Status.NotFound);
+          }
+          
+          const lastActivity = vectorDBManager.getLastActivityTime(indexId);
+          const timeUntilOffload = vectorDBManager.getTimeUntilOffload(indexId);
+          const inactivityTimeout = vectorDBManager.getInactivityTimeout(indexId);
+          
+          const namespaceMatch = indexId.match(/^([^:]+):/);
+          const namespace = namespaceMatch ? namespaceMatch[1] : undefined;
+          
+          return jsonResponse({
+            id: indexId,
+            namespace: namespace,
+            documentCount: instance.documentCount,
+            embeddingDimension: instance.embeddingDimension,
+            created: instance.created.toISOString(),
+            isFromOffload: instance.isFromOffload || false,
+            activityMonitoring: {
+              lastActivity: lastActivity ? new Date(lastActivity).toISOString() : undefined,
+              timeUntilOffload: timeUntilOffload,
+              inactivityTimeout: inactivityTimeout,
+              enabled: instance.options.enableActivityMonitoring !== false && vectorDBActivityMonitoring
+            }
+          });
+        } catch (error) {
+          console.error(`Error getting vector index info ${indexId}:`, error);
           return jsonResponse(
             { error: error instanceof Error ? error.message : String(error) },
             Status.InternalServerError

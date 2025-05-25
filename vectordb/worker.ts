@@ -234,6 +234,34 @@ function getStats(): void {
   }
 }
 
+/**
+ * Get all documents from the index (for offloading)
+ */
+function getDocuments(): void {
+  try {
+    if (!isInitialized) {
+      throw new Error("Worker not initialized");
+    }
+    
+    // Convert documents map to array
+    const documentsArray = Array.from(documents.values());
+    
+    self.postMessage({
+      type: "GET_DOCUMENTS_RESULT",
+      success: true,
+      documents: documentsArray
+    });
+    
+  } catch (error) {
+    console.error("Error getting documents:", error);
+    self.postMessage({
+      type: "GET_DOCUMENTS_RESULT",
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
 // Message handler
 self.addEventListener('message', (event: MessageEvent) => {
   const { type, ...data } = event.data;
@@ -258,6 +286,10 @@ self.addEventListener('message', (event: MessageEvent) => {
         
       case "GET_STATS":
         getStats();
+        break;
+        
+      case "GET_DOCUMENTS":
+        getDocuments();
         break;
         
       default:

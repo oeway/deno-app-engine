@@ -216,12 +216,25 @@ async function startHyphaService() {
   // Create a global kernel manager instance with configuration
   const kernelManager = new KernelManager(getKernelManagerOptions());
   
+  // Configure vector database manager options from environment variables
+  const vectorDBOffloadDirectory = Deno.env.get("VECTORDB_OFFLOAD_DIRECTORY") || "./vectordb_offload";
+  const vectorDBDefaultTimeout = parseInt(Deno.env.get("VECTORDB_DEFAULT_INACTIVITY_TIMEOUT") || "1800000"); // 30 minutes default
+  const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") !== "false"; // Default true
+  
   // Create a global vector database manager instance
   const vectorDBManager = new VectorDBManager({
     defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mixedbread-ai/mxbai-embed-xsmall-v1",
     maxInstances: parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES") || "20"),
-    allowedNamespaces: undefined // Allow all namespaces for now
+    allowedNamespaces: undefined, // Allow all namespaces for now
+    offloadDirectory: vectorDBOffloadDirectory,
+    defaultInactivityTimeout: vectorDBDefaultTimeout,
+    enableActivityMonitoring: vectorDBActivityMonitoring
   });
+  
+  console.log("Hypha Service VectorDB Manager Configuration:");
+  console.log(`- Offload directory: ${vectorDBOffloadDirectory}`);
+  console.log(`- Default inactivity timeout: ${vectorDBDefaultTimeout}ms (${Math.round(vectorDBDefaultTimeout / 60000)} minutes)`);
+  console.log(`- Activity monitoring enabled: ${vectorDBActivityMonitoring}`);
 
   
   const svc = await server.registerService({
@@ -627,7 +640,13 @@ async function startHyphaService() {
 
     // Vector Database Services
     
-    async createVectorIndex(options: {id?: string, embeddingModel?: string, maxDocuments?: number}, context: {user: any, ws: string}) {
+    async createVectorIndex(options: {
+      id?: string, 
+      embeddingModel?: string, 
+      maxDocuments?: number,
+      inactivityTimeout?: number,
+      enableActivityMonitoring?: boolean
+    }, context: {user: any, ws: string}) {
       try {
         console.log(`Creating vector index with namespace: ${context.ws}, requested ID: ${options.id || "auto-generated"}`);
         
@@ -635,7 +654,9 @@ async function startHyphaService() {
           id: options.id || crypto.randomUUID(),
           namespace: context.ws,
           embeddingModel: options.embeddingModel,
-          maxDocuments: options.maxDocuments
+          maxDocuments: options.maxDocuments,
+          inactivityTimeout: options.inactivityTimeout,
+          enableActivityMonitoring: options.enableActivityMonitoring
         });
         
         console.log(`Vector index created with ID: ${indexId}`);
@@ -646,7 +667,11 @@ async function startHyphaService() {
         return {
           id: indexId,
           created: new Date().toISOString(),
-          name: `VectorDB-${indexId.split(":")[1].slice(0, 8)}`
+          name: `VectorDB-${indexId.split(":")[1].slice(0, 8)}`,
+          activityMonitoring: {
+            enabled: options.enableActivityMonitoring !== false && vectorDBActivityMonitoring,
+            timeout: options.inactivityTimeout || vectorDBDefaultTimeout
+          }
         };
       } catch (error) {
         console.error("Error creating vector index:", error);
@@ -657,13 +682,25 @@ async function startHyphaService() {
     listVectorIndices(context: {user: any, ws: string}) {
       console.log(`Listing vector indices for namespace: ${context.ws}`);
       const indices = vectorDBManager.listInstances(context.ws);
-      return indices.map(index => ({
-        id: index.id,
-        name: `VectorDB-${index.id.split(":")[1].slice(0, 8)}`,
-        created: index.created.toISOString(),
-        documentCount: index.documentCount,
-        embeddingDimension: index.embeddingDimension
-      }));
+      return indices.map(index => {
+        const instance = vectorDBManager.getInstance(index.id);
+        const lastActivity = vectorDBManager.getLastActivityTime(index.id);
+        const timeUntilOffload = vectorDBManager.getTimeUntilOffload(index.id);
+        
+        return {
+          id: index.id,
+          name: `VectorDB-${index.id.split(":")[1].slice(0, 8)}`,
+          created: index.created.toISOString(),
+          documentCount: index.documentCount,
+          embeddingDimension: index.embeddingDimension,
+          isFromOffload: instance?.isFromOffload || false,
+          activityMonitoring: {
+            lastActivity: lastActivity ? new Date(lastActivity).toISOString() : undefined,
+            timeUntilOffload: timeUntilOffload,
+            inactivityTimeout: vectorDBManager.getInactivityTimeout(index.id)
+          }
+        };
+      });
     },
 
     async destroyVectorIndex({indexId}: {indexId: string}, context: {user: any, ws: string}) {
@@ -693,13 +730,23 @@ async function startHyphaService() {
         throw new Error("Vector index not found or access denied");
       }
       
+      const lastActivity = vectorDBManager.getLastActivityTime(fullIndexId);
+      const timeUntilOffload = vectorDBManager.getTimeUntilOffload(fullIndexId);
+      
       return {
         id: fullIndexId,
         name: `VectorDB-${fullIndexId.split(":")[1].slice(0, 8)}`,
         created: index.created.toISOString(),
         documentCount: index.documentCount,
         embeddingDimension: index.embeddingDimension,
-        history: vectorDBHistory.get(fullIndexId) || []
+        isFromOffload: index.isFromOffload || false,
+        history: vectorDBHistory.get(fullIndexId) || [],
+        activityMonitoring: {
+          lastActivity: lastActivity ? new Date(lastActivity).toISOString() : undefined,
+          timeUntilOffload: timeUntilOffload,
+          inactivityTimeout: vectorDBManager.getInactivityTimeout(fullIndexId),
+          enabled: index.options.enableActivityMonitoring !== false && vectorDBActivityMonitoring
+        }
       };
     },
 
@@ -815,13 +862,117 @@ async function startHyphaService() {
       return {
         overall: overallStats,
         namespace: namespaceStats,
-        indices: namespaceIndices.map(index => ({
-          id: index.id,
-          name: `VectorDB-${index.id.split(":")[1].slice(0, 8)}`,
-          documentCount: index.documentCount,
-          embeddingDimension: index.embeddingDimension,
-          created: index.created.toISOString()
-        }))
+        indices: namespaceIndices.map(index => {
+          const lastActivity = vectorDBManager.getLastActivityTime(index.id);
+          const timeUntilOffload = vectorDBManager.getTimeUntilOffload(index.id);
+          
+          return {
+            id: index.id,
+            name: `VectorDB-${index.id.split(":")[1].slice(0, 8)}`,
+            documentCount: index.documentCount,
+            embeddingDimension: index.embeddingDimension,
+            created: index.created.toISOString(),
+            activityMonitoring: {
+              lastActivity: lastActivity ? new Date(lastActivity).toISOString() : undefined,
+              timeUntilOffload: timeUntilOffload
+            }
+          };
+        })
+      };
+    },
+
+    async pingVectorIndex({indexId}: {indexId: string}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      // Ping the index to reset activity timer
+      const success = vectorDBManager.pingInstance(fullIndexId);
+      
+      if (!success) {
+        throw new Error("Failed to ping vector index");
+      }
+      
+      return { 
+        success: true, 
+        message: "Vector index activity timer reset",
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async setVectorIndexTimeout({indexId, timeout}: {indexId: string, timeout: number}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      // Set the timeout
+      const success = vectorDBManager.setInactivityTimeout(fullIndexId, timeout);
+      
+      if (!success) {
+        throw new Error("Failed to set inactivity timeout");
+      }
+      
+      return { 
+        success: true, 
+        message: `Inactivity timeout set to ${timeout}ms`,
+        timeout: timeout,
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async manualOffloadVectorIndex({indexId}: {indexId: string}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      // Manually offload the index
+      await vectorDBManager.manualOffload(fullIndexId);
+      
+      console.log(`Vector index ${fullIndexId} manually offloaded by user in workspace ${context.ws}`);
+      return { 
+        success: true, 
+        message: "Vector index offloaded successfully",
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async listOffloadedVectorIndices(context: {user: any, ws: string}) {
+      console.log(`Listing offloaded vector indices for namespace: ${context.ws}`);
+      const offloadedIndices = await vectorDBManager.listOffloadedIndices(context.ws);
+      
+      return offloadedIndices.map(index => ({
+        id: index.id,
+        name: `VectorDB-${index.id.split(":")[1].slice(0, 8)}`,
+        created: index.created.toISOString(),
+        offloadedAt: index.offloadedAt.toISOString(),
+        documentCount: index.documentCount,
+        embeddingDimension: index.embeddingDimension
+      }));
+    },
+
+    async deleteOffloadedVectorIndex({indexId}: {indexId: string}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Delete the offloaded index
+      await vectorDBManager.deleteOffloadedIndex(fullIndexId);
+      
+      console.log(`Offloaded vector index ${fullIndexId} deleted by user in workspace ${context.ws}`);
+      return { 
+        success: true, 
+        message: "Offloaded vector index deleted successfully",
+        timestamp: new Date().toISOString()
       };
     }
   });

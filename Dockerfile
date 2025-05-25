@@ -25,4 +25,4 @@ RUN deno cache --lock=deno.lock scripts/hypha-service.ts
 EXPOSE 8000
 
 # Run the service directly without tini
-CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "scripts/hypha-service.ts"] 
+CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "scripts/hypha-service.ts"] 
