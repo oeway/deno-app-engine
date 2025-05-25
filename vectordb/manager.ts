@@ -1,7 +1,7 @@
 // Vector Database Manager for Deno App Engine
 // This file manages vector database instances in web workers
 
-import * as Comlink from "comlink";
+
 import { EventEmitter } from 'node:events';
 import { pipeline } from "@huggingface/transformers";
 import { ensureDir, exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
