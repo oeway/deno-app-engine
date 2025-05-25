@@ -37,7 +37,7 @@ jobs:
             ${{ runner.os }}-deno-
             
       - name: Install dependencies
-        run: deno cache --lock=deno.lock --lock-write mod.ts
+        run: deno cache --lock=deno.lock mod.ts
         
       - name: Run tests
         run: deno test --allow-all --coverage=coverage

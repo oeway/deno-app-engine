@@ -35,6 +35,9 @@ jobs:
         with:
           deno-version: v2.x
           
+      - name: Cache dependencies
+        run: deno cache --lock=deno.lock mod.ts
+          
       - name: Run tests before building
         run: deno test --allow-all
         
