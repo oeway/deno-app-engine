@@ -426,11 +426,20 @@ export async function handleRequest(req: Request): Promise<Response> {
           // Set up SSE stream
           const stream = new ReadableStream({
             async start(controller) {
+              let isClosed = false;
+              
               try {
                 // Create a function to send an event
                 const sendEvent = (data: any) => {
-                  const event = `data: ${JSON.stringify(data)}\n\n`;
-                  controller.enqueue(new TextEncoder().encode(event));
+                  if (!isClosed) {
+                    try {
+                      const event = `data: ${JSON.stringify(data)}\n\n`;
+                      controller.enqueue(new TextEncoder().encode(event));
+                    } catch (error) {
+                      // Controller is already closed, mark as closed
+                      isClosed = true;
+                    }
+                  }
                 };
 
                 // Send any existing outputs first
@@ -451,13 +460,19 @@ export async function handleRequest(req: Request): Promise<Response> {
                 // Wait for completion or error
                 try {
                   await session.promise;
-                  controller.close();
+                  if (!isClosed) {
+                    controller.close();
+                    isClosed = true;
+                  }
                 } catch (error) {
                   sendEvent({
                     type: "error",
                     data: { message: error instanceof Error ? error.message : String(error) }
                   });
-                  controller.close();
+                  if (!isClosed) {
+                    controller.close();
+                    isClosed = true;
+                  }
                 }
 
                 // Clean up listener
@@ -466,12 +481,20 @@ export async function handleRequest(req: Request): Promise<Response> {
                   session.listeners.splice(listenerIndex, 1);
                 }
               } catch (error: unknown) {
-                const errorEvent = `data: ${JSON.stringify({
-                  type: "error",
-                  data: { message: error instanceof Error ? error.message : String(error) },
-                })}\n\n`;
-                controller.enqueue(new TextEncoder().encode(errorEvent));
-                controller.close();
+                if (!isClosed) {
+                  try {
+                    const errorEvent = `data: ${JSON.stringify({
+                      type: "error",
+                      data: { message: error instanceof Error ? error.message : String(error) },
+                    })}\n\n`;
+                    controller.enqueue(new TextEncoder().encode(errorEvent));
+                    controller.close();
+                    isClosed = true;
+                  } catch (closeError) {
+                    // Controller already closed
+                    isClosed = true;
+                  }
+                }
               }
             },
           });
@@ -517,10 +540,19 @@ export async function handleRequest(req: Request): Promise<Response> {
           // Set up readable stream that directly uses kernelManager.executeStream
           const stream = new ReadableStream({
             async start(controller) {
+              let isClosed = false;
+              
               try {
                 const sendData = (data: any) => {
-                  const jsonLine = JSON.stringify(data) + '\n';
-                  controller.enqueue(new TextEncoder().encode(jsonLine));
+                  if (!isClosed) {
+                    try {
+                      const jsonLine = JSON.stringify(data) + '\n';
+                      controller.enqueue(new TextEncoder().encode(jsonLine));
+                    } catch (error) {
+                      // Controller is already closed, mark as closed
+                      isClosed = true;
+                    }
+                  }
                 };
 
                 // Send start marker
@@ -549,16 +581,27 @@ export async function handleRequest(req: Request): Promise<Response> {
                 });
                 kernelHistory.set(kernelId, history);
                 
-                controller.close();
+                if (!isClosed) {
+                  controller.close();
+                  isClosed = true;
+                }
                 
               } catch (error) {
                 console.error(`Stream error for kernel ${kernelId}:`, error);
-                const errorData = JSON.stringify({
-                  type: "error",
-                  data: { message: error instanceof Error ? error.message : String(error) },
-                }) + '\n';
-                controller.enqueue(new TextEncoder().encode(errorData));
-                controller.close();
+                if (!isClosed) {
+                  try {
+                    const errorData = JSON.stringify({
+                      type: "error",
+                      data: { message: error instanceof Error ? error.message : String(error) },
+                    }) + '\n';
+                    controller.enqueue(new TextEncoder().encode(errorData));
+                    controller.close();
+                    isClosed = true;
+                  } catch (closeError) {
+                    // Controller already closed
+                    isClosed = true;
+                  }
+                }
               }
             },
           });
@@ -603,10 +646,19 @@ export async function handleRequest(req: Request): Promise<Response> {
           // Set up SSE stream
           const stream = new ReadableStream({
             async start(controller) {
+              let isClosed = false;
+              
               try {
                 // Create a function to send an event
                 const sendEvent = (data: any) => {
-                  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`));
+                  if (!isClosed) {
+                    try {
+                      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`));
+                    } catch (error) {
+                      // Controller is already closed, mark as closed
+                      isClosed = true;
+                    }
+                  }
                 };
 
                 // Send any existing outputs first
@@ -626,13 +678,19 @@ export async function handleRequest(req: Request): Promise<Response> {
                 // Wait for completion or error
                 try {
                   await session.promise;
-                  controller.close();
+                  if (!isClosed) {
+                    controller.close();
+                    isClosed = true;
+                  }
                 } catch (error) {
                   sendEvent({
                     type: "error",
                     data: { message: error instanceof Error ? error.message : String(error) },
                   });
-                  controller.close();
+                  if (!isClosed) {
+                    controller.close();
+                    isClosed = true;
+                  }
                 } finally {
                   // Clean up listener
                   const listenerIndex = session.listeners.indexOf(outputListener);
@@ -641,12 +699,20 @@ export async function handleRequest(req: Request): Promise<Response> {
                   }
                 }
               } catch (error: unknown) {
-                const errorEvent = `data: ${JSON.stringify({
-                  type: "error",
-                  data: { message: error instanceof Error ? error.message : String(error) },
-                })}\n\n`;
-                controller.enqueue(new TextEncoder().encode(errorEvent));
-                controller.close();
+                if (!isClosed) {
+                  try {
+                    const errorEvent = `data: ${JSON.stringify({
+                      type: "error",
+                      data: { message: error instanceof Error ? error.message : String(error) },
+                    })}\n\n`;
+                    controller.enqueue(new TextEncoder().encode(errorEvent));
+                    controller.close();
+                    isClosed = true;
+                  } catch (closeError) {
+                    // Controller already closed
+                    isClosed = true;
+                  }
+                }
               }
             },
           });
