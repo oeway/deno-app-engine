@@ -12,17 +12,17 @@ COPY . .
 RUN mkdir -p /home/deno/.cache/pyodide
 
 # Make start script executable
-RUN chmod +x start-hypha-service.sh
+RUN chmod +x scripts/start-hypha-service.sh
 
 # Set permissions for deno user
 RUN chown -R deno:deno /app /home/deno/.cache
 
 # Compile and cache dependencies (deno cache doesn't accept permission flags)
 USER deno
-RUN deno cache --lock=deno.lock hypha-service.ts
+RUN deno cache --lock=deno.lock scripts/hypha-service.ts
 
 # Expose the Hypha service port
 EXPOSE 8000
 
 # Run the service directly without tini
-CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "hypha-service.ts"] 
+CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "scripts/hypha-service.ts"] 
