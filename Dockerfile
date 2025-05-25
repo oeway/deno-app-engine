@@ -1,6 +1,13 @@
-FROM --platform=linux/amd64 denoland/deno:alpine-2.2.12
+FROM --platform=linux/amd64 denoland/deno:debian-2.2.12
 
 WORKDIR /app
+
+# Install required system dependencies for native modules
+USER root
+RUN apt-get update && apt-get install -y \
+    libstdc++6 \
+    libc6 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first to leverage Docker layer caching
 COPY deno.json deno.lock ./
