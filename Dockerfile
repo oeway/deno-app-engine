@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 denoland/deno:alpine-2.2.12
+FROM --platform=linux/amd64 denoland/deno:alpine-2.3.3
 
 WORKDIR /app
 
