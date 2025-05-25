@@ -1,6 +1,7 @@
 import { hyphaWebsocketClient } from "npm:hypha-rpc";
 import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
+import { VectorDBManager, VectorDBEvents, type IVectorDBManagerOptions, type IDocument, type IQueryOptions } from "../vectordb/mod.ts";
 
 // Add type declaration for global variable
 declare global {
@@ -101,6 +102,16 @@ interface KernelHistory {
 }
 
 const kernelHistory = new Map<string, KernelHistory[]>();
+
+// Store vector database query history
+interface VectorDBHistory {
+  id: string; // query id
+  query: string | number[];
+  results: unknown[];
+  timestamp: Date;
+}
+
+const vectorDBHistory = new Map<string, VectorDBHistory[]>();
 
 // create a function to ensure the kernel id starts with the namespace
 // if : is in the id, it should match the namespace
@@ -204,6 +215,13 @@ async function startHyphaService() {
   console.log("Connected to hypha server, registering service...");
   // Create a global kernel manager instance with configuration
   const kernelManager = new KernelManager(getKernelManagerOptions());
+  
+  // Create a global vector database manager instance
+  const vectorDBManager = new VectorDBManager({
+    defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mixedbread-ai/mxbai-embed-xsmall-v1",
+    maxInstances: parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES") || "20"),
+    allowedNamespaces: undefined // Allow all namespaces for now
+  });
 
   
   const svc = await server.registerService({
@@ -605,6 +623,206 @@ async function startHyphaService() {
           error: error instanceof Error ? error.message : String(error)
         };
       }
+    },
+
+    // Vector Database Services
+    
+    async createVectorIndex(options: {id?: string, embeddingModel?: string, maxDocuments?: number}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Creating vector index with namespace: ${context.ws}, requested ID: ${options.id || "auto-generated"}`);
+        
+        const indexId = await vectorDBManager.createIndex({
+          id: options.id || crypto.randomUUID(),
+          namespace: context.ws,
+          embeddingModel: options.embeddingModel,
+          maxDocuments: options.maxDocuments
+        });
+        
+        console.log(`Vector index created with ID: ${indexId}`);
+        
+        // Initialize history for this index
+        vectorDBHistory.set(indexId, []);
+        
+        return {
+          id: indexId,
+          created: new Date().toISOString(),
+          name: `VectorDB-${indexId.split(":")[1].slice(0, 8)}`
+        };
+      } catch (error) {
+        console.error("Error creating vector index:", error);
+        throw error;
+      }
+    },
+
+    listVectorIndices(context: {user: any, ws: string}) {
+      console.log(`Listing vector indices for namespace: ${context.ws}`);
+      const indices = vectorDBManager.listInstances(context.ws);
+      return indices.map(index => ({
+        id: index.id,
+        name: `VectorDB-${index.id.split(":")[1].slice(0, 8)}`,
+        created: index.created.toISOString(),
+        documentCount: index.documentCount,
+        embeddingDimension: index.embeddingDimension
+      }));
+    },
+
+    async destroyVectorIndex({indexId}: {indexId: string}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      console.log(`Attempting to destroy vector index: ${fullIndexId}`);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      // Clean up history
+      vectorDBHistory.delete(fullIndexId);
+      
+      await vectorDBManager.destroyIndex(fullIndexId);
+      console.log(`Vector index destroyed: ${fullIndexId}`);
+      return { success: true };
+    },
+
+    getVectorIndexInfo({indexId}: {indexId: string}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      return {
+        id: fullIndexId,
+        name: `VectorDB-${fullIndexId.split(":")[1].slice(0, 8)}`,
+        created: index.created.toISOString(),
+        documentCount: index.documentCount,
+        embeddingDimension: index.embeddingDimension,
+        history: vectorDBHistory.get(fullIndexId) || []
+      };
+    },
+
+    async addDocuments({indexId, documents}: {indexId: string, documents: IDocument[]}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      if (!documents || documents.length === 0) {
+        throw new Error("No documents provided");
+      }
+      
+      // Validate documents
+      for (const doc of documents) {
+        if (!doc.id) {
+          throw new Error("Document must have an id");
+        }
+        if (!doc.text && !doc.vector) {
+          throw new Error("Document must have either text or vector");
+        }
+      }
+      
+      await vectorDBManager.addDocuments(fullIndexId, documents);
+      
+      console.log(`Added ${documents.length} documents to vector index ${fullIndexId}`);
+      return { 
+        success: true, 
+        addedCount: documents.length,
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async queryVectorIndex({indexId, query, options}: {indexId: string, query: string | number[], options?: IQueryOptions}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      if (!query) {
+        throw new Error("No query provided");
+      }
+      
+      const queryOptions = {
+        k: 10,
+        threshold: 0,
+        includeMetadata: true,
+        ...options
+      };
+      
+      const results = await vectorDBManager.queryIndex(fullIndexId, query, queryOptions);
+      
+      // Add to query history
+      const queryId = crypto.randomUUID();
+      const history = vectorDBHistory.get(fullIndexId) || [];
+      history.push({
+        id: queryId,
+        query,
+        results,
+        timestamp: new Date()
+      });
+      vectorDBHistory.set(fullIndexId, history);
+      
+      console.log(`Query executed on vector index ${fullIndexId}, returned ${results.length} results`);
+      return {
+        queryId,
+        results,
+        resultCount: results.length,
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async removeDocuments({indexId, documentIds}: {indexId: string, documentIds: string[]}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      if (!documentIds || documentIds.length === 0) {
+        throw new Error("No document IDs provided");
+      }
+      
+      await vectorDBManager.removeDocuments(fullIndexId, documentIds);
+      
+      console.log(`Removed ${documentIds.length} documents from vector index ${fullIndexId}`);
+      return { 
+        success: true, 
+        removedCount: documentIds.length,
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    getVectorDBStats(context: {user: any, ws: string}) {
+      // Get overall stats
+      const overallStats = vectorDBManager.getStats();
+      
+      // Get namespace-specific stats
+      const namespaceIndices = vectorDBManager.listInstances(context.ws);
+      const namespaceStats = {
+        totalIndices: namespaceIndices.length,
+        totalDocuments: namespaceIndices.reduce((sum, index) => sum + index.documentCount, 0)
+      };
+      
+      return {
+        overall: overallStats,
+        namespace: namespaceStats,
+        indices: namespaceIndices.map(index => ({
+          id: index.id,
+          name: `VectorDB-${index.id.split(":")[1].slice(0, 8)}`,
+          documentCount: index.documentCount,
+          embeddingDimension: index.embeddingDimension,
+          created: index.created.toISOString()
+        }))
+      };
     }
   });
   

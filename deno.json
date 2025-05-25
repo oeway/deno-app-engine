@@ -5,12 +5,16 @@
     ".": "./mod.ts"
   },
   "imports": {
+    "@huggingface/transformers": "npm:@huggingface/transformers@^3.5.1",
     "pyodide": "npm:pyodide@0.27.5",
     "node:events": "https://deno.land/std@0.177.0/node/events.ts",
     "comlink": "https://esm.sh/comlink@4.3.1"
   },
   "tasks": {
-    "test": "deno test -A --no-check main_test.ts worker_test.ts",
+    "test": "deno test -A --no-check tests/worker_test.ts tests/vectordb_test.ts",
+    "test-vectordb": "deno test -A --no-check tests/vectordb_test.ts",
+    "test-vectordb-stress": "deno run -A --no-check tests/vectordb_stress_test.ts",
+    "test-vectordb-integration": "deno run -A --no-check tests/vectordb_integration_test.ts",
     "example": "deno run -A examples/main.ts",
     "generate-wheels": "cd kernel && python3 generate-wheels-js.py",
     "build": "deno task generate-wheels && deno task test",
@@ -20,6 +24,7 @@
     "kernel/pypi/**/*"
   ],
   "unstable": ["worker-options", "webgpu"],
+  "nodeModulesDir": "auto",
   "compilerOptions": {
     "lib": ["deno.ns", "dom", "esnext"]
   }

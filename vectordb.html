@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vector Database Playground - Deno App Engine</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4F46E5;
+            --secondary-color: #6366F1;
+            --success-color: #10B981;
+            --warning-color: #F59E0B;
+            --error-color: #EF4444;
+            --background-color: #F9FAFB;
+            --card-background: #FFFFFF;
+            --text-primary: #1F2937;
+            --text-secondary: #6B7280;
+            --border-color: #E5E7EB;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            color: var(--text-primary);
+            background-color: var(--background-color);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+            text-align: center;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            font-size: 1.1rem;
+        }
+
+        .section {
+            margin-bottom: 2rem;
+            border: 1px solid var(--border-color);
+            padding: 2rem;
+            border-radius: 1rem;
+            background: var(--card-background);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .section:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        h3 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 1rem;
+        }
+
+        .icon {
+            width: 24px;
+            height: 24px;
+            fill: currentColor;
+        }
+
+        button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        button:hover {
+            background: var(--secondary-color);
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            background: var(--text-secondary);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        button.danger {
+            background: var(--error-color);
+        }
+
+        button.danger:hover {
+            background: #DC2626;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        input, select, textarea {
+            padding: 0.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            font-family: inherit;
+            font-size: 0.9rem;
+        }
+
+        input[type="text"], input[type="number"] {
+            flex: 1;
+        }
+
+        select {
+            flex: 2;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .output {
+            white-space: pre-wrap;
+            background: #F3F4F6;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            margin-top: 1rem;
+            display: none;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.9rem;
+            border: 1px solid var(--border-color);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .response-container {
+            display: none;
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            background: rgba(249, 250, 251, 0.5);
+            -webkit-backdrop-filter: blur(8px);
+            backdrop-filter: blur(8px);
+        }
+
+        .response-label {
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top: 2px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 1.5rem;
+            background: var(--success-color);
+            color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            display: none;
+            animation: slideIn 0.3s ease;
+            z-index: 1000;
+        }
+
+        .toast.error {
+            background: var(--error-color);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .stat-card {
+            background: var(--background-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .search-result {
+            background: var(--background-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+            margin-bottom: 0.5rem;
+        }
+
+        .search-result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .search-result-id {
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+
+        .search-result-score {
+            background: var(--primary-color);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.8rem;
+        }
+
+        .search-result-text {
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .search-result-metadata {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            background: #F9FAFB;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+        }
+
+        .index-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .index-card {
+            background: var(--background-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .index-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .index-id {
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+
+        .index-namespace {
+            background: var(--secondary-color);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.8rem;
+        }
+
+        .index-stats {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            .section {
+                padding: 1.5rem;
+            }
+
+            .form-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Vector Database Playground</h1>
+    <p class="subtitle">Explore semantic search with the Deno App Engine vector database</p>
+    
+    <!-- Stats Section -->
+    <div class="section">
+        <h2>
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M3 3v18h18v-2H5V3H3zm4 14h2v-6H7v6zm4 0h2V9h-2v8zm4 0h2v-4h-2v4z"/>
+            </svg>
+            Database Statistics
+        </h2>
+        <button onclick="getVectorDBStats()" id="stats-button">
+            <span>Refresh Stats</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="stats-response">
+            <div class="stats-grid" id="stats-grid"></div>
+        </div>
+    </div>
+
+    <!-- Create Index Section -->
+    <div class="section">
+        <h2>
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+            </svg>
+            Create Vector Index
+        </h2>
+        <div class="form-group">
+            <div class="form-row">
+                <input type="text" id="index-id" placeholder="Index ID (optional)">
+                <input type="text" id="namespace" placeholder="Namespace (optional)">
+            </div>
+            <button onclick="createVectorIndex()" id="create-button">
+                <span>Create Index</span>
+                <div class="spinner"></div>
+            </button>
+        </div>
+        <div class="response-container" id="create-response">
+            <div class="response-label">Response:</div>
+            <div id="create-output" class="output"></div>
+        </div>
+    </div>
+
+    <!-- List Indices Section -->
+    <div class="section">
+        <h2>
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+            </svg>
+            Vector Indices
+        </h2>
+        <button onclick="listVectorIndices()" id="list-button">
+            <span>Refresh List</span>
+            <div class="spinner"></div>
+        </button>
+        <div class="response-container" id="list-response">
+            <div class="index-list" id="index-list"></div>
+        </div>
+    </div>
+
+    <!-- Add Documents Section -->
+    <div class="section">
+        <h2>
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
+            </svg>
+            Add Documents
+        </h2>
+        <div class="form-group">
+            <div class="form-row">
+                <select id="add-index-selector" aria-label="Select vector database index for adding documents">
+                    <option value="">Select an index...</option>
+                </select>
+                <input type="number" id="doc-count" placeholder="Number of docs" value="10" min="1" max="100">
+            </div>
+            <div class="form-row">
+                <button onclick="generateAndAddDocuments()" id="add-button">
+                    <span>Generate & Add Random Documents</span>
+                    <div class="spinner"></div>
+                </button>
+                <button onclick="addCustomDocument()" id="custom-button">
+                    <span>Add Custom Document</span>
+                    <div class="spinner"></div>
+                </button>
+            </div>
+            <textarea id="custom-text" placeholder="Enter custom document text..."></textarea>
+        </div>
+        <div class="response-container" id="add-response">
+            <div class="response-label">Response:</div>
+            <div id="add-output" class="output"></div>
+        </div>
+    </div>
+
+    <!-- Search Documents Section -->
+    <div class="section">
+        <h2>
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+            </svg>
+            Semantic Search
+        </h2>
+        <div class="form-group">
+            <div class="form-row">
+                <select id="search-index-selector" aria-label="Select vector database index for searching">
+                    <option value="">Select an index...</option>
+                </select>
+                <input type="number" id="search-k" placeholder="Results (k)" value="5" min="1" max="20">
+                <input type="number" id="search-threshold" placeholder="Threshold" value="0" min="0" max="1" step="0.1">
+            </div>
+            <div class="form-row">
+                <input type="text" id="search-query" placeholder="Enter search query...">
+                <button onclick="searchDocuments()" id="search-button">
+                    <span>Search</span>
+                    <div class="spinner"></div>
+                </button>
+            </div>
+        </div>
+        <div class="response-container" id="search-response">
+            <div class="response-label">Search Results:</div>
+            <div id="search-results"></div>
+        </div>
+    </div>
+
+    <!-- Delete Index Section -->
+    <div class="section">
+        <h2>
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+            </svg>
+            Delete Index
+        </h2>
+        <div class="form-group">
+            <div class="form-row">
+                <select id="delete-selector" aria-label="Select vector database index to delete">
+                    <option value="">Select an index to delete...</option>
+                </select>
+                <button onclick="deleteVectorIndex()" id="delete-button" class="danger">
+                    <span>Delete Index</span>
+                    <div class="spinner"></div>
+                </button>
+            </div>
+        </div>
+        <div class="response-container" id="delete-response">
+            <div class="response-label">Response:</div>
+            <div id="delete-output" class="output"></div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let vectorIndices = [];
+
+        // Utility functions
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type === 'error' ? 'error' : ''}`;
+            toast.style.display = 'block';
+            
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+
+        function showSpinner(buttonId) {
+            const button = document.getElementById(buttonId);
+            const spinner = button.querySelector('.spinner');
+            spinner.style.display = 'block';
+            button.disabled = true;
+        }
+
+        function hideSpinner(buttonId) {
+            const button = document.getElementById(buttonId);
+            const spinner = button.querySelector('.spinner');
+            spinner.style.display = 'none';
+            button.disabled = false;
+        }
+
+        function showResponse(containerId, content) {
+            const container = document.getElementById(containerId);
+            container.style.display = 'block';
+        }
+
+        function updateIndexSelectors() {
+            const selectors = ['add-index-selector', 'search-index-selector', 'delete-selector'];
+            
+            selectors.forEach(selectorId => {
+                const selector = document.getElementById(selectorId);
+                // Clear existing options except the first one
+                while (selector.options.length > 1) {
+                    selector.remove(1);
+                }
+                
+                // Add index options
+                vectorIndices.forEach(index => {
+                    const option = new Option(
+                        `${index.id} (${index.documentCount} docs)`,
+                        index.id
+                    );
+                    selector.add(option);
+                });
+            });
+        }
+
+        // Vector Database API functions
+        async function getVectorDBStats() {
+            showSpinner('stats-button');
+            try {
+                const response = await fetch('/api/vectordb/stats');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const stats = await response.json();
+                displayStats(stats);
+                showResponse('stats-response');
+                showToast('Stats refreshed successfully!');
+            } catch (error) {
+                showToast('Failed to get stats: ' + error.message, 'error');
+            } finally {
+                hideSpinner('stats-button');
+            }
+        }
+
+        function displayStats(stats) {
+            const grid = document.getElementById('stats-grid');
+            grid.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${stats.totalInstances}</div>
+                    <div class="stat-label">Total Indices</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${stats.totalDocuments}</div>
+                    <div class="stat-label">Total Documents</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${stats.embeddingModel}</div>
+                    <div class="stat-label">Embedding Model</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${stats.maxInstances}</div>
+                    <div class="stat-label">Max Instances</div>
+                </div>
+            `;
+        }
+
+        async function createVectorIndex() {
+            showSpinner('create-button');
+            try {
+                const indexId = document.getElementById('index-id').value;
+                const namespace = document.getElementById('namespace').value;
+                
+                const body = {};
+                if (indexId) body.id = indexId;
+                if (namespace) body.namespace = namespace;
+                
+                const response = await fetch('/api/vectordb/indices', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                document.getElementById('create-output').textContent = JSON.stringify(result, null, 2);
+                showResponse('create-response');
+                showToast('Index created successfully!');
+                
+                // Clear form
+                document.getElementById('index-id').value = '';
+                document.getElementById('namespace').value = '';
+                
+                // Refresh lists
+                await listVectorIndices();
+            } catch (error) {
+                document.getElementById('create-output').textContent = JSON.stringify({ error: error.message }, null, 2);
+                showResponse('create-response');
+                showToast('Failed to create index: ' + error.message, 'error');
+            } finally {
+                hideSpinner('create-button');
+            }
+        }
+
+        async function listVectorIndices() {
+            showSpinner('list-button');
+            try {
+                const response = await fetch('/api/vectordb/instances');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                vectorIndices = await response.json();
+                displayIndices(vectorIndices);
+                updateIndexSelectors();
+                showResponse('list-response');
+                showToast('Indices refreshed successfully!');
+            } catch (error) {
+                showToast('Failed to list indices: ' + error.message, 'error');
+            } finally {
+                hideSpinner('list-button');
+            }
+        }
+
+        function displayIndices(indices) {
+            const container = document.getElementById('index-list');
+            if (indices.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">No indices found. Create one to get started!</p>';
+                return;
+            }
+            
+            container.innerHTML = indices.map(index => `
+                <div class="index-card">
+                    <div class="index-card-header">
+                        <div class="index-id">${index.id}</div>
+                        ${index.namespace ? `<div class="index-namespace">${index.namespace}</div>` : ''}
+                    </div>
+                    <div class="index-stats">
+                        Documents: ${index.documentCount}<br>
+                        Dimensions: ${index.embeddingDimension || 'N/A'}<br>
+                        Created: ${new Date(index.created).toLocaleString()}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function generateAndAddDocuments() {
+            const indexId = document.getElementById('add-index-selector').value;
+            const count = parseInt(document.getElementById('doc-count').value) || 10;
+            
+            if (!indexId) {
+                showToast('Please select an index first', 'error');
+                return;
+            }
+            
+            showSpinner('add-button');
+            try {
+                // First generate documents
+                const genResponse = await fetch('/api/vectordb/generate-documents', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ count })
+                });
+                
+                if (!genResponse.ok) {
+                    throw new Error(`HTTP error! status: ${genResponse.status}`);
+                }
+                
+                const { documents } = await genResponse.json();
+                
+                // Then add them to the index
+                const addResponse = await fetch(`/api/vectordb/indices/${encodeURIComponent(indexId)}/documents`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ documents })
+                });
+                
+                if (!addResponse.ok) {
+                    throw new Error(`HTTP error! status: ${addResponse.status}`);
+                }
+                
+                const result = await addResponse.json();
+                document.getElementById('add-output').textContent = JSON.stringify(result, null, 2);
+                showResponse('add-response');
+                showToast(`Added ${count} documents successfully!`);
+                
+                // Refresh lists
+                await listVectorIndices();
+            } catch (error) {
+                document.getElementById('add-output').textContent = JSON.stringify({ error: error.message }, null, 2);
+                showResponse('add-response');
+                showToast('Failed to add documents: ' + error.message, 'error');
+            } finally {
+                hideSpinner('add-button');
+            }
+        }
+
+        async function addCustomDocument() {
+            const indexId = document.getElementById('add-index-selector').value;
+            const text = document.getElementById('custom-text').value.trim();
+            
+            if (!indexId) {
+                showToast('Please select an index first', 'error');
+                return;
+            }
+            
+            if (!text) {
+                showToast('Please enter document text', 'error');
+                return;
+            }
+            
+            showSpinner('custom-button');
+            try {
+                const document = {
+                    id: `custom-${Date.now()}`,
+                    text: text,
+                    metadata: {
+                        type: 'custom',
+                        created: new Date().toISOString()
+                    }
+                };
+                
+                const response = await fetch(`/api/vectordb/indices/${encodeURIComponent(indexId)}/documents`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ documents: [document] })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                document.getElementById('add-output').textContent = JSON.stringify(result, null, 2);
+                showResponse('add-response');
+                showToast('Custom document added successfully!');
+                
+                // Clear form
+                document.getElementById('custom-text').value = '';
+                
+                // Refresh lists
+                await listVectorIndices();
+            } catch (error) {
+                document.getElementById('add-output').textContent = JSON.stringify({ error: error.message }, null, 2);
+                showResponse('add-response');
+                showToast('Failed to add custom document: ' + error.message, 'error');
+            } finally {
+                hideSpinner('custom-button');
+            }
+        }
+
+        async function searchDocuments() {
+            const indexId = document.getElementById('search-index-selector').value;
+            const query = document.getElementById('search-query').value.trim();
+            const k = parseInt(document.getElementById('search-k').value) || 5;
+            const threshold = parseFloat(document.getElementById('search-threshold').value) || 0;
+            
+            if (!indexId) {
+                showToast('Please select an index first', 'error');
+                return;
+            }
+            
+            if (!query) {
+                showToast('Please enter a search query', 'error');
+                return;
+            }
+            
+            showSpinner('search-button');
+            try {
+                const response = await fetch(`/api/vectordb/indices/${encodeURIComponent(indexId)}/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query,
+                        k,
+                        threshold,
+                        includeMetadata: true
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                displaySearchResults(result.results, query);
+                showResponse('search-response');
+                showToast(`Found ${result.count} results!`);
+            } catch (error) {
+                document.getElementById('search-results').innerHTML = `<div class="search-result"><div class="search-result-text">Error: ${error.message}</div></div>`;
+                showResponse('search-response');
+                showToast('Search failed: ' + error.message, 'error');
+            } finally {
+                hideSpinner('search-button');
+            }
+        }
+
+        function displaySearchResults(results, query) {
+            const container = document.getElementById('search-results');
+            
+            if (results.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">No results found. Try a different query!</p>';
+                return;
+            }
+            
+            container.innerHTML = results.map(result => `
+                <div class="search-result">
+                    <div class="search-result-header">
+                        <div class="search-result-id">${result.id}</div>
+                        <div class="search-result-score">Score: ${result.score.toFixed(3)}</div>
+                    </div>
+                    ${result.text ? `<div class="search-result-text">${result.text}</div>` : ''}
+                    ${result.metadata ? `<div class="search-result-metadata">Metadata: ${JSON.stringify(result.metadata)}</div>` : ''}
+                </div>
+            `).join('');
+        }
+
+        async function deleteVectorIndex() {
+            const indexId = document.getElementById('delete-selector').value;
+            
+            if (!indexId) {
+                showToast('Please select an index to delete', 'error');
+                return;
+            }
+            
+            if (!confirm(`Are you sure you want to delete index "${indexId}"? This action cannot be undone.`)) {
+                return;
+            }
+            
+            showSpinner('delete-button');
+            try {
+                const response = await fetch(`/api/vectordb/indices/${encodeURIComponent(indexId)}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                document.getElementById('delete-output').textContent = JSON.stringify(result, null, 2);
+                showResponse('delete-response');
+                showToast('Index deleted successfully!');
+                
+                // Refresh lists
+                await listVectorIndices();
+            } catch (error) {
+                document.getElementById('delete-output').textContent = JSON.stringify({ error: error.message }, null, 2);
+                showResponse('delete-response');
+                showToast('Failed to delete index: ' + error.message, 'error');
+            } finally {
+                hideSpinner('delete-button');
+            }
+        }
+
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', async () => {
+            await getVectorDBStats();
+            await listVectorIndices();
+        });
+    </script>
+</body>
+</html> 

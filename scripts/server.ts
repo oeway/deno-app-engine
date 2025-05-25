@@ -1,5 +1,6 @@
 import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
+import { VectorDBManager, type IDocument, type IQueryOptions } from "../vectordb/mod.ts";
 import { Status } from "https://deno.land/std@0.201.0/http/http_status.ts";
 import { contentType } from "https://deno.land/std/media_types/mod.ts";
 
@@ -77,6 +78,12 @@ function getKernelManagerOptions(): IKernelManagerOptions {
 
 // Create a global kernel manager instance with configuration
 const kernelManager = new KernelManager(getKernelManagerOptions());
+
+// Create a global vector database manager instance
+const vectorDBManager = new VectorDBManager({
+  defaultEmbeddingModel: "mock-model", // Use mock for demo to avoid threading issues
+  maxInstances: 10
+});
 
 // Store execution sessions and their results
 interface ExecutionSession {
@@ -206,6 +213,11 @@ export async function handleRequest(req: Request): Promise<Response> {
   // Serve index.html at root
   if (path === "/" || path === "/index.html") {
     return await serveStaticFile("index.html");
+  }
+
+  // Serve vector database playground
+  if (path === "/vectordb" || path === "/vectordb.html") {
+    return await serveStaticFile("vectordb.html");
   }
 
   // CORS headers
@@ -737,6 +749,222 @@ export async function handleRequest(req: Request): Promise<Response> {
           });
         } catch (error) {
           console.error(`Error interrupting kernel ${kernelId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Vector Database API Routes
+      
+      // List vector database instances
+      if (path === "/api/vectordb/instances" && req.method === "GET") {
+        try {
+          const instances = vectorDBManager.listInstances();
+          return jsonResponse(instances);
+        } catch (error) {
+          console.error("Error listing vector database instances:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Get vector database stats
+      if (path === "/api/vectordb/stats" && req.method === "GET") {
+        try {
+          const stats = vectorDBManager.getStats();
+          return jsonResponse(stats);
+        } catch (error) {
+          console.error("Error getting vector database stats:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Create vector database index
+      if (path === "/api/vectordb/indices" && req.method === "POST") {
+        try {
+          const body = await req.json();
+          const indexId = await vectorDBManager.createIndex({
+            id: body.id || crypto.randomUUID(),
+            namespace: body.namespace || "default",
+            embeddingModel: body.embeddingModel
+          });
+          
+          const instance = vectorDBManager.getInstance(indexId);
+          const namespaceMatch = indexId.match(/^([^:]+):/);
+          const namespace = namespaceMatch ? namespaceMatch[1] : undefined;
+          
+          return jsonResponse({
+            id: indexId,
+            namespace: namespace,
+            documentCount: instance?.documentCount || 0,
+            embeddingDimension: instance?.embeddingDimension,
+            created: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error("Error creating vector database index:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Add documents to vector database
+      if (path.match(/^\/api\/vectordb\/indices\/[^\/]+\/documents$/) && req.method === "POST") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          const body = await req.json();
+          const documents: IDocument[] = body.documents || [];
+          
+          await vectorDBManager.addDocuments(indexId, documents);
+          
+          const instance = vectorDBManager.getInstance(indexId);
+          return jsonResponse({
+            success: true,
+            message: `Added ${documents.length} documents`,
+            documentCount: instance?.documentCount || 0
+          });
+        } catch (error) {
+          console.error(`Error adding documents to index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Query vector database
+      if (path.match(/^\/api\/vectordb\/indices\/[^\/]+\/query$/) && req.method === "POST") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          const body = await req.json();
+          const query = body.query;
+          const options: IQueryOptions = {
+            k: body.k || 10,
+            threshold: body.threshold || 0,
+            includeMetadata: body.includeMetadata !== false
+          };
+          
+          const results = await vectorDBManager.queryIndex(indexId, query, options);
+          
+          return jsonResponse({
+            results,
+            count: results.length,
+            query: typeof query === "string" ? query : "[vector]"
+          });
+        } catch (error) {
+          console.error(`Error querying index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Remove documents from vector database
+      if (path.match(/^\/api\/vectordb\/indices\/[^\/]+\/documents$/) && req.method === "DELETE") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          const body = await req.json();
+          const documentIds: string[] = body.documentIds || [];
+          
+          await vectorDBManager.removeDocuments(indexId, documentIds);
+          
+          const instance = vectorDBManager.getInstance(indexId);
+          return jsonResponse({
+            success: true,
+            message: `Removed ${documentIds.length} documents`,
+            documentCount: instance?.documentCount || 0
+          });
+        } catch (error) {
+          console.error(`Error removing documents from index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Delete vector database index
+      if (path.match(/^\/api\/vectordb\/indices\/[^\/]+$/) && req.method === "DELETE") {
+        const indexId = decodeURIComponent(path.split("/")[4]);
+        
+        try {
+          await vectorDBManager.destroyIndex(indexId);
+          return jsonResponse({
+            success: true,
+            message: `Index ${indexId} deleted successfully`
+          });
+        } catch (error) {
+          console.error(`Error deleting index ${indexId}:`, error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Generate random documents for testing
+      if (path === "/api/vectordb/generate-documents" && req.method === "POST") {
+        try {
+          const body = await req.json();
+          const count = Math.min(body.count || 10, 100); // Limit to 100 documents
+          
+          const topics = [
+            "artificial intelligence and machine learning algorithms",
+            "web development with modern JavaScript frameworks",
+            "data science and statistical analysis techniques", 
+            "cloud computing and distributed systems architecture",
+            "mobile application development for iOS and Android",
+            "cybersecurity threats and protection strategies",
+            "blockchain technology and cryptocurrency systems",
+            "internet of things devices and sensor networks",
+            "virtual reality gaming and immersive experiences",
+            "robotics automation and industrial applications",
+            "quantum computing and advanced physics research",
+            "renewable energy and sustainable technology solutions",
+            "biotechnology and genetic engineering breakthroughs",
+            "space exploration and astronomical discoveries",
+            "environmental science and climate change research"
+          ];
+          
+          const documents: IDocument[] = [];
+          
+          for (let i = 0; i < count; i++) {
+            const topic = topics[i % topics.length];
+            const randomSuffix = Math.random().toString(36).substring(7);
+            const randomNumber = Math.floor(Math.random() * 1000);
+            
+            documents.push({
+              id: `doc-${Date.now()}-${i}-${randomSuffix}`,
+              text: `${topic} - Document ${randomNumber} discussing advanced concepts and practical applications in this field. This content includes detailed analysis and research findings with unique identifier ${randomSuffix}.`,
+              metadata: {
+                topic: topic.split(" ")[0],
+                category: i % 3 === 0 ? "research" : i % 3 === 1 ? "tutorial" : "analysis",
+                priority: Math.floor(Math.random() * 5) + 1,
+                created: new Date().toISOString(),
+                randomId: randomSuffix
+              }
+            });
+          }
+          
+          return jsonResponse({
+            documents,
+            count: documents.length,
+            message: `Generated ${documents.length} random documents`
+          });
+        } catch (error) {
+          console.error("Error generating random documents:", error);
           return jsonResponse(
             { error: error instanceof Error ? error.message : String(error) },
             Status.InternalServerError
