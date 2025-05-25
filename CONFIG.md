@@ -33,7 +33,7 @@ The kernel pool preloads kernels to reduce startup time from several seconds to 
 ### KERNEL_POOL_ENABLED
 Enable or disable kernel pooling.
 
-**Default:** `false`
+**Default:** `true`
 
 **Examples:**
 ```bash

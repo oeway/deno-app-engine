@@ -86,7 +86,7 @@ The HTTP server can be configured using these environment variables:
 export ALLOWED_KERNEL_TYPES="worker-python,worker-typescript,main_thread-python"
 
 # Enable kernel pooling for better performance
-# Default: false
+# Default: true
 export KERNEL_POOL_ENABLED="true"
 
 # Number of kernels to keep ready in the pool

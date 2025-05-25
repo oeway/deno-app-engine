@@ -1,5 +1,5 @@
 import { hyphaWebsocketClient } from "npm:hypha-rpc";
-import { KernelMode } from "./kernel/mod.ts";
+import { KernelMode } from "../kernel/mod.ts";
 
 // To run the test, use:
 // deno run -A test-hypha-service.ts <serviceId> [numKernels] [numExecutions]

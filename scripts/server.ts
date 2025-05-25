@@ -1,5 +1,5 @@
-import { KernelManager, KernelMode, KernelLanguage } from "./kernel/mod.ts";
-import type { IKernelManagerOptions } from "./kernel/manager.ts";
+import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
+import type { IKernelManagerOptions } from "../kernel/manager.ts";
 import { Status } from "https://deno.land/std@0.201.0/http/http_status.ts";
 import { contentType } from "https://deno.land/std/media_types/mod.ts";
 
@@ -28,7 +28,7 @@ function getKernelManagerOptions(): IKernelManagerOptions {
   }
   
   // Parse pool configuration from environment variables
-  const poolEnabled = Deno.env.get("KERNEL_POOL_ENABLED") === "true";
+  const poolEnabled = Deno.env.get("KERNEL_POOL_ENABLED") !== "false";
   const poolSize = parseInt(Deno.env.get("KERNEL_POOL_SIZE") || "2");
   const autoRefill = Deno.env.get("KERNEL_POOL_AUTO_REFILL") !== "false"; // Default true
   

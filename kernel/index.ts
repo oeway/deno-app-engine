@@ -45,7 +45,13 @@ export enum KernelEvents {
   ALL = "*", // Wildcard event type
   
   // Execution monitoring events
-  EXECUTION_STALLED = "execution_stalled"
+  EXECUTION_STALLED = "execution_stalled",
+  
+  // Enhanced stuck kernel handling events
+  KERNEL_UNRECOVERABLE = "kernel_unrecoverable",
+  EXECUTION_INTERRUPTED = "execution_interrupted",
+  KERNEL_RESTARTED = "kernel_restarted",
+  KERNEL_TERMINATED = "kernel_terminated"
 }
 
 // Interface for kernel events

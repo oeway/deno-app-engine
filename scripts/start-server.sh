@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Check if Deno is installed
 if ! command -v deno &> /dev/null; then
@@ -8,6 +8,5 @@ if ! command -v deno &> /dev/null; then
 fi
 
 # Start the server with necessary permissions
-echo "Starting Deno App Engine service..."
-
-deno run --allow-net --allow-read --allow-write --allow-env hypha-service.ts
+echo "Starting Deno App Engine server..."
+deno run --allow-net --allow-read --allow-write --allow-env scripts/server.ts 

@@ -108,6 +108,10 @@ export class KernelManager extends EventEmitter {
   private ongoingExecutions: Map<string, Set<string>> = new Map();
   // Track execution timeouts for detecting stuck/dead kernels
   private executionTimeouts: Map<string, Map<string, number>> = new Map();
+  // Track execution start times for accurate duration calculation
+  private executionStartTimes: Map<string, Map<string, number>> = new Map();
+  // Track execution metadata for better monitoring
+  private executionMetadata: Map<string, Map<string, { startTime: number; code?: string; timeoutId?: number }>> = new Map();
   
   // Pool management - now using promises for immediate response
   private pool: Map<string, Promise<IKernelInstance>[]> = new Map();
@@ -1159,6 +1163,16 @@ export class KernelManager extends EventEmitter {
       this.executionTimeouts.delete(id);
     }
     
+    // Clean up execution start times
+    if (this.executionStartTimes.has(id)) {
+      this.executionStartTimes.delete(id);
+    }
+    
+    // Clean up execution metadata
+    if (this.executionMetadata.has(id)) {
+      this.executionMetadata.delete(id);
+    }
+    
     // Clean up interrupt buffers
     if (this.interruptBuffers.has(id)) {
       console.log(`Cleaning up interrupt buffer for kernel ${id}`);
@@ -1428,8 +1442,8 @@ export class KernelManager extends EventEmitter {
     // Update kernel activity
     this.updateKernelActivity(kernelId);
     
-    // Track this execution
-    const executionId = this.trackExecution(kernelId);
+    // Track this execution with the code for better monitoring
+    const executionId = this.trackExecution(kernelId, code);
     
     try {
       // For main thread kernels, we can use the executeStream method directly
@@ -1701,12 +1715,14 @@ export class KernelManager extends EventEmitter {
   /**
    * Track a new execution task for a kernel
    * @param kernelId Kernel ID
+   * @param code Optional code being executed for metadata
    * @returns Unique execution ID
    * @private
    */
-  private trackExecution(kernelId: string): string {
+  private trackExecution(kernelId: string, code?: string): string {
     // Create a unique execution ID
     const executionId = `exec-${crypto.randomUUID()}`;
+    const startTime = Date.now();
     
     // Get or create the set of ongoing executions for this kernel
     if (!this.ongoingExecutions.has(kernelId)) {
@@ -1715,6 +1731,17 @@ export class KernelManager extends EventEmitter {
     
     // Add this execution to the set
     this.ongoingExecutions.get(kernelId)!.add(executionId);
+    
+    // Track execution start time
+    if (!this.executionStartTimes.has(kernelId)) {
+      this.executionStartTimes.set(kernelId, new Map());
+    }
+    this.executionStartTimes.get(kernelId)!.set(executionId, startTime);
+    
+    // Track execution metadata
+    if (!this.executionMetadata.has(kernelId)) {
+      this.executionMetadata.set(kernelId, new Map());
+    }
     
     // Update activity timestamp
     this.updateKernelActivity(kernelId);
@@ -1727,19 +1754,43 @@ export class KernelManager extends EventEmitter {
         this.executionTimeouts.set(kernelId, new Map());
       }
       
-      // Set a timeout for this execution
+      // Set a timeout for this execution with enhanced handling
       const timeoutId = setTimeout(() => {
         console.warn(`Execution ${executionId} on kernel ${kernelId} has been running for ${instance.options.maxExecutionTime}ms and may be stuck/dead.`);
-        // Emit a stalled execution event
+        
+        // Get execution metadata for better error reporting
+        const metadata = this.executionMetadata.get(kernelId)?.get(executionId);
+        const actualRuntime = Date.now() - (metadata?.startTime || startTime);
+        
+        // Emit a stalled execution event with enhanced information
         super.emit('execution_stalled', {
           kernelId,
           executionId,
-          maxExecutionTime: instance.options.maxExecutionTime
+          maxExecutionTime: instance.options.maxExecutionTime,
+          actualRuntime,
+          code: metadata?.code || code,
+          startTime: metadata?.startTime || startTime
         });
+        
+        // Auto-handle stuck execution if configured
+        this.handleStuckExecution(kernelId, executionId, actualRuntime, metadata?.code || code);
       }, instance.options.maxExecutionTime);
       
       // Store the timeout ID
       this.executionTimeouts.get(kernelId)!.set(executionId, timeoutId);
+      
+      // Store metadata including timeout ID
+      this.executionMetadata.get(kernelId)!.set(executionId, {
+        startTime,
+        code,
+        timeoutId
+      });
+    } else {
+      // Store metadata without timeout ID
+      this.executionMetadata.get(kernelId)!.set(executionId, {
+        startTime,
+        code
+      });
     }
     
     return executionId;
@@ -1763,6 +1814,28 @@ export class KernelManager extends EventEmitter {
       // Clean up empty maps
       if (timeouts.size === 0) {
         this.executionTimeouts.delete(kernelId);
+      }
+    }
+    
+    // Clean up execution start times
+    if (this.executionStartTimes.has(kernelId)) {
+      const startTimes = this.executionStartTimes.get(kernelId)!;
+      startTimes.delete(executionId);
+      
+      // Clean up empty maps
+      if (startTimes.size === 0) {
+        this.executionStartTimes.delete(kernelId);
+      }
+    }
+    
+    // Clean up execution metadata
+    if (this.executionMetadata.has(kernelId)) {
+      const metadata = this.executionMetadata.get(kernelId)!;
+      metadata.delete(executionId);
+      
+      // Clean up empty maps
+      if (metadata.size === 0) {
+        this.executionMetadata.delete(kernelId);
       }
     }
     
@@ -2016,22 +2089,29 @@ export class KernelManager extends EventEmitter {
   /**
    * Get information about ongoing executions for a kernel
    * @param id Kernel ID
-   * @returns Information about ongoing executions
+   * @returns Information about ongoing executions with accurate timing
    */
   public getExecutionInfo(id: string): { 
     count: number; 
     isStuck: boolean; 
     executionIds: string[];
     longestRunningTime?: number;
+    executions: Array<{
+      id: string;
+      startTime: number;
+      runtime: number;
+      code?: string;
+      isStuck: boolean;
+    }>;
   } {
     const instance = this.kernels.get(id);
     if (!instance) {
-      return { count: 0, isStuck: false, executionIds: [] };
+      return { count: 0, isStuck: false, executionIds: [], executions: [] };
     }
     
     // Handle partially initialized kernels where options may not be fully set
     if (!instance.options) {
-      return { count: 0, isStuck: false, executionIds: [] };
+      return { count: 0, isStuck: false, executionIds: [], executions: [] };
     }
     
     const executionIds = this.ongoingExecutions.get(id) 
@@ -2039,23 +2119,72 @@ export class KernelManager extends EventEmitter {
       : [];
     
     const count = executionIds.length;
+    const currentTime = Date.now();
+    const maxExecutionTime = instance.options.maxExecutionTime;
     
-    // Calculate longest running time if we have activity timestamps
+    // Build detailed execution information
+    const executions: Array<{
+      id: string;
+      startTime: number;
+      runtime: number;
+      code?: string;
+      isStuck: boolean;
+    }> = [];
+    
     let longestRunningTime: number | undefined = undefined;
-    if (this.lastActivityTime.has(id)) {
-      longestRunningTime = Date.now() - this.lastActivityTime.get(id)!;
+    let anyStuck = false;
+    
+    // Get execution start times and metadata
+    const startTimes = this.executionStartTimes.get(id);
+    const metadata = this.executionMetadata.get(id);
+    
+    for (const executionId of executionIds) {
+      const startTime = startTimes?.get(executionId);
+      const execMetadata = metadata?.get(executionId);
+      
+      if (startTime !== undefined) {
+        const runtime = currentTime - startTime;
+        const isStuck = maxExecutionTime !== undefined && runtime > maxExecutionTime;
+        
+        executions.push({
+          id: executionId,
+          startTime,
+          runtime,
+          code: execMetadata?.code,
+          isStuck
+        });
+        
+        // Track longest running time
+        if (longestRunningTime === undefined || runtime > longestRunningTime) {
+          longestRunningTime = runtime;
+        }
+        
+        // Track if any execution is stuck
+        if (isStuck) {
+          anyStuck = true;
+        }
+      } else {
+        // Fallback for executions without start time tracking
+        console.warn(`No start time found for execution ${executionId} on kernel ${id}`);
+        executions.push({
+          id: executionId,
+          startTime: 0,
+          runtime: 0,
+          code: execMetadata?.code,
+          isStuck: false
+        });
+      }
     }
     
-    // Consider stuck if running longer than maxExecutionTime
-    const isStuck = instance.options.maxExecutionTime !== undefined && 
-                   longestRunningTime !== undefined && 
-                   longestRunningTime > instance.options.maxExecutionTime;
+    // Sort executions by start time (oldest first)
+    executions.sort((a, b) => a.startTime - b.startTime);
     
     return {
       count,
-      isStuck,
+      isStuck: anyStuck,
       executionIds,
-      longestRunningTime
+      longestRunningTime,
+      executions
     };
   }
 
@@ -2081,8 +2210,8 @@ export class KernelManager extends EventEmitter {
     // Update kernel activity
     this.updateKernelActivity(kernelId);
     
-    // Track this execution
-    const executionId = this.trackExecution(kernelId);
+    // Track this execution with the code for better monitoring
+    const executionId = this.trackExecution(kernelId, code);
     
     try {
       // Execute the code
@@ -2374,5 +2503,246 @@ export class KernelManager extends EventEmitter {
         resolve(false);
       }, 5000); // 5 second timeout
     });
+  }
+
+  /**
+   * Handle a stuck execution with configurable strategies
+   * @param kernelId Kernel ID
+   * @param executionId Execution ID that's stuck
+   * @param actualRuntime How long the execution has been running
+   * @param code The code that was being executed
+   * @private
+   */
+  private async handleStuckExecution(kernelId: string, executionId: string, actualRuntime: number, code?: string): Promise<void> {
+    const instance = this.kernels.get(kernelId);
+    if (!instance) {
+      return;
+    }
+    
+    console.warn(`Handling stuck execution ${executionId} on kernel ${kernelId} (runtime: ${actualRuntime}ms)`);
+    
+    // Strategy 1: Try to interrupt the kernel first
+    console.log(`Attempting to interrupt stuck kernel ${kernelId}...`);
+    const interruptSuccess = await this.interruptKernel(kernelId);
+    
+    if (interruptSuccess) {
+      console.log(`Successfully interrupted kernel ${kernelId}`);
+      
+      // Emit an execution error to notify clients
+      super.emit(KernelEvents.EXECUTE_ERROR, {
+        kernelId: kernelId,
+        data: {
+          ename: "ExecutionInterrupted",
+          evalue: `Execution automatically interrupted after ${actualRuntime}ms (exceeded maxExecutionTime)`,
+          traceback: [
+            `Execution was automatically interrupted due to timeout.`,
+            `Runtime: ${actualRuntime}ms`,
+            `Max allowed: ${instance.options.maxExecutionTime}ms`,
+            code ? `Code: ${code.substring(0, 200)}${code.length > 200 ? '...' : ''}` : 'Code: <unknown>'
+          ]
+        }
+      });
+      
+      return;
+    }
+    
+    // Strategy 2: If interrupt failed, try restarting the kernel
+    console.warn(`Interrupt failed for kernel ${kernelId}, attempting restart...`);
+    const restartSuccess = await this.restartKernel(kernelId);
+    
+    if (restartSuccess) {
+      console.log(`Successfully restarted kernel ${kernelId}`);
+      
+      // Emit a restart notification
+      super.emit(KernelEvents.EXECUTE_ERROR, {
+        kernelId: kernelId,
+        data: {
+          ename: "KernelRestarted",
+          evalue: `Kernel automatically restarted due to stuck execution (runtime: ${actualRuntime}ms)`,
+          traceback: [
+            `Kernel was automatically restarted due to stuck execution.`,
+            `Runtime: ${actualRuntime}ms`,
+            `Max allowed: ${instance.options.maxExecutionTime}ms`,
+            `Interrupt attempt failed, kernel was restarted instead.`,
+            code ? `Code: ${code.substring(0, 200)}${code.length > 200 ? '...' : ''}` : 'Code: <unknown>'
+          ]
+        }
+      });
+      
+      return;
+    }
+    
+    // Strategy 3: If restart failed, force terminate the kernel
+    console.error(`Restart failed for kernel ${kernelId}, force terminating...`);
+    const terminateSuccess = await this.forceTerminateKernel(
+      kernelId, 
+      `Stuck execution could not be interrupted or restarted (runtime: ${actualRuntime}ms)`
+    );
+    
+    if (terminateSuccess) {
+      console.log(`Successfully terminated kernel ${kernelId}`);
+    } else {
+      console.error(`Failed to terminate kernel ${kernelId} - manual intervention may be required`);
+      
+      // Emit a critical error
+      super.emit('kernel_unrecoverable', {
+        kernelId: kernelId,
+        executionId: executionId,
+        actualRuntime: actualRuntime,
+        code: code,
+        message: 'Kernel is stuck and could not be recovered through interrupt, restart, or termination'
+      });
+    }
+  }
+
+  /**
+   * Get detailed information about stuck executions across all kernels
+   * @returns Array of stuck execution details
+   */
+  public getStuckExecutions(): Array<{
+    kernelId: string;
+    executionId: string;
+    startTime: number;
+    runtime: number;
+    maxAllowed: number;
+    code?: string;
+    kernelMode: KernelMode;
+    kernelLanguage: KernelLanguage;
+  }> {
+    const stuckExecutions: Array<{
+      kernelId: string;
+      executionId: string;
+      startTime: number;
+      runtime: number;
+      maxAllowed: number;
+      code?: string;
+      kernelMode: KernelMode;
+      kernelLanguage: KernelLanguage;
+    }> = [];
+    
+    const currentTime = Date.now();
+    
+    for (const [kernelId, instance] of this.kernels.entries()) {
+      // Skip pool kernels
+      if (kernelId.startsWith("pool-")) continue;
+      
+      // Skip kernels without maxExecutionTime configured
+      if (!instance.options?.maxExecutionTime || instance.options.maxExecutionTime <= 0) {
+        continue;
+      }
+      
+      const maxExecutionTime = instance.options.maxExecutionTime;
+      const startTimes = this.executionStartTimes.get(kernelId);
+      const metadata = this.executionMetadata.get(kernelId);
+      const ongoingExecs = this.ongoingExecutions.get(kernelId);
+      
+      if (!ongoingExecs || ongoingExecs.size === 0) {
+        continue;
+      }
+      
+      for (const executionId of ongoingExecs) {
+        const startTime = startTimes?.get(executionId);
+        if (startTime === undefined) continue;
+        
+        const runtime = currentTime - startTime;
+        
+        // Check if this execution is stuck
+        if (runtime > maxExecutionTime) {
+          const execMetadata = metadata?.get(executionId);
+          
+          stuckExecutions.push({
+            kernelId,
+            executionId,
+            startTime,
+            runtime,
+            maxAllowed: maxExecutionTime,
+            code: execMetadata?.code,
+            kernelMode: instance.mode,
+            kernelLanguage: instance.language
+          });
+        }
+      }
+    }
+    
+    // Sort by runtime (longest running first)
+    stuckExecutions.sort((a, b) => b.runtime - a.runtime);
+    
+    return stuckExecutions;
+  }
+
+  /**
+   * Force interrupt all stuck executions across all kernels
+   * @returns Promise resolving to array of intervention results
+   */
+  public async handleAllStuckExecutions(): Promise<Array<{
+    kernelId: string;
+    executionId: string;
+    action: 'interrupted' | 'restarted' | 'terminated' | 'failed';
+    success: boolean;
+    error?: string;
+  }>> {
+    const stuckExecutions = this.getStuckExecutions();
+    const results: Array<{
+      kernelId: string;
+      executionId: string;
+      action: 'interrupted' | 'restarted' | 'terminated' | 'failed';
+      success: boolean;
+      error?: string;
+    }> = [];
+    
+    console.log(`Found ${stuckExecutions.length} stuck executions to handle`);
+    
+    // Group by kernel to avoid multiple interventions on the same kernel
+    const kernelGroups = new Map<string, typeof stuckExecutions>();
+    for (const exec of stuckExecutions) {
+      if (!kernelGroups.has(exec.kernelId)) {
+        kernelGroups.set(exec.kernelId, []);
+      }
+      kernelGroups.get(exec.kernelId)!.push(exec);
+    }
+    
+    // Handle each kernel's stuck executions
+    for (const [kernelId, executions] of kernelGroups) {
+      try {
+        // Pick the longest running execution as the primary one
+        const primaryExec = executions[0]; // Already sorted by runtime desc
+        
+        console.log(`Handling stuck kernel ${kernelId} with ${executions.length} stuck executions (primary: ${primaryExec.runtime}ms)`);
+        
+        // Use the automated handling system
+        await this.handleStuckExecution(
+          kernelId, 
+          primaryExec.executionId, 
+          primaryExec.runtime, 
+          primaryExec.code
+        );
+        
+        // Mark all executions for this kernel as handled
+        for (const exec of executions) {
+          results.push({
+            kernelId: exec.kernelId,
+            executionId: exec.executionId,
+            action: 'interrupted', // We don't know the exact action, but it was handled
+            success: true
+          });
+        }
+        
+      } catch (error) {
+        console.error(`Error handling stuck executions for kernel ${kernelId}:`, error);
+        
+        // Mark all executions for this kernel as failed
+        for (const exec of executions) {
+          results.push({
+            kernelId: exec.kernelId,
+            executionId: exec.executionId,
+            action: 'failed',
+            success: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+    }
+    
+    return results;
   }
 }
