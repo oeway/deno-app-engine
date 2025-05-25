@@ -62,10 +62,22 @@ class ConsoleCapture {
       JSON.stringify(arg, null, 2))
     ).join(' ');
     
-    this.eventEmitter.emit(KernelEvents.STREAM, {
-      name: stream,
-      text: text + "\n"
-    });
+    // Use the TypeScript kernel's _sendMessage method if available
+    if (typeof (this.eventEmitter as any)._sendMessage === 'function') {
+      (this.eventEmitter as any)._sendMessage({
+        type: 'stream',
+        bundle: {
+          name: stream,
+          text: text + "\n"
+        }
+      });
+    } else {
+      // Fallback for compatibility
+      this.eventEmitter.emit(KernelEvents.STREAM, {
+        name: stream,
+        text: text + "\n"
+      });
+    }
   }
 }
 
@@ -415,6 +427,45 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     }
   }
   
+  async* executeStream(code: string, parent?: any): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void> {
+    try {
+      if (!this.initialized) {
+        await this.initialize();
+      }
+      
+      // Create event listeners to capture events during execution
+      const eventQueue: any[] = [];
+      
+      const handleAllEvents = (eventData: any) => {
+        eventQueue.push(eventData);
+      };
+      
+      // Listen for all events BEFORE executing code
+      super.on(KernelEvents.ALL, handleAllEvents);
+      
+      try {
+        // Execute code as normal
+        const result = await this.execute(code, parent);
+        
+        // Forward captured events
+        while (eventQueue.length > 0) {
+          yield eventQueue.shift();
+        }
+        
+        return result;
+      } finally {
+        // Clean up listener in finally block to ensure it's always removed
+        super.off(KernelEvents.ALL, handleAllEvents);
+      }
+    } catch (error) {
+      console.error("Error in executeStream:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+  
   isInitialized(): boolean {
     return this.initialized;
   }
@@ -433,15 +484,90 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     jupyter.onBroadcast((msgType: string, content: any, metadata: Record<string, any>, buffers: any[]) => {
       // Map Jupyter message types to kernel events
       if (msgType === 'display_data' || msgType === 'update_display_data') {
-        super.emit(KernelEvents.DISPLAY_DATA, content);
+        this._sendMessage({
+          type: 'display_data',
+          bundle: content
+        });
       } else if (msgType === 'stream') {
-        super.emit(KernelEvents.STREAM, content);
+        this._sendMessage({
+          type: 'stream',
+          bundle: content
+        });
       } else if (msgType === 'execute_result') {
-        super.emit(KernelEvents.EXECUTE_RESULT, content);
+        this._sendMessage({
+          type: 'execute_result',
+          bundle: content
+        });
       } else if (msgType === 'error') {
-        super.emit(KernelEvents.EXECUTE_ERROR, content);
+        this._sendMessage({
+          type: 'execute_error',
+          bundle: content
+        });
       }
     });
+  }
+  
+  /**
+   * Send a message and emit both specific event and ALL event
+   */
+  private _sendMessage(msg: { type: string; bundle?: any; content?: any }): void {
+    this._processMessage(msg);
+  }
+  
+  /**
+   * Process a message by emitting the appropriate event
+   */
+  private _processMessage(msg: { type: string; bundle?: any; content?: any }): void {
+    if (!msg.type) {
+      return;
+    }
+
+    let eventData: any;
+
+    switch (msg.type) {
+      case 'stream': {
+        const bundle = msg.bundle ?? { name: 'stdout', text: '' };
+        super.emit(KernelEvents.STREAM, bundle);
+        eventData = bundle;
+        break;
+      }
+      case 'display_data': {
+        const bundle = msg.bundle ?? { data: {}, metadata: {}, transient: {} };
+        super.emit(KernelEvents.DISPLAY_DATA, bundle);
+        eventData = bundle;
+        break;
+      }
+      case 'update_display_data': {
+        const bundle = msg.bundle ?? { data: {}, metadata: {}, transient: {} };
+        super.emit(KernelEvents.UPDATE_DISPLAY_DATA, bundle);
+        eventData = bundle;
+        break;
+      }
+      case 'execute_result': {
+        const bundle = msg.bundle ?? {
+          execution_count: this.codeExecutor.getExecutionCount(),
+          data: {},
+          metadata: {},
+        };
+        super.emit(KernelEvents.EXECUTE_RESULT, bundle);
+        eventData = bundle;
+        break;
+      }
+      case 'execute_error': {
+        const bundle = msg.bundle ?? { ename: '', evalue: '', traceback: [] };
+        super.emit(KernelEvents.EXECUTE_ERROR, bundle);
+        eventData = bundle;
+        break;
+      }
+    }
+
+    // Emit the ALL event with standardized format
+    if (eventData) {
+      super.emit(KernelEvents.ALL, {
+        type: msg.type,
+        data: eventData
+      });
+    }
   }
   
   private emitExecutionResult(result: any): void {
@@ -452,10 +578,13 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
           const displayResult = result[jupyter.$display]();
           if (displayResult && typeof displayResult === "object") {
             // Emit as display_data event
-            super.emit(KernelEvents.DISPLAY_DATA, {
-              data: displayResult,
-              metadata: {},
-              transient: {}
+            this._sendMessage({
+              type: 'display_data',
+              bundle: {
+                data: displayResult,
+                metadata: {},
+                transient: {}
+              }
             });
             return; // Don't emit as execution result
           }
@@ -467,10 +596,13 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
       // Format the result using jupyter helper for regular execution results
       const formattedResult = jupyter.formatResult(result);
       
-      super.emit(KernelEvents.EXECUTE_RESULT, {
-        execution_count: this.codeExecutor.getExecutionCount(),
-        data: formattedResult,
-        metadata: {}
+      this._sendMessage({
+        type: 'execute_result',
+        bundle: {
+          execution_count: this.codeExecutor.getExecutionCount(),
+          data: formattedResult,
+          metadata: {}
+        }
       });
     } catch (error) {
       console.error("[TS_KERNEL] Error emitting execution result:", error);
@@ -484,6 +616,9 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
       traceback: error instanceof Error && error.stack ? [error.stack] : ["No traceback available"]
     };
     
-    super.emit(KernelEvents.EXECUTE_ERROR, errorData);
+    this._sendMessage({
+      type: 'execute_error',
+      bundle: errorData
+    });
   }
 } 

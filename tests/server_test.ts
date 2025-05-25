@@ -362,9 +362,9 @@ Deno.test({
     const code = 'throw new Error("TypeScript test error");';
     const result = await makeRequest(`/kernels/${tsKernelId}/execute`, "POST", { code });
     
-    // Check for error event
+    // Check for error event - TypeScript kernel emits "execute_error" type
     const errorEvent = result.find((event: any) => 
-      event.type === "error" && 
+      (event.type === "error" || event.type === "execute_error") && 
       event.data.ename === "Error" &&
       event.data.evalue === "TypeScript test error"
     );
