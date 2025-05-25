@@ -72,56 +72,81 @@ self.addEventListener("message", (event) => {
     // Set the interrupt buffer in the kernel if it's initialized
     if (kernel.isInitialized() && interruptBuffer && typeof kernel.setInterruptBuffer === 'function') {
       kernel.setInterruptBuffer(interruptBuffer);
+      console.log("[WORKER] Interrupt buffer set in pyodide kernel");
+    } else if (interruptBuffer) {
+      console.log("[WORKER] Interrupt buffer stored, will be set when kernel initializes");
     }
     
+    const responseMessage = {
+      type: "INTERRUPT_BUFFER_SET",
+      data: { success: true }
+    };
+    
+    // Send response on both channels to ensure it's received
     if (eventPort) {
-      eventPort.postMessage({
-        type: "INTERRUPT_BUFFER_SET",
-        data: { success: true }
-      });
+      eventPort.postMessage(responseMessage);
     }
+    
+    // Also send on main worker channel in case eventPort isn't set up yet
+    self.postMessage(responseMessage);
+    
   } else if (event.data?.type === "INTERRUPT_KERNEL") {
     // Handle interrupt request
     
     if (interruptBuffer) {
       // Set interrupt signal (2 = SIGINT)
+      console.log("[WORKER] Setting interrupt signal in buffer");
       interruptBuffer[0] = 2;
       
+      const responseMessage = {
+        type: "INTERRUPT_TRIGGERED",
+        data: { success: true, method: "buffer" }
+      };
+      
+      // Send response on both channels
       if (eventPort) {
-        eventPort.postMessage({
-          type: "INTERRUPT_TRIGGERED",
-          data: { success: true, method: "buffer" }
-        });
+        eventPort.postMessage(responseMessage);
       }
+      self.postMessage(responseMessage);
+      
     } else {
       console.log("[WORKER] No interrupt buffer available, trying kernel.interrupt()");
       
       // Fallback to kernel interrupt method
       if (typeof kernel.interrupt === 'function') {
         kernel.interrupt().then(success => {
+          const responseMessage = {
+            type: "INTERRUPT_TRIGGERED",
+            data: { success, method: "kernel" }
+          };
+          
           if (eventPort) {
-            eventPort.postMessage({
-              type: "INTERRUPT_TRIGGERED",
-              data: { success, method: "kernel" }
-            });
+            eventPort.postMessage(responseMessage);
           }
+          self.postMessage(responseMessage);
         }).catch(error => {
           console.error("[WORKER] Error during kernel interrupt:", error);
+          const responseMessage = {
+            type: "INTERRUPT_TRIGGERED",
+            data: { success: false, error: error.message, method: "kernel" }
+          };
+          
           if (eventPort) {
-            eventPort.postMessage({
-              type: "INTERRUPT_TRIGGERED",
-              data: { success: false, error: error.message, method: "kernel" }
-            });
+            eventPort.postMessage(responseMessage);
           }
+          self.postMessage(responseMessage);
         });
       } else {
         console.warn("[WORKER] No interrupt method available");
+        const responseMessage = {
+          type: "INTERRUPT_TRIGGERED",
+          data: { success: false, error: "No interrupt method available", method: "none" }
+        };
+        
         if (eventPort) {
-          eventPort.postMessage({
-            type: "INTERRUPT_TRIGGERED",
-            data: { success: false, error: "No interrupt method available", method: "none" }
-          });
+          eventPort.postMessage(responseMessage);
         }
+        self.postMessage(responseMessage);
       }
     }
   }

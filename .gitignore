@@ -5,3 +5,4 @@ kernel/pypi/
 dist/
 .ipython/
 .ipynb_checkpoints/
+.env

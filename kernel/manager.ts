@@ -994,6 +994,9 @@ export class KernelManager extends EventEmitter {
     // Wait for kernel initialization
     await initPromise;
     
+    // Set up interrupt buffer automatically for worker kernels
+    await this.setupWorkerInterruptBuffer(id, worker);
+    
     // Create the kernel instance
     const instance: IKernelInstance = {
       id,
@@ -2360,11 +2363,11 @@ export class KernelManager extends EventEmitter {
         // For worker kernels, use SharedArrayBuffer interrupt method
         return await this.interruptWorkerKernel(id, instance);
       } else {
-        // For main thread kernels, use the kernel's interrupt method
+        // For main thread kernels, try to interrupt (will throw error if not supported)
         return await this.interruptMainThreadKernel(id, instance);
       }
     } catch (error) {
-      console.error(`Error interrupting kernel ${id}:`, error);
+      console.error(`Error interrupting kernel ${id}:`, error instanceof Error ? error.message : String(error));
       return false;
     }
   }
@@ -2377,34 +2380,13 @@ export class KernelManager extends EventEmitter {
    * @private
    */
   private async interruptMainThreadKernel(id: string, instance: IKernelInstance): Promise<boolean> {
-    try {
-      // Try to use the kernel's interrupt method
-      if (typeof instance.kernel.interrupt === 'function') {
-        const result = await instance.kernel.interrupt();
-        return result;
-      } else {
-        console.warn(`Main thread kernel ${id} does not support interrupt method`);
-        
-        // Emit a synthetic KeyboardInterrupt event
-        super.emit(KernelEvents.EXECUTE_ERROR, {
-          kernelId: id,
-          data: {
-            ename: "KeyboardInterrupt",
-            evalue: "Execution interrupted by user",
-            traceback: ["KeyboardInterrupt: Execution interrupted by user"]
-          }
-        });
-        
-        return true;
-      }
-    } catch (error) {
-      console.error(`Error interrupting main thread kernel ${id}:`, error);
-      return false;
-    }
+    // Main thread kernels don't support proper interruption like worker kernels do
+    // Even if they have an interrupt method, it's limited and unreliable
+    throw new Error(`Main thread kernel ${id} does not support reliable interruption. Use worker kernels for interruptible execution.`);
   }
   
   /**
-   * Interrupt a worker kernel using SharedArrayBuffer
+   * Interrupt a worker kernel using SharedArrayBuffer according to Pyodide documentation
    * @param id Kernel ID
    * @param instance Kernel instance
    * @returns Promise resolving to interrupt success
@@ -2428,17 +2410,36 @@ export class KernelManager extends EventEmitter {
           const sharedBuffer = new SharedArrayBuffer(1);
           interruptBuffer = new Uint8Array(sharedBuffer);
           
+          // Initialize buffer to 0 (no interrupt signal)
+          interruptBuffer[0] = 0;
+          
           // Store the buffer for future use
           this.interruptBuffers.set(id, interruptBuffer);
           
-          // Send the buffer to the worker
+          // Send the buffer to the worker to set up pyodide.setInterruptBuffer()
           worker.postMessage({
             type: "SET_INTERRUPT_BUFFER",
             buffer: interruptBuffer
           });
           
-          // Wait a moment for the worker to set up the buffer
-          await new Promise(resolve => setTimeout(resolve, 100));
+          // Wait for the worker to confirm buffer setup
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              reject(new Error("Timeout waiting for interrupt buffer setup"));
+            }, 2000);
+            
+            const handler = (event: MessageEvent) => {
+              if (event.data?.type === "INTERRUPT_BUFFER_SET") {
+                worker.removeEventListener("message", handler);
+                clearTimeout(timeout);
+                resolve();
+              }
+            };
+            
+            worker.addEventListener("message", handler);
+          });
+          
+          console.log(`Interrupt buffer set up for kernel ${id}`);
           
         } catch (error) {
           console.warn(`Failed to create SharedArrayBuffer for kernel ${id}, falling back to message-based interrupt:`, error);
@@ -2448,21 +2449,28 @@ export class KernelManager extends EventEmitter {
         }
       }
       
-      // Reset buffer to 0 first
-      interruptBuffer[0] = 0;
+      // According to Pyodide docs: Set interrupt signal (2 = SIGINT)
+      console.log(`Setting interrupt signal for kernel ${id}...`);
+      interruptBuffer[0] = 2;
       
-      // Send interrupt message to worker
-      worker.postMessage({
-        type: "INTERRUPT_KERNEL"
-      });
+      // Wait for Pyodide to process the interrupt
+      // Pyodide will reset the buffer to 0 when it processes the interrupt
+      let attempts = 0;
+      const maxAttempts = 50; // Check for up to 5 seconds (50 * 100ms)
       
-      // Wait for a short time to see if the interrupt was processed
-      await new Promise(resolve => setTimeout(resolve, 200));
+      while (attempts < maxAttempts && interruptBuffer[0] !== 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
       
-      // Check if the interrupt was processed (buffer should still be 0 if processed, or 2 if not)
-      const wasProcessed = interruptBuffer[0] === 0;
-      
-      return true; // Return true even if we're not sure, as the interrupt was attempted
+      if (interruptBuffer[0] === 0) {
+        console.log(`Interrupt processed successfully for kernel ${id} after ${attempts * 100}ms`);
+        return true;
+      } else {
+        console.warn(`Interrupt signal not processed for kernel ${id} after ${maxAttempts * 100}ms`);
+        // Still return true as we set the signal - the interrupt may be processed later
+        return true;
+      }
       
     } catch (error) {
       console.error(`Error interrupting worker kernel ${id}:`, error);
@@ -2744,5 +2752,53 @@ export class KernelManager extends EventEmitter {
     }
     
     return results;
+  }
+
+  /**
+   * Set up interrupt buffer for a worker kernel during creation
+   * @param id Kernel ID
+   * @param worker Worker instance
+   * @private
+   */
+  private async setupWorkerInterruptBuffer(id: string, worker: Worker): Promise<void> {
+    try {
+      // Create SharedArrayBuffer for interrupt control
+      const sharedBuffer = new SharedArrayBuffer(1);
+      const interruptBuffer = new Uint8Array(sharedBuffer);
+      
+      // Initialize buffer to 0 (no interrupt signal)
+      interruptBuffer[0] = 0;
+      
+      // Store the buffer for future use
+      this.interruptBuffers.set(id, interruptBuffer);
+      
+      // Send the buffer to the worker to set up pyodide.setInterruptBuffer()
+      worker.postMessage({
+        type: "SET_INTERRUPT_BUFFER",
+        buffer: interruptBuffer
+      });
+      
+      // Wait for the worker to confirm buffer setup
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Timeout waiting for interrupt buffer setup"));
+        }, 5000);
+        
+        const handler = (event: MessageEvent) => {
+          if (event.data?.type === "INTERRUPT_BUFFER_SET") {
+            worker.removeEventListener("message", handler);
+            clearTimeout(timeout);
+            console.log(`✅ Interrupt buffer automatically set up for kernel ${id}`);
+            resolve();
+          }
+        };
+        
+        worker.addEventListener("message", handler);
+      });
+      
+    } catch (error) {
+      console.warn(`Failed to set up interrupt buffer for kernel ${id}:`, error);
+      // Don't throw - kernel can still work without interrupt buffer
+    }
   }
 }
