@@ -30,11 +30,26 @@ jobs:
         with:
           fetch-depth: 2
           
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          
       - name: Setup Deno
         uses: denoland/setup-deno@v1
         with:
           deno-version: v2.x
           
+      - name: Install Python build dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install hatch build wheel
+        
+      - name: Generate Python wheels
+        run: |
+          cd kernel
+          python3 generate-wheels-js.py
+        
       - name: Cache dependencies
         run: deno cache --lock=deno.lock mod.ts
           
