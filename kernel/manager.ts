@@ -1507,61 +1507,64 @@ export class KernelManager extends EventEmitter {
         }
       }
       
-      // For worker mode, we need to implement streaming via events
+      // For worker mode, we need to implement streaming via events with proper isolation
       try {
         // Event-based approach for worker kernels or main thread kernels without executeStream
         const streamQueue: any[] = [];
         let executionComplete = false;
         let executionResult: { success: boolean, result?: any, error?: Error } = { success: true };
         
+        // Store handler references for guaranteed cleanup
+        const eventHandlers = new Map<string, (event: { kernelId: string, data: any }) => void>();
+        
+        // Helper function to clean up all event handlers
+        const cleanupHandlers = () => {
+          for (const [eventType, handler] of eventHandlers.entries()) {
+            super.off(eventType as any, handler);
+          }
+          eventHandlers.clear();
+        };
+        
+        // Create execution-specific event handlers that include executionId check
+        const createHandler = (eventType: string) => {
+          const handler = (event: { kernelId: string, data: any }) => {
+            // Only process events for this specific kernel and while this execution is active
+            if (event.kernelId === kernelId && !executionComplete) {
+              streamQueue.push({
+                type: eventType,
+                data: event.data,
+                executionId // Include execution ID for debugging
+              });
+              
+              // Events also count as activity
+              this.updateKernelActivity(kernelId);
+            }
+          };
+          eventHandlers.set(eventType, handler);
+          return handler;
+        };
+        
+        // Create and register all event handlers
+        const handleStreamEvent = createHandler('stream');
+        const handleDisplayEvent = createHandler('display_data');
+        const handleUpdateDisplayEvent = createHandler('update_display_data');
+        const handleResultEvent = createHandler('execute_result');
+        const handleErrorEvent = createHandler('execute_error');
+        
+        // Register handlers
+        super.on(KernelEvents.STREAM, handleStreamEvent);
+        super.on(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
+        super.on(KernelEvents.UPDATE_DISPLAY_DATA, handleUpdateDisplayEvent);
+        super.on(KernelEvents.EXECUTE_RESULT, handleResultEvent);
+        super.on(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+        
         // Create a promise that will resolve when execution is complete
-        const executionPromise = new Promise<{ success: boolean, result?: any, error?: Error }>((resolve) => {
-          // Create event handlers
-          const handleStreamEvent = (event: { kernelId: string, data: any }) => {
-            if (event.kernelId === kernelId) {
-              streamQueue.push({
-                type: 'stream',
-                data: event.data
-              });
-              
-              // Stream events also count as activity
-              this.updateKernelActivity(kernelId);
-            }
-          };
-          
-          const handleDisplayEvent = (event: { kernelId: string, data: any }) => {
-            if (event.kernelId === kernelId) {
-              streamQueue.push({
-                type: 'display_data',
-                data: event.data
-              });
-              
-              // Display events also count as activity
-              this.updateKernelActivity(kernelId);
-            }
-          };
-          
-          const handleResultEvent = (event: { kernelId: string, data: any }) => {
-            if (event.kernelId === kernelId) {
-              streamQueue.push({
-                type: 'execute_result',
-                data: event.data
-              });
-              
-              // Result events indicate activity
-              this.updateKernelActivity(kernelId);
-            }
-          };
-          
-          const handleErrorEvent = (event: { kernelId: string, data: any }) => {
-            if (event.kernelId === kernelId) {
-              streamQueue.push({
-                type: 'error',
-                data: event.data
-              });
-              
-              // Error events also count as activity
-              this.updateKernelActivity(kernelId);
+        const executionPromise = new Promise<{ success: boolean, result?: any, error?: Error }>((resolve, reject) => {
+          // Set up a handler for execution errors specifically
+          const handleExecutionError = (event: { kernelId: string, data: any }) => {
+            if (event.kernelId === kernelId && !executionComplete) {
+              // Mark execution as complete to stop processing more events
+              executionComplete = true;
               
               // Store the error for the final result
               executionResult = {
@@ -1569,173 +1572,190 @@ export class KernelManager extends EventEmitter {
                 error: new Error(`${event.data.ename}: ${event.data.evalue}`),
                 result: event.data
               };
+              
+              // Update activity
+              this.updateKernelActivity(kernelId);
+              
+              resolve(executionResult);
             }
           };
           
-          // Register all the event handlers
-          super.on(KernelEvents.STREAM, handleStreamEvent);
-          super.on(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
-          super.on(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
-          super.on(KernelEvents.EXECUTE_RESULT, handleResultEvent);
-          super.on(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
+          // Add error handler to our cleanup list
+          eventHandlers.set('execute_error_completion', handleExecutionError);
+          super.on(KernelEvents.EXECUTE_ERROR, handleExecutionError);
+          
+          // Set up timeout to prevent hanging executions
+          const timeoutMs = 300000; // 5 minutes
+          const timeoutId = setTimeout(() => {
+            if (!executionComplete) {
+              console.warn(`Execution ${executionId} timed out after ${timeoutMs}ms`);
+              executionComplete = true;
+              
+              const timeoutError = {
+                success: false,
+                error: new Error(`Execution timed out after ${timeoutMs}ms`)
+              };
+              
+              resolve(timeoutError);
+            }
+          }, timeoutMs);
           
           // Execute the code
-          // We need to wait for the execution to complete before returning the result
+          // We know the execute method is available directly on the kernel object
           try {
-            // We know the execute method is available directly on the kernel object
-            // because we mapped it in the IKernelInstance creation
             const executePromise = instance.kernel.execute(code, parent);
             
             executePromise.then((result) => {
-              // Check if the execution result indicates an error (for Python kernels)
-              if (result.success && result.result && result.result.status === "error") {
-                // Emit an error event to trigger the handleErrorEvent
-                const errorData = {
-                  status: result.result.status,
-                  ename: result.result.ename,
-                  evalue: result.result.evalue,
-                  traceback: result.result.traceback
-                };
+              // Clear timeout on completion
+              clearTimeout(timeoutId);
+              
+              // Only process if execution hasn't been marked complete already
+              if (!executionComplete) {
+                // Check if the execution result indicates an error (for Python kernels)
+                if (result.success && result.result && result.result.status === "error") {
+                  // Handle as error
+                  const errorData = {
+                    status: result.result.status,
+                    ename: result.result.ename,
+                    evalue: result.result.evalue,
+                    traceback: result.result.traceback
+                  };
+                  
+                  // Push error to stream queue directly 
+                  streamQueue.push({
+                    type: 'error',
+                    data: errorData,
+                    executionId
+                  });
+                  
+                  // Update execution result to reflect the error
+                  executionResult = {
+                    success: false,
+                    error: new Error(`${result.result.ename}: ${result.result.evalue}`),
+                    result: result.result
+                  };
+                } else {
+                  executionResult = result;
+                }
                 
-                // Push error to stream queue directly 
-                streamQueue.push({
-                  type: 'error',
-                  data: errorData
-                });
+                executionComplete = true;
                 
-                // Update execution result to reflect the error
-                executionResult = {
-                  success: false,
-                  error: new Error(`${result.result.ename}: ${result.result.evalue}`),
-                  result: result.result
-                };
-              } else {
-                executionResult = result;
+                // Update activity when execution completes
+                this.updateKernelActivity(kernelId);
+                
+                resolve(executionResult);
               }
-              
-              executionComplete = true;
-              
-              // Update activity when execution completes
-              this.updateKernelActivity(kernelId);
-              
-              // Cleanup event handlers
-              super.off(KernelEvents.STREAM, handleStreamEvent);
-              super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
-              super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
-              super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
-              super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
-              
-              resolve(executionResult);
             }).catch((error) => {
-              console.error(`Error in execute for kernel ${kernelId}:`, error);
+              // Clear timeout on error
+              clearTimeout(timeoutId);
               
-              // Check if this is a KeyboardInterrupt and handle it specially
-              let errorResult;
-              if (this.isKeyboardInterrupt(error)) {
-                console.log(`KeyboardInterrupt caught in executeStream for kernel ${kernelId}`);
-                errorResult = this.createKeyboardInterruptResult();
+              // Only process if execution hasn't been marked complete already
+              if (!executionComplete) {
+                console.error(`Error in execute for kernel ${kernelId}:`, error);
                 
-                // Also push to stream queue for immediate feedback
-                streamQueue.push({
-                  type: 'error',
-                  data: errorResult.result
-                });
-              } else {
-                // Handle other errors normally
-                errorResult = {
-                  success: false,
-                  error: error instanceof Error ? error : new Error(String(error))
-                };
+                // Check if this is a KeyboardInterrupt and handle it specially
+                let errorResult;
+                if (this.isKeyboardInterrupt(error)) {
+                  console.log(`KeyboardInterrupt caught in executeStream for kernel ${kernelId}`);
+                  errorResult = this.createKeyboardInterruptResult();
+                  
+                  // Also push to stream queue for immediate feedback
+                  streamQueue.push({
+                    type: 'error',
+                    data: errorResult.result,
+                    executionId
+                  });
+                } else {
+                  // Handle other errors normally
+                  errorResult = {
+                    success: false,
+                    error: error instanceof Error ? error : new Error(String(error))
+                  };
+                }
+                
+                executionComplete = true;
+                executionResult = errorResult;
+                
+                // Update activity even on error
+                this.updateKernelActivity(kernelId);
+                
+                resolve(errorResult);
               }
+            });
+          } catch (error) {
+            // Clear timeout on direct error
+            clearTimeout(timeoutId);
+            
+            // Only process if execution hasn't been marked complete already
+            if (!executionComplete) {
+              console.error(`Error calling execute for kernel ${kernelId}:`, error);
+              
+              // Simple error handling
+              const errorResult = {
+                success: false,
+                error: error instanceof Error ? error : new Error(String(error))
+              };
               
               executionComplete = true;
               executionResult = errorResult;
               
-              // Update activity even on error
+              // Update activity even on direct error
               this.updateKernelActivity(kernelId);
               
-              // Cleanup event handlers
-              super.off(KernelEvents.STREAM, handleStreamEvent);
-              super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
-              super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
-              super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
-              super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
-              
               resolve(errorResult);
-            });
-          } catch (error) {
-            console.error(`Error calling execute for kernel ${kernelId}:`, error);
-            
-            // Simple error handling
-            const errorResult = {
-              success: false,
-              error: error instanceof Error ? error : new Error(String(error))
-            };
-            
-            executionComplete = true;
-            executionResult = errorResult;
-            
-            // Update activity even on direct error
-            this.updateKernelActivity(kernelId);
-            
-            // Cleanup event handlers on direct error
-            super.off(KernelEvents.STREAM, handleStreamEvent);
-            super.off(KernelEvents.DISPLAY_DATA, handleDisplayEvent);
-            super.off(KernelEvents.UPDATE_DISPLAY_DATA, handleDisplayEvent);
-            super.off(KernelEvents.EXECUTE_RESULT, handleResultEvent);
-            super.off(KernelEvents.EXECUTE_ERROR, handleErrorEvent);
-            
-            resolve(errorResult);
+            }
           }
         });
         
-        // Setup timeout
-        const startTime = Date.now();
-        const timeout = 60000; // 60 second timeout
-        
-        // Monitor the stream queue and yield results
-        while ((!executionComplete || streamQueue.length > 0) && 
-               (Date.now() - startTime < timeout)) {
-          // If there are items in the queue, yield them
-          if (streamQueue.length > 0) {
-            const event = streamQueue.shift();
-            yield event;
-            continue;
+        // Use try/finally to guarantee cleanup
+        try {
+          // Setup timeout for the streaming loop
+          const startTime = Date.now();
+          const streamTimeout = 60000; // 60 second timeout for stream monitoring
+          
+          // Monitor the stream queue and yield results
+          while ((!executionComplete || streamQueue.length > 0) && 
+                 (Date.now() - startTime < streamTimeout)) {
+            // If there are items in the queue, yield them
+            if (streamQueue.length > 0) {
+              const event = streamQueue.shift();
+              yield event;
+              continue;
+            }
+            
+            // If no more events but execution is not complete, wait a little
+            if (!executionComplete) {
+              await new Promise(resolve => setTimeout(resolve, 10));
+            }
           }
           
-          // If no more events but execution is not complete, wait a little
-          if (!executionComplete) {
-            await new Promise(resolve => setTimeout(resolve, 10));
+          // Handle timeout
+          if (!executionComplete && Date.now() - startTime >= streamTimeout) {
+            console.warn(`Stream monitoring timed out for execution ${executionId}`);
+            return {
+              success: false,
+              error: new Error("Stream monitoring timed out")
+            };
           }
-        }
-        
-        // Handle timeout
-        if (!executionComplete && Date.now() - startTime >= timeout) {
+          
+          // Wait for the final result
+          const result = await executionPromise;
+          return result;
+          
+        } finally {
+          // ALWAYS clean up event handlers regardless of how execution ends
+          cleanupHandlers();
+          
           // Complete execution tracking
           this.completeExecution(kernelId, executionId);
-          
-          return {
-            success: false,
-            error: new Error("Execution timed out")
-          };
         }
-        
-        // Wait for the final result
-        const result = await executionPromise;
-
-        // Complete execution tracking
-        this.completeExecution(kernelId, executionId);
-        
-        return result;
       } catch (error) {
-        // Complete execution tracking
+        // Complete execution tracking on any outer error
         this.completeExecution(kernelId, executionId);
         
-        console.error(`Error in executeStream:`, error);
-        
-        // Simple error handling
+        console.error(`Unexpected error in executeStream:`, error);
         return {
-          success: false,
+          success: false, 
           error: error instanceof Error ? error : new Error(String(error))
         };
       }
