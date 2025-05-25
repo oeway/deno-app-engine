@@ -1,0 +1,191 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+          
+      - name: Verify Deno installation
+        run: deno --version
+        
+      - name: Cache Deno dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/deno
+            ~/.deno
+          key: ${{ runner.os }}-deno-${{ hashFiles('**/deno.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deno-
+            
+      - name: Install dependencies
+        run: deno cache --lock=deno.lock --lock-write mod.ts
+        
+      - name: Run tests
+        run: deno test --allow-all --coverage=coverage
+        
+      - name: Generate coverage report
+        run: deno coverage coverage --lcov --output=coverage.lcov
+        
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.lcov
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  build-and-publish:
+    name: Build and Publish Docker
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      contents: write
+      packages: write
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+          
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from deno.json
+        id: extract-version
+        run: |
+          if [ -f "deno.json" ]; then
+            VERSION=$(cat deno.json | jq -r '.version // empty')
+            if [ -n "$VERSION" ] && [ "$VERSION" != "null" ]; then
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+              echo "Found version: $VERSION"
+            else
+              echo "No version found in deno.json"
+              echo "version=" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "deno.json not found"
+            echo "version=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if version tag exists
+        id: check-version
+        run: |
+          if [ -n "${{ steps.extract-version.outputs.version }}" ]; then
+            # Fetch all tags
+            git fetch --tags
+            
+            # Check if this version tag already exists
+            if git tag --list | grep -q "^v${{ steps.extract-version.outputs.version }}$"; then
+              echo "Version tag v${{ steps.extract-version.outputs.version }} already exists"
+              echo "current-version=" >> $GITHUB_OUTPUT
+              echo "is-new-version=false" >> $GITHUB_OUTPUT
+            else
+              echo "New version detected: ${{ steps.extract-version.outputs.version }}"
+              echo "current-version=${{ steps.extract-version.outputs.version }}" >> $GITHUB_OUTPUT
+              echo "is-new-version=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "No version to check"
+            echo "current-version=" >> $GITHUB_OUTPUT
+            echo "is-new-version=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5.5.1
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image (version tag)
+        if: steps.check-version.outputs.current-version
+        uses: docker/build-push-action@v5.0.0
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.check-version.outputs.current-version }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Build and push Docker image (latest tag)
+        uses: docker/build-push-action@v5.0.0
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Create and push version tag
+        if: steps.check-version.outputs.is-new-version == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git tag "v${{ steps.check-version.outputs.current-version }}"
+          git push origin "v${{ steps.check-version.outputs.current-version }}"
+
+      - name: Create GitHub Release
+        if: steps.check-version.outputs.is-new-version == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.check-version.outputs.current-version }}
+          release_name: Release v${{ steps.check-version.outputs.current-version }}
+          body: |
+            ## What's Changed
+            
+            Docker images available:
+            - `ghcr.io/${{ github.repository }}:${{ steps.check-version.outputs.current-version }}`
+            - `ghcr.io/${{ github.repository }}:latest`
+            
+            ## Installation
+            
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ steps.check-version.outputs.current-version }}
+            ```
+            
+            Or with Deno:
+            
+            ```bash
+            deno install -A https://deno.land/x/deno_app_engine@${{ steps.check-version.outputs.current-version }}/mod.ts
+            ```
+          draft: false
+          prerelease: false 

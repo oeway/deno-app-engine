@@ -1,6 +1,34 @@
 # Deno App Engine
 
+[![CI/CD](https://github.com/oeway/deno-app-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/oeway/deno-app-engine/actions/workflows/ci.yml)
+[![Docker Image](https://ghcr-badge.egpl.dev/oeway/deno-app-engine/latest_tag?color=%2344cc11&ignore=latest&label=docker&trim=)](https://github.com/oeway/deno-app-engine/pkgs/container/deno-app-engine)
+[![Docker Size](https://ghcr-badge.egpl.dev/oeway/deno-app-engine/size?color=%2344cc11&tag=latest&label=docker%20size&trim=)](https://github.com/oeway/deno-app-engine/pkgs/container/deno-app-engine)
+
 A Deno-based app engine that provides Jupyter kernel-like functionality with Pyodide integration. This project enables running Python code in both main thread and worker contexts, with filesystem mounting capabilities and secure permission management.
+
+## 🚀 Quick Start
+
+### Using Docker (Recommended)
+
+```bash
+# Pull and run the latest image
+docker run -p 8000:8000 ghcr.io/oeway/deno-app-engine:latest
+
+# Or with environment configuration
+docker run -p 8000:8000 \
+  -e HYPHA_SERVER_URL=https://hypha.aicell.io \
+  -e HYPHA_WORKSPACE=your-workspace \
+  ghcr.io/oeway/deno-app-engine:latest
+```
+
+### Using Deno
+
+```bash
+# Clone and run locally
+git clone https://github.com/oeway/deno-app-engine.git
+cd deno-app-engine
+./start-server.sh
+```
 
 ## Features
 
