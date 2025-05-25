@@ -21,17 +21,11 @@ RUN mkdir -p /home/deno/.cache/pyodide
 # Make start script executable
 RUN chmod +x scripts/start-hypha-service.sh
 
-# Pre-cache dependencies as root to avoid permission issues with node_modules
+# Pre-cache dependencies as root (nodeModulesDir: "none" means no node_modules created)
 RUN deno cache --lock=deno.lock scripts/hypha-service.ts
 
-# Set permissions for deno user (including node_modules if it exists)
+# Set ownership for deno user
 RUN chown -R deno:deno /app /home/deno/.cache
-
-# Ensure node_modules/.bin files are executable by deno user
-RUN if [ -d "/app/node_modules/.bin" ]; then \
-    chmod -R 755 /app/node_modules/.bin && \
-    chown -R deno:deno /app/node_modules; \
-    fi
 
 # Switch to deno user
 USER deno
@@ -39,5 +33,5 @@ USER deno
 # Expose the Hypha service port
 EXPOSE 8000
 
-# Run the service directly without tini
+# Run the service
 CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "scripts/hypha-service.ts"] 
