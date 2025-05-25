@@ -46,7 +46,7 @@ jobs:
         run: deno coverage coverage --lcov --output=coverage.lcov
         
       - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           file: ./coverage.lcov
           flags: unittests
