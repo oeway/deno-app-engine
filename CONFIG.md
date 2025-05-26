@@ -98,6 +98,9 @@ Hypha workspace name.
 ### HYPHA_TOKEN
 Hypha authentication token.
 
+### HYPHA_CLIENT_ID
+Hypha client ID.
+
 ## Example Configurations
 
 ### Development Environment

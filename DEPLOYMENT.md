@@ -71,6 +71,7 @@ docker run -p 8000:8000 \
   -e HYPHA_SERVER_URL="https://hypha.aicell.io" \
   -e HYPHA_WORKSPACE="your-workspace" \
   -e HYPHA_TOKEN="your-token" \
+  -e HYPHA_CLIENT_ID="your-client-id" \
   ghcr.io/oeway/deno-app-engine:latest
 ```
 

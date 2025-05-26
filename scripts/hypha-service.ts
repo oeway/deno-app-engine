@@ -209,7 +209,8 @@ async function startHyphaService() {
     // read the following from environment variables and use default
     "server_url": Deno.env.get("HYPHA_SERVER_URL") || "https://hypha.aicell.io",
     "workspace": Deno.env.get("HYPHA_WORKSPACE") || undefined,
-    "token": token
+    "token": token,
+    "client_id": Deno.env.get("HYPHA_CLIENT_ID") || undefined,
   });
   
   console.log("Connected to hypha server, registering service...");
