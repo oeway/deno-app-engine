@@ -2825,7 +2825,39 @@ export class KernelManager extends EventEmitter {
    */
   private async setupWorkerInterruptBuffer(id: string, worker: Worker): Promise<void> {
     try {
-      // Create SharedArrayBuffer for interrupt control
+      // Get the kernel instance to check the language
+      const instance = this.kernels.get(id);
+      const isTypeScriptKernel = instance?.language === KernelLanguage.TYPESCRIPT;
+      
+      if (isTypeScriptKernel) {
+        // TypeScript kernels don't support interrupt buffers like Python/Pyodide
+        // But we still send the message to get acknowledgment and avoid timeout
+        worker.postMessage({
+          type: "SET_INTERRUPT_BUFFER",
+          buffer: null // No actual buffer for TypeScript
+        });
+        
+        // Wait for acknowledgment
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("Timeout waiting for interrupt buffer setup"));
+          }, 5000);
+          
+          const handler = (event: MessageEvent) => {
+            if (event.data?.type === "INTERRUPT_BUFFER_SET") {
+              worker.removeEventListener("message", handler);
+              clearTimeout(timeout);
+              resolve();
+            }
+          };
+          
+          worker.addEventListener("message", handler);
+        });
+        
+        return; // No actual buffer to store for TypeScript kernels
+      }
+      
+      // For Python kernels, create actual SharedArrayBuffer
       const sharedBuffer = new SharedArrayBuffer(1);
       const interruptBuffer = new Uint8Array(sharedBuffer);
       

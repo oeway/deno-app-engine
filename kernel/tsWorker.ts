@@ -524,6 +524,13 @@ self.addEventListener("message", (event) => {
     kernel.initialize(event.data.options).catch(error => {
       console.error("[TS_WORKER] Error initializing kernel:", error);
     });
+  } else if (event.data?.type === "SET_INTERRUPT_BUFFER") {
+    // TypeScript kernels don't support interrupt buffers like Python/Pyodide
+    // But we need to acknowledge the message to prevent timeout
+    console.log("[TS_WORKER] Interrupt buffer not supported for TypeScript kernels");
+    self.postMessage({
+      type: "INTERRUPT_BUFFER_SET"
+    });
   }
 });
 
