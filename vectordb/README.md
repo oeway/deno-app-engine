@@ -181,6 +181,155 @@ console.log(info.activityMonitoring);
 // }
 ```
 
+# Provider Registry Configuration
+
+The VectorDBManager now supports initializing embedding providers through a configuration object passed to the constructor. This allows you to set up multiple embedding providers at once and reference them by name when creating indices.
+
+## Features
+
+- **Bulk Provider Registration**: Register multiple embedding providers at initialization
+- **Named Provider References**: Reference providers by name when creating indices
+- **Automatic Event Emission**: Provider addition events are automatically emitted during initialization
+- **Type Safety**: Full TypeScript support with proper interfaces
+
+## Interface
+
+```typescript
+export interface IProviderRegistryConfig {
+  [providerId: string]: IEmbeddingProvider;
+}
+
+export interface IVectorDBManagerOptions {
+  // ... existing options
+  providerRegistry?: IProviderRegistryConfig; // New option
+}
+```
+
+## Usage
+
+### Basic Example
+
+```typescript
+import { 
+  VectorDBManager, 
+  createGenericEmbeddingProvider,
+  IProviderRegistryConfig 
+} from "./manager.ts";
+
+// Create providers
+const provider1 = createGenericEmbeddingProvider(
+  "Provider 1",
+  384,
+  async (text: string) => {
+    // Your embedding logic here
+    return new Array(384).fill(0).map(() => Math.random());
+  }
+);
+
+const provider2 = createGenericEmbeddingProvider(
+  "Provider 2",
+  512,
+  async (text: string) => {
+    // Different embedding logic
+    return new Array(512).fill(0).map(() => Math.random());
+  }
+);
+
+// Configure registry
+const providerRegistry: IProviderRegistryConfig = {
+  "my-provider-1": provider1,
+  "my-provider-2": provider2
+};
+
+// Create manager with provider registry
+const manager = new VectorDBManager({
+  defaultEmbeddingProviderName: "my-provider-1", // Set default
+  providerRegistry: providerRegistry
+});
+```
+
+### Using Providers
+
+```typescript
+// Create index with default provider (my-provider-1)
+const indexId1 = await manager.createIndex({
+  namespace: "test"
+});
+
+// Create index with specific provider
+const indexId2 = await manager.createIndex({
+  namespace: "test",
+  embeddingProviderName: "my-provider-2"
+});
+
+// Add documents (embeddings generated using specified providers)
+await manager.addDocuments(indexId1, [
+  { id: "doc1", text: "Document using provider 1" }
+]);
+
+await manager.addDocuments(indexId2, [
+  { id: "doc2", text: "Document using provider 2" }
+]);
+```
+
+### Ollama Provider Example
+
+```typescript
+import { createOllamaEmbeddingProvider } from "./manager.ts";
+
+const ollamaProvider = createOllamaEmbeddingProvider(
+  "Ollama Embeddings",
+  "http://localhost:11434",
+  "nomic-embed-text",
+  768
+);
+
+const providerRegistry: IProviderRegistryConfig = {
+  "ollama-nomic": ollamaProvider,
+  "mock-provider": mockProvider
+};
+
+const manager = new VectorDBManager({
+  defaultEmbeddingProviderName: "ollama-nomic",
+  providerRegistry: providerRegistry
+});
+```
+
+## Benefits
+
+1. **Simplified Setup**: Configure all providers at once during initialization
+2. **Consistent Naming**: Use meaningful names for providers across your application
+3. **Default Provider**: Set a default provider that will be used when no specific provider is specified
+4. **Event Tracking**: All provider additions are tracked and emit events for monitoring
+5. **Runtime Management**: Still supports adding/removing providers at runtime using existing methods
+
+## Migration
+
+Existing code continues to work unchanged. The provider registry configuration is optional and additive to existing functionality.
+
+```typescript
+// Old way (still works)
+const manager = new VectorDBManager();
+manager.addEmbeddingProvider("my-provider", provider);
+
+// New way (additional option)
+const manager = new VectorDBManager({
+  providerRegistry: {
+    "my-provider": provider
+  }
+});
+```
+
+## Events
+
+When providers are initialized from the registry configuration, `PROVIDER_ADDED` events are emitted for each provider, just like when using `addEmbeddingProvider()` manually.
+
+```typescript
+manager.on('provider_added', (event) => {
+  console.log(`Provider added: ${event.data.name} (${event.data.type})`);
+});
+``` 
+
 ## File Structure
 
 When indices are offloaded, they create files in the offload directory:

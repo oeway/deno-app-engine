@@ -102,6 +102,7 @@ export interface IVectorDBManagerOptions {
   offloadDirectory?: string; // Directory to store offloaded indices
   defaultInactivityTimeout?: number; // Default inactivity timeout for new indices
   enableActivityMonitoring?: boolean; // Global flag to enable activity monitoring
+  providerRegistry?: IProviderRegistryConfig; // Initial provider registry configuration
 }
 
 // Interface for offloaded index metadata
@@ -124,6 +125,11 @@ export interface IProviderRegistryEntry {
   provider: IEmbeddingProvider;
   created: Date;
   lastUsed?: Date;
+}
+
+// Interface for provider registry configuration
+export interface IProviderRegistryConfig {
+  [providerId: string]: IEmbeddingProvider;
 }
 
 // Helper functions to create embedding providers
@@ -215,10 +221,54 @@ export class VectorDBManager extends EventEmitter {
     this.defaultInactivityTimeout = options.defaultInactivityTimeout || 1000 * 60 * 30; // 30 minutes default
     this.enableActivityMonitoring = options.enableActivityMonitoring !== false; // Default true
     
+    // Initialize provider registry from config
+    this.initializeProviderRegistry(options.providerRegistry);
+    
     // Ensure offload directory exists
     this.ensureOffloadDirectory();
   }
   
+  /**
+   * Initialize the provider registry from configuration
+   * @param config Provider registry configuration
+   * @private
+   */
+  private initializeProviderRegistry(config?: IProviderRegistryConfig): void {
+    if (!config) {
+      return;
+    }
+    
+    const now = new Date();
+    
+    for (const [providerId, provider] of Object.entries(config)) {
+      const entry: IProviderRegistryEntry = {
+        id: providerId,
+        provider,
+        created: now
+      };
+      
+      this.providerRegistry.set(providerId, entry);
+      
+      console.log(`📝 Initialized embedding provider: ${providerId} (${provider.type}: ${provider.name})`);
+      
+      // Emit provider added event
+      this.emit(VectorDBEvents.PROVIDER_ADDED, {
+        providerId,
+        data: { 
+          id: providerId, 
+          type: provider.type,
+          name: provider.name,
+          dimension: provider.dimension,
+          created: now
+        }
+      });
+    }
+    
+    if (Object.keys(config).length > 0) {
+      console.log(`✅ Initialized ${Object.keys(config).length} embedding provider(s) from configuration`);
+    }
+  }
+
   /**
    * Ensure the offload directory exists
    * @private
@@ -267,6 +317,9 @@ export class VectorDBManager extends EventEmitter {
       if (registryEntry) {
         provider = registryEntry.provider;
         registryEntry.lastUsed = new Date();
+      }
+      else{
+        throw new Error(`Embedding provider ${this.defaultEmbeddingProviderName} not found in registry`);
       }
     }
     
