@@ -2,7 +2,7 @@
 // Tests VectorDB functionality using Ollama as the embedding provider
 
 import { assertEquals, assertExists, assertRejects, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { VectorDBManager, VectorDBEvents, type IDocument, type IQueryOptions, type IEmbeddingProvider } from "../vectordb/mod.ts";
+import { VectorDBManager, VectorDBEvents, type IDocument, type IQueryOptions, createOllamaEmbeddingProvider } from "../vectordb/mod.ts";
 import { ensureDir, exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
 import { join } from "https://deno.land/std@0.208.0/path/mod.ts";
 
@@ -24,46 +24,17 @@ const TEST_CONFIG = {
   testTimeout: 60000 // 60 seconds for Ollama operations
 };
 
-/**
- * Ollama Embedding Provider implementation
- */
-class OllamaEmbeddingProvider implements IEmbeddingProvider {
-  private ollama: Ollama;
-  private model: string;
-  private dimension: number;
-
-  constructor(model: string = TEST_CONFIG.embeddingModel, host: string = TEST_CONFIG.ollamaHost) {
-    this.ollama = new Ollama({ host });
-    this.model = model;
-    // nomic-embed-text typically has 768 dimensions
-    this.dimension = model === "nomic-embed-text" ? 768 : 384;
-  }
-
-  async generateEmbedding(text: string): Promise<number[]> {
-    try {
-      const response = await this.ollama.embed({
-        model: this.model,
-        input: text
-      });
-      
-      if (!response.embeddings || response.embeddings.length === 0) {
-        throw new Error("No embeddings returned from Ollama");
-      }
-      
-      return response.embeddings[0];
-    } catch (error) {
-      console.error(`Ollama embedding error for model ${this.model}:`, error);
-      throw new Error(`Failed to generate embedding with Ollama: ${error}`);
-    }
-  }
-
-  getDimension(): number {
-    return this.dimension;
-  }
-
-  getName(): string {
-    return `Ollama-${this.model}`;
-  }
+// Helper function to create Ollama provider for testing
+function createTestOllamaProvider(model: string = TEST_CONFIG.embeddingModel, host: string = TEST_CONFIG.ollamaHost) {
+  // nomic-embed-text typically has 768 dimensions
+  const dimension = model === "nomic-embed-text" ? 768 : 384;
+  
+  return createOllamaEmbeddingProvider(
+    `Ollama-${model}`,
+    host,
+    model,
+    dimension
+  );
 }
 
 // Helper function to check if Ollama is available
@@ -168,21 +139,24 @@ Deno.test({
       return;
     }
 
-    const embeddingProvider = new OllamaEmbeddingProvider();
+    const embeddingProvider = createTestOllamaProvider();
     const manager = new VectorDBManager({
-      defaultEmbeddingProvider: embeddingProvider,
       maxInstances: 5,
       offloadDirectory: TEST_CONFIG.offloadDirectory,
       defaultInactivityTimeout: 300000, // 5 minutes to prevent auto-offload during test
       enableActivityMonitoring: false // Disable for testing
     });
 
+    // Add the Ollama provider to the registry
+    manager.addEmbeddingProvider("ollama-test", embeddingProvider);
+
     let indexId: string;
 
     await t.step("should create index with Ollama provider", async () => {
       indexId = await manager.createIndex({
         id: "ollama-test-index",
-        namespace: "ollama-test"
+        namespace: "ollama-test",
+        embeddingProviderName: "ollama-test"
       });
       
       assertExists(indexId);
@@ -203,7 +177,7 @@ Deno.test({
       const instance = manager.getInstance(indexId);
       assertExists(instance);
       assertEquals(instance.documentCount, 3);
-      assertEquals(instance.embeddingDimension, embeddingProvider.getDimension());
+      assertEquals(instance.embeddingDimension, embeddingProvider.dimension);
       
       console.log(`✅ Added ${documents.length} documents with ${instance.embeddingDimension}-dimensional embeddings`);
     });
@@ -282,7 +256,7 @@ Deno.test({
     let indexId: string;
 
     await t.step("should create index with instance-specific Ollama provider", async () => {
-      const embeddingProvider = new OllamaEmbeddingProvider();
+      const embeddingProvider = createTestOllamaProvider();
       
       indexId = await manager.createIndex({
         id: "instance-ollama-test",
@@ -296,7 +270,8 @@ Deno.test({
       const instance = manager.getInstance(indexId);
       assertExists(instance);
       assertExists(instance.options.embeddingProvider);
-      assertEquals(instance.options.embeddingProvider.getName(), embeddingProvider.getName());
+      const provider = instance.options.embeddingProvider;
+      assertEquals(provider.name, embeddingProvider.name);
     });
 
     await t.step("should use instance-specific provider for operations", async () => {
@@ -325,15 +300,22 @@ Deno.test({
   name: "VectorDB - Ollama Integration - Error Handling",
   async fn(t) {
     await t.step("should handle invalid Ollama host gracefully", async () => {
-      const invalidProvider = new OllamaEmbeddingProvider(TEST_CONFIG.embeddingModel, "http://invalid-host:11434");
+      const invalidProvider = createOllamaEmbeddingProvider(
+        "Invalid Ollama",
+        "http://invalid-host:11434",
+        TEST_CONFIG.embeddingModel,
+        768
+      );
       
       const manager = new VectorDBManager({
-        defaultEmbeddingProvider: invalidProvider,
         maxInstances: 5
       });
 
+      manager.addEmbeddingProvider("invalid-ollama", invalidProvider);
+
       const indexId = await manager.createIndex({
-        id: "error-test"
+        id: "error-test",
+        embeddingProviderName: "invalid-ollama"
       });
 
       const documents = [{ id: "test-doc", text: "test content" }];
@@ -354,15 +336,22 @@ Deno.test({
         return;
       }
 
-      const invalidProvider = new OllamaEmbeddingProvider("non-existent-model");
+      const invalidProvider = createOllamaEmbeddingProvider(
+        "Invalid Model",
+        TEST_CONFIG.ollamaHost,
+        "non-existent-model",
+        768
+      );
       
       const manager = new VectorDBManager({
-        defaultEmbeddingProvider: invalidProvider,
         maxInstances: 5
       });
 
+      manager.addEmbeddingProvider("invalid-model", invalidProvider);
+
       const indexId = await manager.createIndex({
-        id: "invalid-model-test"
+        id: "invalid-model-test",
+        embeddingProviderName: "invalid-model"
       });
 
       const documents = [{ id: "test-doc", text: "test content" }];
@@ -396,16 +385,18 @@ Deno.test({
       return;
     }
 
-    const embeddingProvider = new OllamaEmbeddingProvider();
+    const embeddingProvider = createTestOllamaProvider();
     const manager = new VectorDBManager({
-      defaultEmbeddingProvider: embeddingProvider,
       maxInstances: 5
     });
+
+    manager.addEmbeddingProvider("ollama-perf", embeddingProvider);
 
     await t.step("should handle batch document processing efficiently", async () => {
       const indexId = await manager.createIndex({
         id: "performance-test",
-        namespace: "perf"
+        namespace: "perf",
+        embeddingProviderName: "ollama-perf"
       });
 
       const documents = generateTestDocuments(10, "perf");

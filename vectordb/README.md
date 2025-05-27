@@ -32,7 +32,7 @@ VECTORDB_ACTIVITY_MONITORING="true"
 ```typescript
 const manager = new VectorDBManager({
   // Standard options
-  defaultEmbeddingModel: "mixedbread-ai/mxbai-embed-xsmall-v1",
+  defaultEmbeddingModel: "mock-model", // or use provider registry
   maxInstances: 50,
   allowedNamespaces: ["workspace1", "workspace2"],
   
@@ -139,7 +139,7 @@ manager.on(VectorDBEvents.INDEX_RESUMED, (event) => {
 // Create index with custom timeout
 const result = await hyphaService.createVectorIndex({
   id: "my-index",
-  embeddingModel: "mixedbread-ai/mxbai-embed-xsmall-v1",
+  embeddingProviderName: "ollama-nomic-embed-text", // Use provider from registry
   inactivityTimeout: 3600000, // 1 hour
   enableActivityMonitoring: true
 });
@@ -202,7 +202,7 @@ vectordb_offload/
   "offloadedAt": "2024-01-15T10:30:00.000Z",
   "options": {
     "namespace": "workspace1",
-    "embeddingModel": "mixedbread-ai/mxbai-embed-xsmall-v1",
+    "embeddingProviderName": "ollama-nomic-embed-text",
     "enableActivityMonitoring": true,
     "inactivityTimeout": 1800000
   },

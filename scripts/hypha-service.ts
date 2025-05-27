@@ -1,7 +1,7 @@
 import { hyphaWebsocketClient } from "npm:hypha-rpc";
 import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
-import { VectorDBManager, VectorDBEvents, type IVectorDBManagerOptions, type IDocument, type IQueryOptions } from "../vectordb/mod.ts";
+import { VectorDBManager, VectorDBEvents, type IVectorDBManagerOptions, type IDocument, type IQueryOptions, createOllamaEmbeddingProvider } from "../vectordb/mod.ts";
 
 // Add type declaration for global variable
 declare global {
@@ -224,7 +224,7 @@ async function startHyphaService() {
   
   // Create a global vector database manager instance
   const vectorDBManager = new VectorDBManager({
-    defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mixedbread-ai/mxbai-embed-xsmall-v1",
+    defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mock-model", // Use mock model as default
     maxInstances: parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES") || "20"),
     allowedNamespaces: undefined, // Allow all namespaces for now
     offloadDirectory: vectorDBOffloadDirectory,
@@ -232,7 +232,60 @@ async function startHyphaService() {
     enableActivityMonitoring: vectorDBActivityMonitoring
   });
   
+  // Setup default Ollama providers if available
+  const defaultProviders = [
+    {
+      name: "ollama-nomic-embed-text",
+      model: "nomic-embed-text",
+      dimension: 768,
+      description: "Ollama nomic-embed-text model (768D)"
+    },
+    {
+      name: "ollama-all-minilm",
+      model: "all-minilm",
+      dimension: 384,
+      description: "Ollama all-minilm model (384D)"
+    },
+    {
+      name: "ollama-mxbai-embed-large",
+      model: "mxbai-embed-large",
+      dimension: 1024,
+      description: "Ollama mxbai-embed-large model (1024D)"
+    }
+  ];
+
+  const ollamaHost = Deno.env.get("OLLAMA_HOST") || "http://localhost:11434";
+  let providersAdded = 0;
+
+  for (const providerConfig of defaultProviders) {
+    try {
+      const provider = createOllamaEmbeddingProvider(
+        providerConfig.name,
+        ollamaHost,
+        providerConfig.model,
+        providerConfig.dimension
+      );
+      
+      const success = vectorDBManager.addEmbeddingProvider(providerConfig.name, provider);
+      if (success) {
+        console.log(`✅ Added Ollama provider: ${providerConfig.name}`);
+        providersAdded++;
+      } else {
+        console.log(`⚠️ Provider ${providerConfig.name} already exists`);
+      }
+    } catch (error) {
+      console.log(`⚠️ Failed to add Ollama provider ${providerConfig.name}:`, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (providersAdded === 0) {
+    console.log("⚠️ No Ollama providers were added (Ollama may not be available)");
+  } else {
+    console.log(`✅ Successfully added ${providersAdded} Ollama providers`);
+  }
+
   console.log("Hypha Service VectorDB Manager Configuration:");
+  console.log(`- Default embedding model: ${Deno.env.get("EMBEDDING_MODEL") || "mock-model"}`);
   console.log(`- Offload directory: ${vectorDBOffloadDirectory}`);
   console.log(`- Default inactivity timeout: ${vectorDBDefaultTimeout}ms (${Math.round(vectorDBDefaultTimeout / 60000)} minutes)`);
   console.log(`- Activity monitoring enabled: ${vectorDBActivityMonitoring}`);
@@ -643,7 +696,8 @@ async function startHyphaService() {
     
     async createVectorIndex(options: {
       id?: string, 
-      embeddingModel?: string, 
+      embeddingModel?: string,
+      embeddingProviderName?: string,
       maxDocuments?: number,
       inactivityTimeout?: number,
       enableActivityMonitoring?: boolean
@@ -655,6 +709,7 @@ async function startHyphaService() {
           id: options.id || crypto.randomUUID(),
           namespace: context.ws,
           embeddingModel: options.embeddingModel,
+          embeddingProviderName: options.embeddingProviderName,
           maxDocuments: options.maxDocuments,
           inactivityTimeout: options.inactivityTimeout,
           enableActivityMonitoring: options.enableActivityMonitoring
@@ -974,6 +1029,250 @@ async function startHyphaService() {
         success: true, 
         message: "Offloaded vector index deleted successfully",
         timestamp: new Date().toISOString()
+      };
+    },
+
+    // ===== EMBEDDING PROVIDER MANAGEMENT METHODS =====
+
+    listEmbeddingProviders(context: {user: any, ws: string}) {
+      console.log(`Listing embedding providers for workspace: ${context.ws}`);
+      
+      const providers = vectorDBManager.listEmbeddingProviders();
+      const stats = vectorDBManager.getEmbeddingProviderStats();
+      
+      return {
+        providers: providers.map(entry => ({
+          id: entry.id,
+          name: entry.provider.name,
+          type: entry.provider.type,
+          dimension: entry.provider.dimension,
+          created: entry.created.toISOString(),
+          lastUsed: entry.lastUsed?.toISOString()
+        })),
+        stats: {
+          totalProviders: stats.totalProviders,
+          providersByType: stats.providersByType,
+          providersInUse: stats.providersInUse
+        }
+      };
+    },
+
+    getEmbeddingProvider({providerId}: {providerId: string}, context: {user: any, ws: string}) {
+      console.log(`Getting embedding provider details: ${providerId} for workspace: ${context.ws}`);
+      
+      const providerEntry = vectorDBManager.getEmbeddingProvider(providerId);
+      if (!providerEntry) {
+        throw new Error(`Embedding provider ${providerId} not found`);
+      }
+
+      // Count instances using this provider in the user's workspace
+      const instances = vectorDBManager.listInstances(context.ws);
+      const instancesUsingProvider = instances.filter(instance => {
+        const instanceObj = vectorDBManager.getInstance(instance.id);
+        return instanceObj?.options.embeddingProviderName === providerId;
+      });
+
+      return {
+        id: providerEntry.id,
+        name: providerEntry.provider.name,
+        type: providerEntry.provider.type,
+        dimension: providerEntry.provider.dimension,
+        created: providerEntry.created.toISOString(),
+        lastUsed: providerEntry.lastUsed?.toISOString(),
+        instancesUsing: instancesUsingProvider.length,
+        instanceIds: instancesUsingProvider.map(i => i.id)
+      };
+    },
+
+    async addEmbeddingProvider({name, type, config}: {
+      name: string, 
+      type: string, 
+      config: {host?: string, model?: string, dimension?: number}
+    }, context: {user: any, ws: string}) {
+      console.log(`Adding embedding provider: ${name} (${type}) for workspace: ${context.ws}`);
+      
+      if (!name || !type || !config) {
+        throw new Error("Name, type, and config are required");
+      }
+
+      if (type === "ollama") {
+        const { host, model, dimension } = config;
+        if (!host || !model || !dimension) {
+          throw new Error("Ollama provider requires host, model, and dimension");
+        }
+
+        try {
+          const provider = createOllamaEmbeddingProvider(name, host, model, dimension);
+          const success = vectorDBManager.addEmbeddingProvider(name, provider);
+
+          if (!success) {
+            throw new Error("Provider with this name already exists");
+          }
+
+          console.log(`✅ Added Ollama provider: ${name}`);
+          return {
+            success: true,
+            message: `Ollama provider ${name} added successfully`,
+            provider: {
+              name,
+              type: provider.type,
+              dimension: provider.dimension,
+              model,
+              host
+            },
+            timestamp: new Date().toISOString()
+          };
+        } catch (error) {
+          throw new Error(`Failed to create Ollama provider: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else {
+        throw new Error(`Unsupported provider type: ${type}`);
+      }
+    },
+
+    async removeEmbeddingProvider({providerId}: {providerId: string}, context: {user: any, ws: string}) {
+      console.log(`Removing embedding provider: ${providerId} for workspace: ${context.ws}`);
+      
+      const success = vectorDBManager.removeEmbeddingProvider(providerId);
+      
+      if (!success) {
+        throw new Error("Provider not found");
+      }
+      
+      console.log(`✅ Removed embedding provider: ${providerId}`);
+      return {
+        success: true,
+        message: `Provider ${providerId} removed successfully`,
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async updateEmbeddingProvider({providerId, type, config}: {
+      providerId: string,
+      type: string,
+      config: {host?: string, model?: string, dimension?: number}
+    }, context: {user: any, ws: string}) {
+      console.log(`Updating embedding provider: ${providerId} for workspace: ${context.ws}`);
+      
+      if (!type || !config) {
+        throw new Error("Type and config are required");
+      }
+
+      if (type === "ollama") {
+        const { host, model, dimension } = config;
+        if (!host || !model || !dimension) {
+          throw new Error("Ollama provider requires host, model, and dimension");
+        }
+
+        try {
+          const provider = createOllamaEmbeddingProvider(providerId, host, model, dimension);
+          const success = vectorDBManager.updateEmbeddingProvider(providerId, provider);
+
+          if (!success) {
+            throw new Error("Provider not found");
+          }
+
+          console.log(`✅ Updated Ollama provider: ${providerId}`);
+          return {
+            success: true,
+            message: `Provider ${providerId} updated successfully`,
+            provider: {
+              name: providerId,
+              type: provider.type,
+              dimension: provider.dimension,
+              model,
+              host
+            },
+            timestamp: new Date().toISOString()
+          };
+        } catch (error) {
+          throw new Error(`Failed to update Ollama provider: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else {
+        throw new Error(`Unsupported provider type: ${type}`);
+      }
+    },
+
+    async testEmbeddingProvider({providerId}: {providerId: string}, context: {user: any, ws: string}) {
+      console.log(`Testing embedding provider: ${providerId} for workspace: ${context.ws}`);
+      
+      const providerEntry = vectorDBManager.getEmbeddingProvider(providerId);
+      if (!providerEntry) {
+        throw new Error(`Embedding provider ${providerId} not found`);
+      }
+
+      try {
+        const testEmbedding = await providerEntry.provider.embed("test");
+        
+        console.log(`✅ Provider ${providerId} test successful`);
+        return {
+          available: true,
+          message: "Provider is working correctly",
+          provider: providerId,
+          dimension: providerEntry.provider.dimension,
+          testEmbeddingLength: testEmbedding.length,
+          timestamp: new Date().toISOString()
+        };
+      } catch (error) {
+        console.log(`❌ Provider ${providerId} test failed:`, error);
+        return {
+          available: false,
+          message: error instanceof Error ? error.message : String(error),
+          provider: providerId,
+          timestamp: new Date().toISOString()
+        };
+      }
+    },
+
+    async changeIndexEmbeddingProvider({indexId, providerId}: {indexId: string, providerId: string}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      console.log(`Changing embedding provider for index ${fullIndexId} to ${providerId}`);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+
+      // Change the provider
+      await vectorDBManager.changeIndexEmbeddingProvider(fullIndexId, providerId);
+      
+      console.log(`✅ Changed embedding provider for index ${fullIndexId} to ${providerId}`);
+      return {
+        success: true,
+        message: `Embedding provider changed to ${providerId}`,
+        indexId: fullIndexId,
+        providerId,
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    getEmbeddingProviderStats(context: {user: any, ws: string}) {
+      console.log(`Getting embedding provider statistics for workspace: ${context.ws}`);
+      
+      const stats = vectorDBManager.getEmbeddingProviderStats();
+      
+      // Filter usage stats to only show providers used in this workspace
+      const workspaceInstances = vectorDBManager.listInstances(context.ws);
+      const workspaceProviderUsage = stats.providerUsage.map(provider => {
+        const instancesInWorkspace = workspaceInstances.filter(instance => {
+          const instanceObj = vectorDBManager.getInstance(instance.id);
+          return instanceObj?.options.embeddingProviderName === provider.id;
+        }).length;
+
+        return {
+          ...provider,
+          instancesInWorkspace
+        };
+      });
+
+      return {
+        global: stats,
+        workspace: {
+          totalInstances: workspaceInstances.length,
+          providerUsage: workspaceProviderUsage
+        }
       };
     }
   });

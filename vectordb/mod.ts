@@ -10,7 +10,13 @@ export {
   type IQueryOptions,
   type IQueryResult,
   type IVectorDBManagerOptions,
-  type IEmbeddingProvider
+  type IEmbeddingProvider,
+  type IEmbeddingProviderBase,
+  type IGenericEmbeddingProvider,
+  type IOllamaEmbeddingProvider,
+  type IProviderRegistryEntry,
+  createGenericEmbeddingProvider,
+  createOllamaEmbeddingProvider
 } from "./manager.ts";
 
 // Re-export Voy for direct usage if needed

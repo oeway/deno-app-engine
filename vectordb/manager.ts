@@ -2,10 +2,10 @@
 // This file manages vector database instances in web workers
 
 
-import { EventEmitter } from 'node:events';
-import { pipeline } from "@huggingface/transformers";
+import { EventEmitter } from "https://deno.land/std@0.177.0/node/events.ts";
 import { ensureDir, exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
 import { join } from "https://deno.land/std@0.208.0/path/mod.ts";
+import { Ollama } from "npm:ollama";
 
 // Vector database events
 export enum VectorDBEvents {
@@ -16,15 +16,33 @@ export enum VectorDBEvents {
   DOCUMENT_ADDED = "document_added",
   DOCUMENT_REMOVED = "document_removed",
   QUERY_COMPLETED = "query_completed",
-  ERROR = "error"
+  ERROR = "error",
+  PROVIDER_ADDED = "provider_added",
+  PROVIDER_REMOVED = "provider_removed",
+  PROVIDER_UPDATED = "provider_updated"
 }
 
-// Interface for external embedding provider
-export interface IEmbeddingProvider {
-  generateEmbedding(text: string): Promise<number[]>;
-  getDimension(): number;
-  getName(): string;
+// Base interface for embedding providers
+export interface IEmbeddingProviderBase {
+  embed(text: string): Promise<number[]>;
+  dimension: number;
+  name: string;
 }
+
+// Generic embedding provider
+export interface IGenericEmbeddingProvider extends IEmbeddingProviderBase {
+  type: "generic";
+}
+
+// Ollama embedding provider
+export interface IOllamaEmbeddingProvider extends IEmbeddingProviderBase {
+  type: "ollama";
+  ollamaHost: string;
+  embeddingModel: string;
+}
+
+// Union type for all embedding providers
+export type IEmbeddingProvider = IGenericEmbeddingProvider | IOllamaEmbeddingProvider;
 
 // Interface for vector database instance
 export interface IVectorDBInstance {
@@ -43,7 +61,8 @@ export interface IVectorDBOptions {
   id?: string;
   namespace?: string;
   embeddingModel?: string;
-  embeddingProvider?: IEmbeddingProvider; // External embedding provider
+  embeddingProvider?: IEmbeddingProvider;
+  embeddingProviderName?: string; // Name of provider from registry
   maxDocuments?: number;
   persistData?: boolean;
   inactivityTimeout?: number; // Time in milliseconds after which an inactive index will be offloaded
@@ -76,7 +95,8 @@ export interface IQueryResult {
 // Interface for manager options
 export interface IVectorDBManagerOptions {
   defaultEmbeddingModel?: string;
-  defaultEmbeddingProvider?: IEmbeddingProvider; // Default external embedding provider
+  defaultEmbeddingProvider?: IEmbeddingProvider;
+  defaultEmbeddingProviderName?: string; // Name of default provider from registry
   maxInstances?: number;
   allowedNamespaces?: string[];
   offloadDirectory?: string; // Directory to store offloaded indices
@@ -98,17 +118,80 @@ interface IOffloadedIndexMetadata {
   format: "binary_v1"; // Format version for future compatibility
 }
 
+// Interface for provider registry entry
+export interface IProviderRegistryEntry {
+  id: string;
+  provider: IEmbeddingProvider;
+  created: Date;
+  lastUsed?: Date;
+}
+
+// Helper functions to create embedding providers
+export function createGenericEmbeddingProvider(
+  name: string,
+  dimension: number,
+  embedFunction: (text: string) => Promise<number[]>
+): IGenericEmbeddingProvider {
+  return {
+    type: "generic",
+    name,
+    dimension,
+    embed: embedFunction
+  };
+}
+
+export function createOllamaEmbeddingProvider(
+  name: string,
+  ollamaHost: string,
+  embeddingModel: string,
+  dimension: number
+): IOllamaEmbeddingProvider {
+  // Create Ollama client
+  const ollama = new Ollama({ host: ollamaHost });
+  
+  // Create embed function that uses Ollama
+  const embedFunction = async (text: string): Promise<number[]> => {
+    try {
+      const response = await ollama.embed({
+        model: embeddingModel,
+        input: text
+      });
+      
+      if (!response.embeddings || response.embeddings.length === 0) {
+        throw new Error("No embeddings returned from Ollama");
+      }
+      
+      return response.embeddings[0];
+    } catch (error) {
+      console.error(`Ollama embedding error for model ${embeddingModel}:`, error);
+      throw new Error(`Failed to generate embedding with Ollama: ${error}`);
+    }
+  };
+  
+  return {
+    type: "ollama",
+    name,
+    ollamaHost,
+    embeddingModel,
+    dimension,
+    embed: embedFunction
+  };
+}
+
 /**
  * VectorDBManager class manages multiple vector database instances 
  * running in web workers with activity monitoring and offloading
  */
 export class VectorDBManager extends EventEmitter {
   private instances: Map<string, IVectorDBInstance> = new Map();
-  private embeddingPipeline: any = null;
   private embeddingModel: string;
   private defaultEmbeddingProvider?: IEmbeddingProvider;
+  private defaultEmbeddingProviderName?: string;
   private maxInstances: number;
   private allowedNamespaces?: string[];
+  
+  // Provider registry
+  private providerRegistry: Map<string, IProviderRegistryEntry> = new Map();
   
   // Activity monitoring
   private lastActivityTime: Map<string, number> = new Map();
@@ -121,8 +204,9 @@ export class VectorDBManager extends EventEmitter {
     super();
     super.setMaxListeners(100);
     
-    this.embeddingModel = options.defaultEmbeddingModel || "mixedbread-ai/mxbai-embed-xsmall-v1";
+    this.embeddingModel = options.defaultEmbeddingModel || "mock-model";
     this.defaultEmbeddingProvider = options.defaultEmbeddingProvider;
+    this.defaultEmbeddingProviderName = options.defaultEmbeddingProviderName;
     this.maxInstances = options.maxInstances || 50;
     this.allowedNamespaces = options.allowedNamespaces;
     
@@ -130,11 +214,6 @@ export class VectorDBManager extends EventEmitter {
     this.offloadDirectory = options.offloadDirectory || "./vectordb_offload";
     this.defaultInactivityTimeout = options.defaultInactivityTimeout || 1000 * 60 * 30; // 30 minutes default
     this.enableActivityMonitoring = options.enableActivityMonitoring !== false; // Default true
-    
-    // Initialize embedding pipeline (only if no default provider is set)
-    if (!this.defaultEmbeddingProvider) {
-      this.initializeEmbeddingPipeline();
-    }
     
     // Ensure offload directory exists
     this.ensureOffloadDirectory();
@@ -154,52 +233,53 @@ export class VectorDBManager extends EventEmitter {
     }
   }
   
-  /**
-   * Initialize the embedding pipeline
-   * @private
-   */
-  private async initializeEmbeddingPipeline(): Promise<void> {
-    // Skip initialization for mock models (used in testing)
-    if (this.embeddingModel === "mock-model") {
-      console.log("🤖 Using mock embedding model for testing");
-      return;
-    }
-    
-    try {
-      console.log(`🤖 Initializing embedding pipeline with model: ${this.embeddingModel}`);
-      
-      this.embeddingPipeline = await pipeline(
-        "feature-extraction",
-        this.embeddingModel,
-        { 
-          device: "cpu",
-          dtype: "q8"
-        }
-      );
-      
-      console.log("✅ Embedding pipeline initialized successfully");
-    } catch (error) {
-      console.error("❌ Failed to initialize embedding pipeline:", error);
-      throw new Error(`Failed to initialize embedding pipeline: ${error}`);
-    }
-  }
+
   
   /**
    * Generate embeddings for text using the appropriate provider
    * @param text Text to embed
    * @param embeddingProvider Optional specific embedding provider for this operation
+   * @param embeddingProviderName Optional provider name from registry
    * @returns Promise resolving to embedding vector
    * @private
    */
-  private async generateEmbedding(text: string, embeddingProvider?: IEmbeddingProvider): Promise<number[]> {
-    // Use specific provider if provided, otherwise use default provider, otherwise use built-in model
-    const provider = embeddingProvider || this.defaultEmbeddingProvider;
+  private async generateEmbedding(
+    text: string, 
+    embeddingProvider?: IEmbeddingProvider,
+    embeddingProviderName?: string
+  ): Promise<number[]> {
+    // Priority: specific provider > provider name from registry > default provider name > default provider > mock model
+    let provider = embeddingProvider;
+    
+    // If no specific provider but we have a provider name, get it from registry
+    if (!provider && embeddingProviderName) {
+      const registryEntry = this.providerRegistry.get(embeddingProviderName);
+      if (registryEntry) {
+        provider = registryEntry.provider;
+        // Update last used time
+        registryEntry.lastUsed = new Date();
+      }
+    }
+    
+    // If still no provider, try default provider name from registry
+    if (!provider && this.defaultEmbeddingProviderName) {
+      const registryEntry = this.providerRegistry.get(this.defaultEmbeddingProviderName);
+      if (registryEntry) {
+        provider = registryEntry.provider;
+        registryEntry.lastUsed = new Date();
+      }
+    }
+    
+    // If still no provider, use default provider
+    if (!provider) {
+      provider = this.defaultEmbeddingProvider;
+    }
     
     if (provider) {
       try {
-        return await provider.generateEmbedding(text);
+        return await provider.embed(text);
       } catch (error) {
-        console.error(`Failed to generate embedding using external provider: ${provider.getName()}`);
+        console.error(`Failed to generate embedding using provider: ${provider.name}`);
         throw error;
       }
     }
@@ -209,21 +289,8 @@ export class VectorDBManager extends EventEmitter {
       return this.createMockEmbedding(text);
     }
     
-    if (!this.embeddingPipeline) {
-      await this.initializeEmbeddingPipeline();
-    }
-    
-    try {
-      const result = await this.embeddingPipeline(text, { 
-        pooling: "mean", 
-        normalize: true 
-      });
-      
-      return Array.from(result.data);
-    } catch (error) {
-      console.error(`Failed to generate embedding for text: "${text.substring(0, 100)}..."`);
-      throw error;
-    }
+    // If no provider is available, throw an error
+    throw new Error("No embedding provider available. Please configure an embedding provider or use mock-model.");
   }
   
   /**
@@ -749,6 +816,17 @@ export class VectorDBManager extends EventEmitter {
       throw new Error(`Vector database with ID ${id} already exists`);
     }
     
+    // Resolve embedding provider from registry if embeddingProviderName is specified
+    if (options.embeddingProviderName && !options.embeddingProvider) {
+      const providerEntry = this.providerRegistry.get(options.embeddingProviderName);
+      if (!providerEntry) {
+        throw new Error(`Embedding provider ${options.embeddingProviderName} not found in registry`);
+      }
+      options.embeddingProvider = providerEntry.provider;
+      // Update last used time
+      providerEntry.lastUsed = new Date();
+    }
+
     // Check if there's an offloaded index for this ID
     const hasOffloaded = await this.hasOffloadedIndex(id);
     if (hasOffloaded) {
@@ -940,6 +1018,7 @@ export class VectorDBManager extends EventEmitter {
     
     // Get the embedding provider for this instance
     const embeddingProvider = instance.options.embeddingProvider;
+    const embeddingProviderName = instance.options.embeddingProviderName;
     
     // Process documents and generate embeddings for text-only documents
     const processedDocuments = await Promise.all(
@@ -949,7 +1028,7 @@ export class VectorDBManager extends EventEmitter {
           return doc;
         } else if (doc.text) {
           // Generate embedding for text using the appropriate provider
-          const vector = await this.generateEmbedding(doc.text, embeddingProvider);
+          const vector = await this.generateEmbedding(doc.text, embeddingProvider, embeddingProviderName);
           return { ...doc, vector };
         } else {
           throw new Error(`Document ${doc.id} must have either text or vector`);
@@ -1017,14 +1096,16 @@ export class VectorDBManager extends EventEmitter {
     // Update activity
     this.updateInstanceActivity(instanceId);
     
-    // Get the embedding provider for this instance
+        // Get the embedding provider for this instance
     const embeddingProvider = instance.options.embeddingProvider;
+    const embeddingProviderName = instance.options.embeddingProviderName;
     
-    console.log(`Querying index ${instanceId} with embedding provider ${embeddingProvider?.getName()}: ${query}`);
+    const providerName = embeddingProvider ? embeddingProvider.name : 'built-in';
+    console.log(`Querying index ${instanceId} with embedding provider ${providerName}: ${query}`);
     // Process query
     let queryVector: number[];
     if (typeof query === 'string') {
-      queryVector = await this.generateEmbedding(query, embeddingProvider);
+      queryVector = await this.generateEmbedding(query, embeddingProvider, embeddingProviderName);
     } else {
       queryVector = query;
     }
@@ -1429,5 +1510,250 @@ export class VectorDBManager extends EventEmitter {
         }
       }
     }
+  }
+
+  // ===== EMBEDDING PROVIDER REGISTRY METHODS =====
+
+  /**
+   * Add an embedding provider to the registry
+   * @param id Unique identifier for the provider
+   * @param provider The embedding provider
+   * @returns True if added successfully, false if ID already exists
+   */
+  public addEmbeddingProvider(id: string, provider: IEmbeddingProvider): boolean {
+    if (this.providerRegistry.has(id)) {
+      return false;
+    }
+
+    const entry: IProviderRegistryEntry = {
+      id,
+      provider,
+      created: new Date()
+    };
+
+    this.providerRegistry.set(id, entry);
+
+    this.emit(VectorDBEvents.PROVIDER_ADDED, {
+      providerId: id,
+      data: { 
+        id, 
+        type: provider.type,
+        name: provider.name,
+        dimension: provider.dimension,
+        created: entry.created
+      }
+    });
+
+    return true;
+  }
+
+  /**
+   * Remove an embedding provider from the registry
+   * @param id Provider ID to remove
+   * @returns True if removed successfully, false if not found
+   */
+  public removeEmbeddingProvider(id: string): boolean {
+    const entry = this.providerRegistry.get(id);
+    if (!entry) {
+      return false;
+    }
+
+    // Check if any instances are using this provider
+    const instancesUsingProvider = Array.from(this.instances.values())
+      .filter(instance => instance.options.embeddingProviderName === id);
+
+    if (instancesUsingProvider.length > 0) {
+      throw new Error(`Cannot remove provider ${id}: it is being used by ${instancesUsingProvider.length} instance(s)`);
+    }
+
+    this.providerRegistry.delete(id);
+
+    this.emit(VectorDBEvents.PROVIDER_REMOVED, {
+      providerId: id,
+      data: { id, name: entry.provider.name }
+    });
+
+    return true;
+  }
+
+  /**
+   * Update an embedding provider in the registry
+   * @param id Provider ID to update
+   * @param provider New provider configuration
+   * @returns True if updated successfully, false if not found
+   */
+  public updateEmbeddingProvider(id: string, provider: IEmbeddingProvider): boolean {
+    const entry = this.providerRegistry.get(id);
+    if (!entry) {
+      return false;
+    }
+
+    // Check if dimension changed and if any instances are using this provider
+    if (entry.provider.dimension !== provider.dimension) {
+      const instancesUsingProvider = Array.from(this.instances.values())
+        .filter(instance => instance.options.embeddingProviderName === id);
+
+      if (instancesUsingProvider.length > 0) {
+        throw new Error(`Cannot update provider ${id}: dimension change would affect ${instancesUsingProvider.length} instance(s) with existing embeddings`);
+      }
+    }
+
+    const oldProvider = entry.provider;
+    entry.provider = provider;
+
+    this.emit(VectorDBEvents.PROVIDER_UPDATED, {
+      providerId: id,
+      data: { 
+        id, 
+        oldProvider: {
+          type: oldProvider.type,
+          name: oldProvider.name,
+          dimension: oldProvider.dimension
+        },
+        newProvider: {
+          type: provider.type,
+          name: provider.name,
+          dimension: provider.dimension
+        }
+      }
+    });
+
+    return true;
+  }
+
+  /**
+   * Get an embedding provider from the registry
+   * @param id Provider ID
+   * @returns Provider entry or undefined if not found
+   */
+  public getEmbeddingProvider(id: string): IProviderRegistryEntry | undefined {
+    return this.providerRegistry.get(id);
+  }
+
+  /**
+   * List all embedding providers in the registry
+   * @returns Array of provider entries
+   */
+  public listEmbeddingProviders(): IProviderRegistryEntry[] {
+    return Array.from(this.providerRegistry.values());
+  }
+
+  /**
+   * Check if an embedding provider exists in the registry
+   * @param id Provider ID
+   * @returns True if provider exists
+   */
+  public hasEmbeddingProvider(id: string): boolean {
+    return this.providerRegistry.has(id);
+  }
+
+  /**
+   * Change the embedding provider for an existing index
+   * @param instanceId Instance ID
+   * @param providerName Name of the provider from registry
+   * @returns Promise resolving when provider is changed
+   */
+  public async changeIndexEmbeddingProvider(instanceId: string, providerName: string): Promise<void> {
+    const instance = this.getInstance(instanceId);
+    if (!instance) {
+      throw new Error(`Vector database instance ${instanceId} not found`);
+    }
+
+    const providerEntry = this.providerRegistry.get(providerName);
+    if (!providerEntry) {
+      throw new Error(`Embedding provider ${providerName} not found in registry`);
+    }
+
+    // Check if dimensions match (if instance has existing embeddings)
+    if (instance.embeddingDimension && instance.embeddingDimension !== providerEntry.provider.dimension) {
+      throw new Error(`Cannot change provider: dimension mismatch. Instance has ${instance.embeddingDimension}D embeddings, provider has ${providerEntry.provider.dimension}D`);
+    }
+
+    // Update the instance options
+    instance.options.embeddingProviderName = providerName;
+    instance.options.embeddingProvider = providerEntry.provider;
+
+    // Update last used time for the provider
+    providerEntry.lastUsed = new Date();
+
+    // Update activity
+    this.updateInstanceActivity(instanceId);
+
+    console.log(`✅ Changed embedding provider for instance ${instanceId} to ${providerName}`);
+  }
+
+  /**
+   * Get embedding provider statistics
+   * @returns Provider usage statistics
+   */
+  public getEmbeddingProviderStats(): {
+    totalProviders: number;
+    providersByType: Record<string, number>;
+    providersInUse: number;
+    providerUsage: Array<{
+      id: string;
+      name: string;
+      type: string;
+      dimension: number;
+      instancesUsing: number;
+      lastUsed?: Date;
+      created: Date;
+    }>;
+  } {
+    const providersByType: Record<string, number> = {};
+    const providerUsage: Array<{
+      id: string;
+      name: string;
+      type: string;
+      dimension: number;
+      instancesUsing: number;
+      lastUsed?: Date;
+      created: Date;
+    }> = [];
+
+    let providersInUse = 0;
+
+    for (const [id, entry] of this.providerRegistry.entries()) {
+      // Count by type
+      providersByType[entry.provider.type] = (providersByType[entry.provider.type] || 0) + 1;
+
+      // Count instances using this provider
+      const instancesUsing = Array.from(this.instances.values())
+        .filter(instance => instance.options.embeddingProviderName === id).length;
+
+      if (instancesUsing > 0) {
+        providersInUse++;
+      }
+
+      providerUsage.push({
+        id,
+        name: entry.provider.name,
+        type: entry.provider.type,
+        dimension: entry.provider.dimension,
+        instancesUsing,
+        lastUsed: entry.lastUsed,
+        created: entry.created
+      });
+    }
+
+    // Sort by usage (most used first), then by last used
+    providerUsage.sort((a, b) => {
+      if (a.instancesUsing !== b.instancesUsing) {
+        return b.instancesUsing - a.instancesUsing;
+      }
+      if (a.lastUsed && b.lastUsed) {
+        return b.lastUsed.getTime() - a.lastUsed.getTime();
+      }
+      if (a.lastUsed && !b.lastUsed) return -1;
+      if (!a.lastUsed && b.lastUsed) return 1;
+      return b.created.getTime() - a.created.getTime();
+    });
+
+    return {
+      totalProviders: this.providerRegistry.size,
+      providersByType,
+      providersInUse,
+      providerUsage
+    };
   }
 } 
