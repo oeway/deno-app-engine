@@ -9,7 +9,8 @@ export {
   type IDocument,
   type IQueryOptions,
   type IQueryResult,
-  type IVectorDBManagerOptions
+  type IVectorDBManagerOptions,
+  type IEmbeddingProvider
 } from "./manager.ts";
 
 // Re-export Voy for direct usage if needed

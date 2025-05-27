@@ -1,8 +1,61 @@
 import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
-import { VectorDBManager, type IDocument, type IQueryOptions } from "../vectordb/mod.ts";
+import { VectorDBManager, type IDocument, type IQueryOptions, type IEmbeddingProvider } from "../vectordb/mod.ts";
 import { Status } from "https://deno.land/std@0.201.0/http/http_status.ts";
 import { contentType } from "https://deno.land/std/media_types/mod.ts";
+import { Ollama } from "ollama";
+
+// Ollama Embedding Provider Implementation
+class OllamaEmbeddingProvider implements IEmbeddingProvider {
+  private ollama: Ollama;
+  private model: string;
+  private dimension: number;
+
+  constructor(model: string = "nomic-embed-text", host: string = "http://localhost:11434") {
+    this.ollama = new Ollama({ host });
+    this.model = model;
+    this.dimension = model === "nomic-embed-text" ? 768 : 384; // Default dimensions for common models
+  }
+
+  async generateEmbedding(text: string): Promise<number[]> {
+    try {
+      const response = await this.ollama.embed({
+        model: this.model,
+        input: text,
+      });
+      return response.embeddings[0];
+    } catch (error) {
+      console.error(`Ollama embedding error for model ${this.model}:`, error);
+      throw error;
+    }
+  }
+
+  getDimension(): number {
+    return this.dimension;
+  }
+
+  getName(): string {
+    return `Ollama-${this.model}`;
+  }
+}
+
+// Available embedding providers
+const EMBEDDING_PROVIDERS = {
+  "mock-model": null, // Built-in mock model
+  "mixedbread-ai/mxbai-embed-xsmall-v1": null, // Built-in HuggingFace model
+  "ollama-nomic-embed-text": () => new OllamaEmbeddingProvider("nomic-embed-text"),
+  "ollama-all-minilm": () => new OllamaEmbeddingProvider("all-minilm"),
+  "ollama-mxbai-embed-large": () => new OllamaEmbeddingProvider("mxbai-embed-large"),
+};
+
+// Helper function to create embedding provider
+function createEmbeddingProvider(providerName: string): IEmbeddingProvider | null {
+  const factory = EMBEDDING_PROVIDERS[providerName as keyof typeof EMBEDDING_PROVIDERS];
+  if (typeof factory === "function") {
+    return factory();
+  }
+  return null;
+}
 
 // Configure kernel manager options from environment variables
 function getKernelManagerOptions(): IKernelManagerOptions {
@@ -84,8 +137,54 @@ const vectorDBOffloadDirectory = Deno.env.get("VECTORDB_OFFLOAD_DIRECTORY") || "
 const vectorDBDefaultTimeout = parseInt(Deno.env.get("VECTORDB_DEFAULT_INACTIVITY_TIMEOUT") || "1800000"); // 30 minutes default
 const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") !== "false"; // Default true
 
+// Extended VectorDBManager that handles embedding provider recreation
+class ServerVectorDBManager extends VectorDBManager {
+  private embeddingProviderMap: Map<string, string> = new Map();
+
+  override async createIndex(options: any = {}): Promise<string> {
+    const indexId = await super.createIndex(options);
+    
+    // Store the embedding provider name for later recreation
+    if (options.embeddingProviderName) {
+      this.embeddingProviderMap.set(indexId, options.embeddingProviderName);
+    }
+    
+    return indexId;
+  }
+
+  override async addDocuments(instanceId: string, documents: any[]): Promise<void> {
+    // Recreate embedding provider if needed
+    this.ensureEmbeddingProvider(instanceId);
+    return super.addDocuments(instanceId, documents);
+  }
+
+  override async queryIndex(instanceId: string, query: string | number[], options: any = {}): Promise<any[]> {
+    // Recreate embedding provider if needed
+    this.ensureEmbeddingProvider(instanceId);
+    return super.queryIndex(instanceId, query, options);
+  }
+
+  private ensureEmbeddingProvider(instanceId: string): void {
+    const instance = this.getInstance(instanceId);
+    const providerName = this.embeddingProviderMap.get(instanceId);
+    
+    if (instance && providerName && !instance.options.embeddingProvider) {
+      const provider = createEmbeddingProvider(providerName);
+      if (provider) {
+        instance.options.embeddingProvider = provider;
+        console.log(`Recreated embedding provider ${providerName} for instance ${instanceId}`);
+      }
+    }
+  }
+
+  override async destroyIndex(instanceId: string): Promise<void> {
+    this.embeddingProviderMap.delete(instanceId);
+    return super.destroyIndex(instanceId);
+  }
+}
+
 // Create a global vector database manager instance
-const vectorDBManager = new VectorDBManager({
+const vectorDBManager = new ServerVectorDBManager({
   defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mock-model", // Use mock for demo to avoid threading issues
   maxInstances: parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES") || "10"),
   allowedNamespaces: undefined, // Allow all namespaces for now
@@ -840,6 +939,71 @@ export async function handleRequest(req: Request): Promise<Response> {
 
       // Vector Database API Routes
       
+      // List available embedding providers
+      if (path === "/api/vectordb/providers" && req.method === "GET") {
+        try {
+          const providers = Object.keys(EMBEDDING_PROVIDERS).map(name => ({
+            name,
+            type: name.startsWith("ollama-") ? "ollama" : "builtin",
+            model: name.startsWith("ollama-") ? name.replace("ollama-", "") : name
+          }));
+          
+          return jsonResponse({ providers });
+        } catch (error) {
+          console.error("Error listing embedding providers:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Test embedding provider availability
+      if (path === "/api/vectordb/providers/test" && req.method === "POST") {
+        try {
+          const body = await req.json();
+          const providerName = body.provider;
+          
+          if (!providerName || !EMBEDDING_PROVIDERS.hasOwnProperty(providerName)) {
+            return jsonResponse({ error: "Invalid provider name" }, Status.BadRequest);
+          }
+          
+          const provider = createEmbeddingProvider(providerName);
+          
+          if (!provider) {
+            return jsonResponse({ 
+              available: true, 
+              message: "Built-in provider is always available",
+              provider: providerName
+            });
+          }
+          
+          // Test the provider with a simple embedding
+          try {
+            const testEmbedding = await provider.generateEmbedding("test");
+            return jsonResponse({ 
+              available: true, 
+              message: "Provider is working correctly",
+              provider: providerName,
+              dimension: provider.getDimension(),
+              testEmbeddingLength: testEmbedding.length
+            });
+          } catch (error) {
+            return jsonResponse({ 
+              available: false, 
+              message: error instanceof Error ? error.message : String(error),
+              provider: providerName
+            });
+          }
+        } catch (error) {
+          console.error("Error testing embedding provider:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+      
       // List vector database instances
       if (path === "/api/vectordb/instances" && req.method === "GET") {
         try {
@@ -856,6 +1020,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             return {
               ...instance,
               isFromOffload: instanceObj?.isFromOffload || false,
+              embeddingProvider: instanceObj?.options.embeddingProvider?.getName() || "Built-in",
               activityMonitoring: {
                 lastActivity: lastActivity ? new Date(lastActivity).toISOString() : undefined,
                 timeUntilOffload: timeUntilOffload,
@@ -893,10 +1058,26 @@ export async function handleRequest(req: Request): Promise<Response> {
       if (path === "/api/vectordb/indices" && req.method === "POST") {
         try {
           const body = await req.json();
+          
+          // Create embedding provider if specified
+          let embeddingProvider: IEmbeddingProvider | undefined;
+          let embeddingProviderName: string | undefined;
+          if (body.embeddingProvider && body.embeddingProvider !== "default") {
+            const provider = createEmbeddingProvider(body.embeddingProvider);
+            if (provider) {
+              embeddingProvider = provider;
+              embeddingProviderName = body.embeddingProvider;
+            } else if (body.embeddingProvider.startsWith("ollama-")) {
+              throw new Error(`Failed to create Ollama embedding provider: ${body.embeddingProvider}`);
+            }
+          }
+          
           const indexId = await vectorDBManager.createIndex({
             id: body.id || crypto.randomUUID(),
             namespace: body.namespace || "default",
             embeddingModel: body.embeddingModel,
+            embeddingProvider: embeddingProvider,
+            embeddingProviderName: embeddingProviderName,
             inactivityTimeout: body.inactivityTimeout,
             enableActivityMonitoring: body.enableActivityMonitoring
           });
@@ -910,6 +1091,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             namespace: namespace,
             documentCount: instance?.documentCount || 0,
             embeddingDimension: instance?.embeddingDimension,
+            embeddingProvider: embeddingProvider ? embeddingProvider.getName() : "Built-in",
             created: new Date().toISOString(),
             activityMonitoring: {
               enabled: body.enableActivityMonitoring !== false && vectorDBActivityMonitoring,

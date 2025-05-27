@@ -16,6 +16,8 @@
     "npm:fake-indexeddb@*": "6.0.1",
     "npm:hypha-rpc@*": "0.20.53-post-1",
     "npm:lodash@*": "4.17.21",
+    "npm:ollama@*": "0.5.15",
+    "npm:ollama@0.5": "0.5.15",
     "npm:path-to-regexp@^6.3.0": "6.3.0",
     "npm:pyodide@*": "0.27.5",
     "npm:pyodide@0.27.5": "0.27.5"
@@ -356,6 +358,12 @@
     "object-keys@1.1.1": {
       "integrity": "sha512-NuAESUOUMrlIXOfHKzD6bpPu3tYt3xvjNdRIQ+FeT0lNb4K8WR70CaDxhuNguS2XG+GjkyMwOzsN5ZktImfhLA=="
     },
+    "ollama@0.5.15": {
+      "integrity": "sha512-TSaZSJyP7MQJFjSmmNsoJiriwa3U+/UJRw6+M8aucs5dTsaWNZsBIGpDb5rXnW6nXxJBB/z79gZY8IaiIQgelQ==",
+      "dependencies": [
+        "whatwg-fetch"
+      ]
+    },
     "onnxruntime-common@1.21.0": {
       "integrity": "sha512-Q632iLLrtCAVOTO65dh2+mNbQir/QNTVBG3h/QdZBpns7mZ0RYbLRBgGABPbpU9351AgYy7SJf1WaeVwMrBFPQ=="
     },
@@ -490,6 +498,9 @@
     },
     "undici-types@6.20.0": {
       "integrity": "sha512-Ny6QZ2Nju20vw1SRHe3d9jVu6gJ+4e3+MMpqu7pqE5HT6WsTSlce++GQmK5UXS8mzV8DSYHrQH+Xrf2jVcuKNg=="
+    },
+    "whatwg-fetch@3.6.20": {
+      "integrity": "sha512-EqhiFU6daOA8kpjOWTL0olhVOF3i7OrFzSYiGsEMB8GcXS+RrzauAERX65xMeNWVqxA6HXH2m69Z9LaKKdisfg=="
     },
     "ws@8.18.2": {
       "integrity": "sha512-DMricUmwGZUVr++AEAe2uiVM7UoO9MAVZMDu05UQOaUII0lp+zOzLLU4Xqh/JvTqklB1T4uELaaPBKyjE1r4fQ=="
@@ -1018,6 +1029,7 @@
   "workspace": {
     "dependencies": [
       "npm:@huggingface/transformers@^3.5.1",
+      "npm:ollama@0.5",
       "npm:pyodide@0.27.5"
     ]
   }

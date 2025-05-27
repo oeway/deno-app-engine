@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vector Database Playground - Deno App Engine</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --primary-color: #4F46E5;
@@ -17,6 +17,9 @@
             --text-primary: #1F2937;
             --text-secondary: #6B7280;
             --border-color: #E5E7EB;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
         }
 
         * {
@@ -28,67 +31,391 @@
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             line-height: 1.6;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
             color: var(--text-primary);
             background-color: var(--background-color);
+            min-height: 100vh;
         }
 
-        h1 {
-            font-size: 2.5rem;
-            font-weight: 600;
-            color: var(--primary-color);
-            margin-bottom: 1rem;
-            text-align: center;
+        /* Main Layout */
+        .main-container {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            background: white;
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
             background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-        }
-
-        .subtitle {
-            text-align: center;
-            color: var(--text-secondary);
-            margin-bottom: 2rem;
-            font-size: 1.1rem;
-        }
-
-        .section {
-            margin-bottom: 2rem;
-            border: 1px solid var(--border-color);
-            padding: 2rem;
-            border-radius: 1rem;
-            background: var(--card-background);
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .section:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-        }
-
-        h2 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 1rem;
             display: flex;
             align-items: center;
             gap: 0.5rem;
         }
 
-        h3 {
-            font-size: 1.2rem;
+        .main-tabs {
+            display: flex;
+            gap: 0;
+        }
+
+        .main-tab-button {
+            background: none;
+            border: none;
+            padding: 1rem 2rem;
+            cursor: pointer;
+            font-weight: 500;
+            color: var(--text-secondary);
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s ease;
+            font-size: 1rem;
+        }
+
+        .main-tab-button.active {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+            background: rgba(79, 70, 229, 0.05);
+        }
+
+        .main-tab-button:hover {
+            color: var(--primary-color);
+            background: rgba(79, 70, 229, 0.05);
+        }
+
+        .content {
+            flex: 1;
+            padding: 0;
+        }
+
+        .main-tab-content {
+            display: none;
+            min-height: calc(100vh - 80px);
+        }
+
+        .main-tab-content.active {
+            display: block;
+        }
+
+        /* Search Tab Styles */
+        .search-container {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .search-header {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+            text-align: center;
+            min-height: 60vh;
+        }
+
+        .search-logo {
+            font-size: 4rem;
+            font-weight: 300;
+            color: white;
+            margin-bottom: 2rem;
+            letter-spacing: -2px;
+        }
+
+        .search-box-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            margin-bottom: 2rem;
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 1.25rem 4rem 1.25rem 1.5rem;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            outline: none;
+            box-shadow: var(--shadow-lg);
+            transition: all 0.3s ease;
+            background: white;
+            height: 60px;
+            box-sizing: border-box;
+        }
+
+        .search-box:focus {
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+            transform: translateY(-2px);
+                }
+
+        .search-submit {
+            position: absolute;
+            right: 10px;
+            top: 10px;
+            bottom: 10px;
+            width: 40px;
+            background: var(--primary-color);
+            border: none;
+            border-radius: 25px;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .search-submit:hover {
+            background: var(--secondary-color);
+            transform: scale(1.05);
+        }
+
+        .search-submit:disabled {
+            background: var(--text-secondary);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .search-options {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .search-option {
+            background: rgba(255, 255, 255, 0.9);
+            -webkit-backdrop-filter: blur(10px);
+            backdrop-filter: blur(10px);
+            border: none;
+            border-radius: 25px;
+            padding: 0.75rem 1.5rem;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .search-option label {
+            margin: 0;
+            font-weight: 500;
+            color: var(--text-primary);
+            white-space: nowrap;
+        }
+
+        .search-option input, .search-option select {
+            border: none;
+            background: none;
+            font-size: 0.9rem;
+            width: 80px;
+            outline: none;
+        }
+
+        .search-results-section {
+            background: white;
+            min-height: 40vh;
+            padding: 2rem;
+        }
+
+        .search-stats {
+            max-width: 800px;
+            margin: 0 auto;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .search-results-container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .search-result-item {
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .search-result-item:last-child {
+            border-bottom: none;
+        }
+
+        .search-result-url {
+            color: var(--success-color);
+            font-size: 0.9rem;
+            margin-bottom: 0.25rem;
+            text-decoration: none;
+        }
+
+        .search-result-title {
+            font-size: 1.25rem;
+            font-weight: 400;
+            color: #1a0dab;
+            margin-bottom: 0.5rem;
+            text-decoration: none;
+            cursor: pointer;
+            line-height: 1.3;
+        }
+
+        .search-result-title:hover {
+            text-decoration: underline;
+        }
+
+        .search-result-snippet {
+            color: var(--text-primary);
+            line-height: 1.6;
+            margin-bottom: 0.75rem;
+        }
+
+        .search-result-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .search-result-score {
+            background: var(--primary-color);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 15px;
+            font-weight: 500;
+            font-size: 0.75rem;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-secondary);
+        }
+
+        .no-results-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        /* Configuration Tab Styles */
+        .config-container {
+            background: var(--background-color);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .config-content {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .config-header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .config-title {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: var(--primary-color);
+            margin-bottom: 0.5rem;
+        }
+
+        .config-subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+
+        .config-sections {
+            display: grid;
+            gap: 2rem;
+        }
+
+        .config-section {
+            background: white;
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: var(--shadow-md);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .config-section:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .config-section h2 {
+            font-size: 1.5rem;
             font-weight: 600;
             color: var(--text-primary);
-            margin-bottom: 1rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
 
         .icon {
             width: 24px;
             height: 24px;
             fill: currentColor;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .form-row > * {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        input, select, textarea {
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            font-family: inherit;
+            font-size: 0.9rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 100px;
+            resize: vertical;
         }
 
         button {
@@ -105,17 +432,20 @@
             align-items: center;
             justify-content: center;
             gap: 0.5rem;
+            min-width: 120px;
         }
 
         button:hover {
             background: var(--secondary-color);
             transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
         }
 
         button:disabled {
             background: var(--text-secondary);
             cursor: not-allowed;
             transform: none;
+            box-shadow: none;
         }
 
         button.danger {
@@ -126,73 +456,10 @@
             background: #DC2626;
         }
 
-        .form-group {
-            margin-bottom: 1rem;
-        }
-
-        .form-row {
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-            margin-bottom: 0.5rem;
-        }
-
-        input, select, textarea {
-            padding: 0.5rem;
-            border: 1px solid var(--border-color);
-            border-radius: 0.5rem;
-            font-family: inherit;
-            font-size: 0.9rem;
-        }
-
-        input[type="text"], input[type="number"] {
-            flex: 1;
-        }
-
-        select {
-            flex: 2;
-        }
-
-        textarea {
-            width: 100%;
-            min-height: 80px;
-            resize: vertical;
-        }
-
-        .output {
-            white-space: pre-wrap;
-            background: #F3F4F6;
-            padding: 1.5rem;
-            border-radius: 0.75rem;
-            margin-top: 1rem;
-            display: none;
-            font-family: 'Monaco', 'Consolas', monospace;
-            font-size: 0.9rem;
-            border: 1px solid var(--border-color);
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .response-container {
-            display: none;
-            margin-top: 1rem;
-            padding: 1rem;
-            border-radius: 0.75rem;
-            background: rgba(249, 250, 251, 0.5);
-            -webkit-backdrop-filter: blur(8px);
-            backdrop-filter: blur(8px);
-        }
-
-        .response-label {
-            font-weight: 500;
-            margin-bottom: 0.5rem;
-            color: var(--text-secondary);
-        }
-
         .spinner {
             display: none;
-            width: 20px;
-            height: 20px;
+            width: 16px;
+            height: 16px;
             border: 2px solid rgba(255, 255, 255, 0.3);
             border-top: 2px solid white;
             border-radius: 50%;
@@ -204,6 +471,108 @@
             100% { transform: rotate(360deg); }
         }
 
+        .response-container {
+            display: none;
+            margin-top: 1.5rem;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            background: var(--background-color);
+            border: 1px solid var(--border-color);
+        }
+
+        .response-label {
+            font-weight: 500;
+            margin-bottom: 1rem;
+            color: var(--text-secondary);
+        }
+
+        .output {
+            white-space: pre-wrap;
+            background: #F3F4F6;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.85rem;
+            border: 1px solid var(--border-color);
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .stat-card {
+            background: var(--background-color);
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--border-color);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 600;
+            color: var(--primary-color);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .index-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .index-card {
+            background: var(--background-color);
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--border-color);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .index-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .index-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .index-id {
+            font-weight: 600;
+            color: var(--primary-color);
+            font-size: 1.1rem;
+        }
+
+        .index-namespace {
+            background: var(--secondary-color);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .index-stats {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
         .toast {
             position: fixed;
             bottom: 2rem;
@@ -211,11 +580,12 @@
             padding: 1rem 1.5rem;
             background: var(--success-color);
             color: white;
-            border-radius: 0.5rem;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            border-radius: 0.75rem;
+            box-shadow: var(--shadow-lg);
             display: none;
             animation: slideIn 0.3s ease;
             z-index: 1000;
+            max-width: 400px;
         }
 
         .toast.error {
@@ -233,119 +603,37 @@
             }
         }
 
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-
-        .stat-card {
-            background: var(--background-color);
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border-color);
-        }
-
-        .stat-value {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--primary-color);
-        }
-
-        .stat-label {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-        }
-
-        .search-result {
-            background: var(--background-color);
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border-color);
-            margin-bottom: 0.5rem;
-        }
-
-        .search-result-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.5rem;
-        }
-
-        .search-result-id {
-            font-weight: 600;
-            color: var(--primary-color);
-        }
-
-        .search-result-score {
-            background: var(--primary-color);
-            color: white;
-            padding: 0.25rem 0.5rem;
-            border-radius: 0.25rem;
-            font-size: 0.8rem;
-        }
-
-        .search-result-text {
-            color: var(--text-primary);
-            margin-bottom: 0.5rem;
-        }
-
-        .search-result-metadata {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-            background: #F9FAFB;
-            padding: 0.5rem;
-            border-radius: 0.25rem;
-        }
-
-        .index-list {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-
-        .index-card {
-            background: var(--background-color);
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border-color);
-        }
-
-        .index-card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.5rem;
-        }
-
-        .index-id {
-            font-weight: 600;
-            color: var(--primary-color);
-        }
-
-        .index-namespace {
-            background: var(--secondary-color);
-            color: white;
-            padding: 0.25rem 0.5rem;
-            border-radius: 0.25rem;
-            font-size: 0.8rem;
-        }
-
-        .index-stats {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-        }
-
         /* Responsive design */
         @media (max-width: 768px) {
-            body {
+            .header {
                 padding: 1rem;
             }
 
-            .section {
-                padding: 1.5rem;
+            .header-content {
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            .main-tabs {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .search-logo {
+                font-size: 3rem;
+            }
+
+            .search-box-container {
+                max-width: 90%;
+            }
+
+            .search-options {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .config-container {
+                padding: 1rem;
             }
 
             .form-row {
@@ -353,166 +641,276 @@
                 align-items: stretch;
             }
 
+            .form-row > * {
+                min-width: auto;
+            }
+
             .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .index-list {
                 grid-template-columns: 1fr;
             }
         }
     </style>
 </head>
 <body>
-    <h1>🔍 Vector Database Playground</h1>
-    <p class="subtitle">Explore semantic search with the Deno App Engine vector database</p>
-    
-    <!-- Stats Section -->
-    <div class="section">
-        <h2>
-            <svg class="icon" viewBox="0 0 24 24">
-                <path d="M3 3v18h18v-2H5V3H3zm4 14h2v-6H7v6zm4 0h2V9h-2v8zm4 0h2v-4h-2v4z"/>
-            </svg>
-            Database Statistics
-        </h2>
-        <button onclick="getVectorDBStats()" id="stats-button">
-            <span>Refresh Stats</span>
-            <div class="spinner"></div>
-        </button>
-        <div class="response-container" id="stats-response">
-            <div class="stats-grid" id="stats-grid"></div>
-        </div>
-    </div>
+    <div class="main-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    🔍 VectorDB Playground
+                </div>
+                <nav class="main-tabs">
+                    <button class="main-tab-button active" onclick="switchMainTab('search')">
+                        Search
+                    </button>
+                    <button class="main-tab-button" onclick="switchMainTab('config')">
+                        Configuration
+                    </button>
+                </nav>
+            </div>
+        </header>
 
-    <!-- Create Index Section -->
-    <div class="section">
-        <h2>
-            <svg class="icon" viewBox="0 0 24 24">
-                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-            </svg>
-            Create Vector Index
-        </h2>
-        <div class="form-group">
-            <div class="form-row">
-                <input type="text" id="index-id" placeholder="Index ID (optional)">
-                <input type="text" id="namespace" placeholder="Namespace (optional)">
-            </div>
-            <button onclick="createVectorIndex()" id="create-button">
-                <span>Create Index</span>
-                <div class="spinner"></div>
-            </button>
-        </div>
-        <div class="response-container" id="create-response">
-            <div class="response-label">Response:</div>
-            <div id="create-output" class="output"></div>
-        </div>
-    </div>
+        <!-- Content -->
+        <main class="content">
+            <!-- Search Tab -->
+            <div id="search-tab" class="main-tab-content active">
+                <div class="search-container">
+                    <div class="search-header">
+                        <div class="search-logo">VectorSearch</div>
+                        
+                        <div class="search-box-container">
+                            <input type="text" id="main-search-query" class="search-box" 
+                                   placeholder="Search for anything..." 
+                                   onkeypress="handleSearchKeyPress(event)" 
+                                   aria-label="Search query">
+                            <button class="search-submit" onclick="performSearch()" 
+                                    id="main-search-button" title="Search" aria-label="Search">
+                                <svg viewBox="0 0 24 24" style="width: 16px; height: 16px;">
+                                    <path fill="currentColor" d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                                </svg>
+                            </button>
+                        </div>
 
-    <!-- List Indices Section -->
-    <div class="section">
-        <h2>
-            <svg class="icon" viewBox="0 0 24 24">
-                <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
-            </svg>
-            Vector Indices
-        </h2>
-        <button onclick="listVectorIndices()" id="list-button">
-            <span>Refresh List</span>
-            <div class="spinner"></div>
-        </button>
-        <div class="response-container" id="list-response">
-            <div class="index-list" id="index-list"></div>
-        </div>
-    </div>
+                        <div class="search-options">
+                            <div class="search-option">
+                                <label for="main-search-index">Index:</label>
+                                <select id="main-search-index" aria-label="Select search index">
+                                    <option value="">Auto-select</option>
+                                </select>
+                            </div>
+                            <div class="search-option">
+                                <label for="main-search-k">Results:</label>
+                                <input type="number" id="main-search-k" value="10" min="1" max="50" aria-label="Number of results">
+                            </div>
+                            <div class="search-option">
+                                <label for="main-search-threshold">Threshold:</label>
+                                <input type="number" id="main-search-threshold" value="0" min="0" max="1" step="0.1" aria-label="Similarity threshold">
+                            </div>
+                        </div>
+                    </div>
 
-    <!-- Add Documents Section -->
-    <div class="section">
-        <h2>
-            <svg class="icon" viewBox="0 0 24 24">
-                <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
-            </svg>
-            Add Documents
-        </h2>
-        <div class="form-group">
-            <div class="form-row">
-                <select id="add-index-selector" aria-label="Select vector database index for adding documents">
-                    <option value="">Select an index...</option>
-                </select>
-                <input type="number" id="doc-count" placeholder="Number of docs" value="10" min="1" max="100">
+                    <div class="search-results-section">
+                        <div id="search-stats" class="search-stats" style="display: none;"></div>
+                        <div id="main-search-results" class="search-results-container"></div>
+                    </div>
+                </div>
             </div>
-            <div class="form-row">
-                <button onclick="generateAndAddDocuments()" id="add-button">
-                    <span>Generate & Add Random Documents</span>
-                    <div class="spinner"></div>
-                </button>
-                <button onclick="addCustomDocument()" id="custom-button">
-                    <span>Add Custom Document</span>
-                    <div class="spinner"></div>
-                </button>
-            </div>
-            <textarea id="custom-text" placeholder="Enter custom document text..."></textarea>
-        </div>
-        <div class="response-container" id="add-response">
-            <div class="response-label">Response:</div>
-            <div id="add-output" class="output"></div>
-        </div>
-    </div>
 
-    <!-- Search Documents Section -->
-    <div class="section">
-        <h2>
-            <svg class="icon" viewBox="0 0 24 24">
-                <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-            </svg>
-            Semantic Search
-        </h2>
-        <div class="form-group">
-            <div class="form-row">
-                <select id="search-index-selector" aria-label="Select vector database index for searching">
-                    <option value="">Select an index...</option>
-                </select>
-                <input type="number" id="search-k" placeholder="Results (k)" value="5" min="1" max="20">
-                <input type="number" id="search-threshold" placeholder="Threshold" value="0" min="0" max="1" step="0.1">
-            </div>
-            <div class="form-row">
-                <input type="text" id="search-query" placeholder="Enter search query...">
-                <button onclick="searchDocuments()" id="search-button">
-                    <span>Search</span>
-                    <div class="spinner"></div>
-                </button>
-            </div>
-        </div>
-        <div class="response-container" id="search-response">
-            <div class="response-label">Search Results:</div>
-            <div id="search-results"></div>
-        </div>
-    </div>
+            <!-- Configuration Tab -->
+            <div id="config-tab" class="main-tab-content">
+                <div class="config-container">
+                    <div class="config-content">
+                        <div class="config-header">
+                            <h1 class="config-title">Database Configuration</h1>
+                            <p class="config-subtitle">Manage your vector database indices and embedding providers</p>
+                        </div>
 
-    <!-- Delete Index Section -->
-    <div class="section">
-        <h2>
-            <svg class="icon" viewBox="0 0 24 24">
-                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-            </svg>
-            Delete Index
-        </h2>
-        <div class="form-group">
-            <div class="form-row">
-                <select id="delete-selector" aria-label="Select vector database index to delete">
-                    <option value="">Select an index to delete...</option>
-                </select>
-                <button onclick="deleteVectorIndex()" id="delete-button" class="danger">
-                    <span>Delete Index</span>
-                    <div class="spinner"></div>
-                </button>
+                        <div class="config-sections">
+                            <!-- Stats Section -->
+                            <div class="config-section">
+                                <h2>
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path d="M3 3v18h18v-2H5V3H3zm4 14h2v-6H7v6zm4 0h2V9h-2v8zm4 0h2v-4h-2v4z"/>
+                                    </svg>
+                                    Database Statistics
+                                </h2>
+                                <button onclick="getVectorDBStats()" id="stats-button">
+                                    <span>Refresh Stats</span>
+                                    <div class="spinner"></div>
+                                </button>
+                                <div class="response-container" id="stats-response">
+                                    <div class="stats-grid" id="stats-grid"></div>
+                                </div>
+                            </div>
+
+                            <!-- Embedding Providers Section -->
+                            <div class="config-section">
+                                <h2>
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                                    </svg>
+                                    Embedding Providers
+                                </h2>
+                                <div class="form-group">
+                                    <div class="form-row">
+                                        <select id="provider-selector" aria-label="Select embedding provider to test">
+                                            <option value="">Select a provider to test...</option>
+                                        </select>
+                                        <button onclick="testEmbeddingProvider()" id="test-provider-button">
+                                            <span>Test Provider</span>
+                                            <div class="spinner"></div>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="response-container" id="provider-response">
+                                    <div class="response-label">Provider Test Result:</div>
+                                    <div id="provider-output" class="output"></div>
+                                </div>
+                            </div>
+
+                            <!-- Create Index Section -->
+                            <div class="config-section">
+                                <h2>
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                                    </svg>
+                                    Create Vector Index
+                                </h2>
+                                <div class="form-group">
+                                    <div class="form-row">
+                                        <input type="text" id="index-id" placeholder="Index ID (optional)">
+                                        <input type="text" id="namespace" placeholder="Namespace (optional)">
+                                    </div>
+                                    <div class="form-row">
+                                        <select id="embedding-provider-selector" aria-label="Select embedding provider for new index">
+                                            <option value="default">Default (Built-in)</option>
+                                        </select>
+                                        <input type="number" id="inactivity-timeout" placeholder="Inactivity timeout (ms)" value="1800000">
+                                    </div>
+                                    <button onclick="createVectorIndex()" id="create-button">
+                                        <span>Create Index</span>
+                                        <div class="spinner"></div>
+                                    </button>
+                                </div>
+                                <div class="response-container" id="create-response">
+                                    <div class="response-label">Response:</div>
+                                    <div id="create-output" class="output"></div>
+                                </div>
+                            </div>
+
+                            <!-- List Indices Section -->
+                            <div class="config-section">
+                                <h2>
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+                                    </svg>
+                                    Vector Indices
+                                </h2>
+                                <button onclick="listVectorIndices()" id="list-button">
+                                    <span>Refresh List</span>
+                                    <div class="spinner"></div>
+                                </button>
+                                <div class="response-container" id="list-response">
+                                    <div class="index-list" id="index-list"></div>
+                                </div>
+                            </div>
+
+                            <!-- Add Documents Section -->
+                            <div class="config-section">
+                                <h2>
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
+                                    </svg>
+                                    Add Documents
+                                </h2>
+                                <div class="form-group">
+                                    <div class="form-row">
+                                        <select id="add-index-selector" aria-label="Select vector database index for adding documents">
+                                            <option value="">Select an index...</option>
+                                        </select>
+                                        <input type="number" id="doc-count" placeholder="Number of docs" value="10" min="1" max="100">
+                                    </div>
+                                    <div class="form-row">
+                                        <button onclick="generateAndAddDocuments()" id="add-button">
+                                            <span>Generate & Add Random Documents</span>
+                                            <div class="spinner"></div>
+                                        </button>
+                                        <button onclick="addCustomDocument()" id="custom-button">
+                                            <span>Add Custom Document</span>
+                                            <div class="spinner"></div>
+                                        </button>
+                                    </div>
+                                    <textarea id="custom-text" placeholder="Enter custom document text..."></textarea>
+                                </div>
+                                <div class="response-container" id="add-response">
+                                    <div class="response-label">Response:</div>
+                                    <div id="add-output" class="output"></div>
+                                </div>
+                            </div>
+
+                            <!-- Delete Index Section -->
+                            <div class="config-section">
+                                <h2>
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                                    </svg>
+                                    Delete Index
+                                </h2>
+                                <div class="form-group">
+                                    <div class="form-row">
+                                        <select id="delete-selector" aria-label="Select vector database index to delete">
+                                            <option value="">Select an index to delete...</option>
+                                        </select>
+                                        <button onclick="deleteVectorIndex()" id="delete-button" class="danger">
+                                            <span>Delete Index</span>
+                                            <div class="spinner"></div>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="response-container" id="delete-response">
+                                    <div class="response-label">Response:</div>
+                                    <div id="delete-output" class="output"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-        </div>
-        <div class="response-container" id="delete-response">
-            <div class="response-label">Response:</div>
-            <div id="delete-output" class="output"></div>
-        </div>
+        </main>
     </div>
 
     <div class="toast" id="toast"></div>
 
     <script>
         let vectorIndices = [];
+        let embeddingProviders = [];
+
+        // Main tab switching
+        function switchMainTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.main-tab-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`[onclick="switchMainTab('${tabName}')"]`).classList.add('active');
+            
+            // Update tab content
+            document.querySelectorAll('.main-tab-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            
+            // Load data when switching to config tab
+            if (tabName === 'config') {
+                loadConfigurationData();
+            }
+        }
+
+        // Load configuration data
+        async function loadConfigurationData() {
+            await loadEmbeddingProviders();
+            await getVectorDBStats();
+            await listVectorIndices();
+        }
 
         // Utility functions
         function showToast(message, type = 'success') {
@@ -529,27 +927,37 @@
         function showSpinner(buttonId) {
             const button = document.getElementById(buttonId);
             const spinner = button.querySelector('.spinner');
-            spinner.style.display = 'block';
-            button.disabled = true;
+            if (spinner) {
+                spinner.style.display = 'block';
+                button.disabled = true;
+            }
         }
 
         function hideSpinner(buttonId) {
             const button = document.getElementById(buttonId);
             const spinner = button.querySelector('.spinner');
-            spinner.style.display = 'none';
-            button.disabled = false;
+            if (spinner) {
+                spinner.style.display = 'none';
+                button.disabled = false;
+            }
         }
 
-        function showResponse(containerId, content) {
+        function showResponse(containerId) {
             const container = document.getElementById(containerId);
-            container.style.display = 'block';
+            if (container) {
+                container.style.display = 'block';
+            }
         }
 
         function updateIndexSelectors() {
-            const selectors = ['add-index-selector', 'search-index-selector', 'delete-selector'];
+            const selectors = ['add-index-selector', 'delete-selector', 'main-search-index'];
             
             selectors.forEach(selectorId => {
                 const selector = document.getElementById(selectorId);
+                if (!selector) return;
+                
+                const isMainSearch = selectorId === 'main-search-index';
+                
                 // Clear existing options except the first one
                 while (selector.options.length > 1) {
                     selector.remove(1);
@@ -557,16 +965,96 @@
                 
                 // Add index options
                 vectorIndices.forEach(index => {
-                    const option = new Option(
-                        `${index.id} (${index.documentCount} docs)`,
-                        index.id
-                    );
+                    const displayText = isMainSearch 
+                        ? `${index.id} (${index.documentCount} docs)`
+                        : `${index.id} (${index.documentCount} docs, ${index.embeddingProvider || 'Built-in'})`;
+                    
+                    const option = new Option(displayText, index.id);
+                    selector.add(option);
+                });
+            });
+        }
+
+        function updateProviderSelectors() {
+            const selectors = ['provider-selector', 'embedding-provider-selector'];
+            
+            selectors.forEach(selectorId => {
+                const selector = document.getElementById(selectorId);
+                if (!selector) return;
+                
+                const isTestSelector = selectorId === 'provider-selector';
+                
+                // Clear existing options except the first one
+                while (selector.options.length > (isTestSelector ? 1 : 1)) {
+                    selector.remove(isTestSelector ? 1 : 1);
+                }
+                
+                // Add provider options
+                embeddingProviders.forEach(provider => {
+                    const displayName = provider.type === 'ollama' 
+                        ? `Ollama - ${provider.model}` 
+                        : provider.model;
+                    const option = new Option(displayName, provider.name);
                     selector.add(option);
                 });
             });
         }
 
         // Vector Database API functions
+        async function loadEmbeddingProviders() {
+            try {
+                const response = await fetch('/api/vectordb/providers');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                embeddingProviders = data.providers;
+                updateProviderSelectors();
+            } catch (error) {
+                console.error('Failed to load embedding providers:', error);
+                showToast('Failed to load embedding providers: ' + error.message, 'error');
+            }
+        }
+
+        async function testEmbeddingProvider() {
+            const providerName = document.getElementById('provider-selector').value;
+            
+            if (!providerName) {
+                showToast('Please select a provider to test', 'error');
+                return;
+            }
+            
+            showSpinner('test-provider-button');
+            try {
+                const response = await fetch('/api/vectordb/providers/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: providerName })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                document.getElementById('provider-output').textContent = JSON.stringify(result, null, 2);
+                showResponse('provider-response');
+                
+                if (result.available) {
+                    showToast(`Provider ${providerName} is working correctly!`);
+                } else {
+                    showToast(`Provider ${providerName} is not available: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                document.getElementById('provider-output').textContent = JSON.stringify({ error: error.message }, null, 2);
+                showResponse('provider-response');
+                showToast('Failed to test provider: ' + error.message, 'error');
+            } finally {
+                hideSpinner('test-provider-button');
+            }
+        }
+
         async function getVectorDBStats() {
             showSpinner('stats-button');
             try {
@@ -588,24 +1076,26 @@
 
         function displayStats(stats) {
             const grid = document.getElementById('stats-grid');
-            grid.innerHTML = `
-                <div class="stat-card">
-                    <div class="stat-value">${stats.totalInstances}</div>
-                    <div class="stat-label">Total Indices</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${stats.totalDocuments}</div>
-                    <div class="stat-label">Total Documents</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${stats.embeddingModel}</div>
-                    <div class="stat-label">Embedding Model</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${stats.maxInstances}</div>
-                    <div class="stat-label">Max Instances</div>
-                </div>
-            `;
+            if (grid) {
+                grid.innerHTML = `
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.totalInstances}</div>
+                        <div class="stat-label">Total Indices</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.totalDocuments}</div>
+                        <div class="stat-label">Total Documents</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.embeddingModel}</div>
+                        <div class="stat-label">Embedding Model</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.maxInstances}</div>
+                        <div class="stat-label">Max Instances</div>
+                    </div>
+                `;
+            }
         }
 
         async function createVectorIndex() {
@@ -613,10 +1103,18 @@
             try {
                 const indexId = document.getElementById('index-id').value;
                 const namespace = document.getElementById('namespace').value;
+                const embeddingProvider = document.getElementById('embedding-provider-selector').value;
+                const inactivityTimeout = parseInt(document.getElementById('inactivity-timeout').value) || 1800000;
                 
-                const body = {};
+                const body = {
+                    inactivityTimeout: inactivityTimeout,
+                    enableActivityMonitoring: true
+                };
                 if (indexId) body.id = indexId;
                 if (namespace) body.namespace = namespace;
+                if (embeddingProvider && embeddingProvider !== 'default') {
+                    body.embeddingProvider = embeddingProvider;
+                }
                 
                 const response = await fetch('/api/vectordb/indices', {
                     method: 'POST',
@@ -636,6 +1134,8 @@
                 // Clear form
                 document.getElementById('index-id').value = '';
                 document.getElementById('namespace').value = '';
+                document.getElementById('embedding-provider-selector').value = 'default';
+                document.getElementById('inactivity-timeout').value = '1800000';
                 
                 // Refresh lists
                 await listVectorIndices();
@@ -670,8 +1170,10 @@
 
         function displayIndices(indices) {
             const container = document.getElementById('index-list');
+            if (!container) return;
+            
             if (indices.length === 0) {
-                container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">No indices found. Create one to get started!</p>';
+                container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 2rem;">No indices found. Create one to get started!</p>';
                 return;
             }
             
@@ -682,9 +1184,10 @@
                         ${index.namespace ? `<div class="index-namespace">${index.namespace}</div>` : ''}
                     </div>
                     <div class="index-stats">
-                        Documents: ${index.documentCount}<br>
-                        Dimensions: ${index.embeddingDimension || 'N/A'}<br>
-                        Created: ${new Date(index.created).toLocaleString()}
+                        <strong>Documents:</strong> ${index.documentCount}<br>
+                        <strong>Dimensions:</strong> ${index.embeddingDimension || 'N/A'}<br>
+                        <strong>Provider:</strong> ${index.embeddingProvider || 'Built-in'}<br>
+                        <strong>Created:</strong> ${new Date(index.created).toLocaleString()}
                     </div>
                 </div>
             `).join('');
@@ -795,72 +1298,6 @@
             }
         }
 
-        async function searchDocuments() {
-            const indexId = document.getElementById('search-index-selector').value;
-            const query = document.getElementById('search-query').value.trim();
-            const k = parseInt(document.getElementById('search-k').value) || 5;
-            const threshold = parseFloat(document.getElementById('search-threshold').value) || 0;
-            
-            if (!indexId) {
-                showToast('Please select an index first', 'error');
-                return;
-            }
-            
-            if (!query) {
-                showToast('Please enter a search query', 'error');
-                return;
-            }
-            
-            showSpinner('search-button');
-            try {
-                const response = await fetch(`/api/vectordb/indices/${encodeURIComponent(indexId)}/query`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        query,
-                        k,
-                        threshold,
-                        includeMetadata: true
-                    })
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const result = await response.json();
-                displaySearchResults(result.results, query);
-                showResponse('search-response');
-                showToast(`Found ${result.count} results!`);
-            } catch (error) {
-                document.getElementById('search-results').innerHTML = `<div class="search-result"><div class="search-result-text">Error: ${error.message}</div></div>`;
-                showResponse('search-response');
-                showToast('Search failed: ' + error.message, 'error');
-            } finally {
-                hideSpinner('search-button');
-            }
-        }
-
-        function displaySearchResults(results, query) {
-            const container = document.getElementById('search-results');
-            
-            if (results.length === 0) {
-                container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">No results found. Try a different query!</p>';
-                return;
-            }
-            
-            container.innerHTML = results.map(result => `
-                <div class="search-result">
-                    <div class="search-result-header">
-                        <div class="search-result-id">${result.id}</div>
-                        <div class="search-result-score">Score: ${result.score.toFixed(3)}</div>
-                    </div>
-                    ${result.text ? `<div class="search-result-text">${result.text}</div>` : ''}
-                    ${result.metadata ? `<div class="search-result-metadata">Metadata: ${JSON.stringify(result.metadata)}</div>` : ''}
-                </div>
-            `).join('');
-        }
-
         async function deleteVectorIndex() {
             const indexId = document.getElementById('delete-selector').value;
             
@@ -899,11 +1336,150 @@
             }
         }
 
+        // Search functionality
+        function handleSearchKeyPress(event) {
+            if (event.key === 'Enter') {
+                performSearch();
+            }
+        }
+
+        async function performSearch() {
+            const query = document.getElementById('main-search-query').value.trim();
+            const indexId = document.getElementById('main-search-index').value;
+            const k = parseInt(document.getElementById('main-search-k').value) || 10;
+            const threshold = parseFloat(document.getElementById('main-search-threshold').value) || 0;
+            
+            if (!query) {
+                showToast('Please enter a search query', 'error');
+                return;
+            }
+            
+            // Auto-select index if none selected
+            let selectedIndex = indexId;
+            if (!selectedIndex) {
+                selectedIndex = selectBestIndex();
+            }
+            
+            if (!selectedIndex) {
+                showToast('No indices available. Please create an index first.', 'error');
+                return;
+            }
+            
+            // Show loading state
+            const searchButton = document.getElementById('main-search-button');
+            const originalContent = searchButton.innerHTML;
+            searchButton.innerHTML = '<div style="width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top: 2px solid white; border-radius: 50%; animation: spin 1s linear infinite;"></div>';
+            searchButton.disabled = true;
+            
+            try {
+                const startTime = Date.now();
+                
+                const response = await fetch(`/api/vectordb/indices/${encodeURIComponent(selectedIndex)}/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query,
+                        k,
+                        threshold,
+                        includeMetadata: true
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                const searchTime = Date.now() - startTime;
+                
+                displaySearchResults(result.results, query, searchTime, selectedIndex);
+                showSearchStats(result.count, searchTime, selectedIndex);
+                
+            } catch (error) {
+                displaySearchError(error.message);
+                showToast('Search failed: ' + error.message, 'error');
+            } finally {
+                searchButton.innerHTML = originalContent;
+                searchButton.disabled = false;
+            }
+        }
+
+        function selectBestIndex() {
+            if (vectorIndices.length === 0) return null;
+            
+            // Prefer indices with more documents
+            const sortedIndices = [...vectorIndices].sort((a, b) => b.documentCount - a.documentCount);
+            return sortedIndices[0]?.id;
+        }
+
+        function displaySearchResults(results, query, searchTime, indexId) {
+            const container = document.getElementById('main-search-results');
+            
+            if (results.length === 0) {
+                container.innerHTML = `
+                    <div class="no-results">
+                        <div class="no-results-icon">🔍</div>
+                        <h3>No results found</h3>
+                        <p>Try different keywords or check your spelling</p>
+                        <p style="margin-top: 1rem; font-size: 0.9rem;">
+                            Searched in: ${indexId}<br>
+                            Query: "${query}"
+                        </p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = results.map((result, index) => {
+                const resultUrl = `vectordb://document/${result.id}`;
+                const snippet = result.text ? 
+                    (result.text.length > 200 ? result.text.substring(0, 200) + '...' : result.text) : 
+                    'No text content available';
+                
+                return `
+                    <div class="search-result-item">
+                        <div class="search-result-url">${resultUrl}</div>
+                        <div class="search-result-title">${result.id}</div>
+                        <div class="search-result-snippet">${snippet}</div>
+                        <div class="search-result-meta">
+                            <span>${result.metadata ? `Category: ${result.metadata.category || 'N/A'} • Topic: ${result.metadata.topic || 'N/A'}` : 'Document ID: ' + result.id}</span>
+                            <span class="search-result-score">Score: ${result.score.toFixed(3)}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function displaySearchError(errorMessage) {
+            const container = document.getElementById('main-search-results');
+            container.innerHTML = `
+                <div class="no-results">
+                    <div class="no-results-icon">⚠️</div>
+                    <h3>Search Error</h3>
+                    <p>${errorMessage}</p>
+                </div>
+            `;
+        }
+
+        function showSearchStats(resultCount, searchTime, indexId) {
+            const statsElement = document.getElementById('search-stats');
+            const indexInfo = vectorIndices.find(idx => idx.id === indexId);
+            const providerInfo = indexInfo ? ` using ${indexInfo.embeddingProvider || 'Built-in'}` : '';
+            
+            statsElement.innerHTML = `
+                About ${resultCount.toLocaleString()} results (${(searchTime / 1000).toFixed(2)} seconds) 
+                from index "${indexId}"${providerInfo}
+            `;
+            statsElement.style.display = 'block';
+        }
+
         // Initialize the page
         document.addEventListener('DOMContentLoaded', async () => {
-            await getVectorDBStats();
+            // Load initial data for search tab
+            await loadEmbeddingProviders();
             await listVectorIndices();
         });
     </script>
 </body>
+</html> 
 </html> 

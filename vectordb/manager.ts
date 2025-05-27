@@ -19,6 +19,13 @@ export enum VectorDBEvents {
   ERROR = "error"
 }
 
+// Interface for external embedding provider
+export interface IEmbeddingProvider {
+  generateEmbedding(text: string): Promise<number[]>;
+  getDimension(): number;
+  getName(): string;
+}
+
 // Interface for vector database instance
 export interface IVectorDBInstance {
   id: string;
@@ -36,6 +43,7 @@ export interface IVectorDBOptions {
   id?: string;
   namespace?: string;
   embeddingModel?: string;
+  embeddingProvider?: IEmbeddingProvider; // External embedding provider
   maxDocuments?: number;
   persistData?: boolean;
   inactivityTimeout?: number; // Time in milliseconds after which an inactive index will be offloaded
@@ -68,6 +76,7 @@ export interface IQueryResult {
 // Interface for manager options
 export interface IVectorDBManagerOptions {
   defaultEmbeddingModel?: string;
+  defaultEmbeddingProvider?: IEmbeddingProvider; // Default external embedding provider
   maxInstances?: number;
   allowedNamespaces?: string[];
   offloadDirectory?: string; // Directory to store offloaded indices
@@ -97,6 +106,7 @@ export class VectorDBManager extends EventEmitter {
   private instances: Map<string, IVectorDBInstance> = new Map();
   private embeddingPipeline: any = null;
   private embeddingModel: string;
+  private defaultEmbeddingProvider?: IEmbeddingProvider;
   private maxInstances: number;
   private allowedNamespaces?: string[];
   
@@ -112,6 +122,7 @@ export class VectorDBManager extends EventEmitter {
     super.setMaxListeners(100);
     
     this.embeddingModel = options.defaultEmbeddingModel || "mixedbread-ai/mxbai-embed-xsmall-v1";
+    this.defaultEmbeddingProvider = options.defaultEmbeddingProvider;
     this.maxInstances = options.maxInstances || 50;
     this.allowedNamespaces = options.allowedNamespaces;
     
@@ -120,8 +131,10 @@ export class VectorDBManager extends EventEmitter {
     this.defaultInactivityTimeout = options.defaultInactivityTimeout || 1000 * 60 * 30; // 30 minutes default
     this.enableActivityMonitoring = options.enableActivityMonitoring !== false; // Default true
     
-    // Initialize embedding pipeline
-    this.initializeEmbeddingPipeline();
+    // Initialize embedding pipeline (only if no default provider is set)
+    if (!this.defaultEmbeddingProvider) {
+      this.initializeEmbeddingPipeline();
+    }
     
     // Ensure offload directory exists
     this.ensureOffloadDirectory();
@@ -172,12 +185,25 @@ export class VectorDBManager extends EventEmitter {
   }
   
   /**
-   * Generate embeddings for text
+   * Generate embeddings for text using the appropriate provider
    * @param text Text to embed
+   * @param embeddingProvider Optional specific embedding provider for this operation
    * @returns Promise resolving to embedding vector
    * @private
    */
-  private async generateEmbedding(text: string): Promise<number[]> {
+  private async generateEmbedding(text: string, embeddingProvider?: IEmbeddingProvider): Promise<number[]> {
+    // Use specific provider if provided, otherwise use default provider, otherwise use built-in model
+    const provider = embeddingProvider || this.defaultEmbeddingProvider;
+    
+    if (provider) {
+      try {
+        return await provider.generateEmbedding(text);
+      } catch (error) {
+        console.error(`Failed to generate embedding using external provider: ${provider.getName()}`);
+        throw error;
+      }
+    }
+    
     // For mock model, use a simple deterministic embedding
     if (this.embeddingModel === "mock-model") {
       return this.createMockEmbedding(text);
@@ -366,13 +392,14 @@ export class VectorDBManager extends EventEmitter {
       // Merge options with metadata options, giving priority to new options
       const mergedOptions = { ...metadata.options, ...options };
       
-      // Initialize the worker
+      // Initialize the worker (exclude embeddingProvider as it can't be serialized)
+      const { embeddingProvider, ...serializableOptions } = mergedOptions;
       worker.postMessage({
         type: "INITIALIZE",
         options: {
           id,
           embeddingModel: this.embeddingModel,
-          ...mergedOptions
+          ...serializableOptions
         }
       });
       
@@ -777,13 +804,14 @@ export class VectorDBManager extends EventEmitter {
       worker.addEventListener('message', handler);
     });
     
-    // Initialize the worker
+    // Initialize the worker (exclude embeddingProvider as it can't be serialized)
+    const { embeddingProvider, ...serializableOptions } = options;
     worker.postMessage({
       type: "INITIALIZE",
       options: {
         id,
         embeddingModel: this.embeddingModel,
-        ...options
+        ...serializableOptions
       }
     });
     
@@ -910,6 +938,9 @@ export class VectorDBManager extends EventEmitter {
     // Update activity
     this.updateInstanceActivity(instanceId);
     
+    // Get the embedding provider for this instance
+    const embeddingProvider = instance.options.embeddingProvider;
+    
     // Process documents and generate embeddings for text-only documents
     const processedDocuments = await Promise.all(
       documents.map(async (doc) => {
@@ -917,8 +948,8 @@ export class VectorDBManager extends EventEmitter {
           // Document already has vector
           return doc;
         } else if (doc.text) {
-          // Generate embedding for text
-          const vector = await this.generateEmbedding(doc.text);
+          // Generate embedding for text using the appropriate provider
+          const vector = await this.generateEmbedding(doc.text, embeddingProvider);
           return { ...doc, vector };
         } else {
           throw new Error(`Document ${doc.id} must have either text or vector`);
@@ -986,10 +1017,14 @@ export class VectorDBManager extends EventEmitter {
     // Update activity
     this.updateInstanceActivity(instanceId);
     
+    // Get the embedding provider for this instance
+    const embeddingProvider = instance.options.embeddingProvider;
+    
+    console.log(`Querying index ${instanceId} with embedding provider ${embeddingProvider?.getName()}: ${query}`);
     // Process query
     let queryVector: number[];
     if (typeof query === 'string') {
-      queryVector = await this.generateEmbedding(query);
+      queryVector = await this.generateEmbedding(query, embeddingProvider);
     } else {
       queryVector = query;
     }
