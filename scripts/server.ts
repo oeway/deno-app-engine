@@ -37,8 +37,10 @@ const EMBEDDING_PROVIDERS = {
   },
 };
 
-// Helper function to setup embedding providers in the manager
-function setupEmbeddingProviders(manager: VectorDBManager): void {
+// Helper function to create preconfigured providers for the manager
+function createPreconfiguredProviders(): Record<string, any> {
+  const providers: Record<string, any> = {};
+  
   for (const [name, config] of Object.entries(EMBEDDING_PROVIDERS)) {
     if (config.type === "ollama" && "host" in config && "model" in config && "dimension" in config) {
       try {
@@ -48,13 +50,15 @@ function setupEmbeddingProviders(manager: VectorDBManager): void {
           config.model,
           config.dimension
         );
-        manager.addEmbeddingProvider(name, provider);
-        console.log(`✅ Added Ollama provider: ${name}`);
+        providers[name] = provider;
+        console.log(`✅ Prepared Ollama provider: ${name}`);
       } catch (error) {
-        console.warn(`⚠️ Failed to add Ollama provider ${name}:`, error);
+        console.warn(`⚠️ Failed to prepare Ollama provider ${name}:`, error);
       }
     }
   }
+  
+  return providers;
 }
 
 // Configure kernel manager options from environment variables
@@ -137,6 +141,9 @@ const vectorDBOffloadDirectory = Deno.env.get("VECTORDB_OFFLOAD_DIRECTORY") || "
 const vectorDBDefaultTimeout = parseInt(Deno.env.get("VECTORDB_DEFAULT_INACTIVITY_TIMEOUT") || "1800000"); // 30 minutes default
 const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") !== "false"; // Default true
 
+// Create preconfigured providers
+const preconfiguredProviders = createPreconfiguredProviders();
+
 // Create a global vector database manager instance
 const vectorDBManager = new VectorDBManager({
   defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mock-model", // Use mock for demo to avoid dependency issues
@@ -144,11 +151,9 @@ const vectorDBManager = new VectorDBManager({
   allowedNamespaces: undefined, // Allow all namespaces for now
   offloadDirectory: vectorDBOffloadDirectory,
   defaultInactivityTimeout: vectorDBDefaultTimeout,
-  enableActivityMonitoring: vectorDBActivityMonitoring
+  enableActivityMonitoring: vectorDBActivityMonitoring,
+  providerRegistry: preconfiguredProviders
 });
-
-// Setup embedding providers
-setupEmbeddingProviders(vectorDBManager);
 
 console.log("Server VectorDB Manager Configuration:");
 console.log(`- Embedding model: ${Deno.env.get("EMBEDDING_MODEL") || "mock-model"}`);
@@ -914,8 +919,18 @@ export async function handleRequest(req: Request): Promise<Response> {
             description: config.description,
             available: vectorDBManager.hasEmbeddingProvider(name)
           }));
+
+          // For backward compatibility, also provide a unified providers list
+          const providers = registryProviders.map(p => ({
+            name: p.name,
+            type: p.type,
+            model: p.name, // Use name as model for compatibility
+            dimension: p.dimension,
+            description: p.description
+          }));
           
           return jsonResponse({ 
+            providers, // For backward compatibility
             registryProviders,
             configProviders,
             stats: vectorDBManager.getEmbeddingProviderStats()

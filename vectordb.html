@@ -772,6 +772,68 @@
                                 </div>
                             </div>
 
+                            <!-- Add New Provider Section -->
+                            <div class="config-section">
+                                <h2>
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                                    </svg>
+                                    Add New Provider
+                                </h2>
+                                <div class="form-group">
+                                    <div class="form-row">
+                                        <input type="text" id="new-provider-name" placeholder="Provider name (e.g., my-ollama-model)">
+                                        <select id="new-provider-type" aria-label="Select provider type">
+                                            <option value="ollama">Ollama</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-row">
+                                        <input type="text" id="new-provider-host" placeholder="Ollama host (e.g., http://localhost:11434)" value="http://localhost:11434">
+                                        <input type="text" id="new-provider-model" placeholder="Model name (e.g., nomic-embed-text)">
+                                    </div>
+                                    <div class="form-row">
+                                        <input type="number" id="new-provider-dimension" placeholder="Embedding dimension (e.g., 768)" min="1" max="4096">
+                                        <button onclick="addEmbeddingProvider()" id="add-provider-button">
+                                            <span>Add Provider</span>
+                                            <div class="spinner"></div>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="response-container" id="add-provider-response">
+                                    <div class="response-label">Response:</div>
+                                    <div id="add-provider-output" class="output"></div>
+                                </div>
+                            </div>
+
+                            <!-- Manage Providers Section -->
+                            <div class="config-section">
+                                <h2>
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>
+                                    </svg>
+                                    Manage Providers
+                                </h2>
+                                <div class="form-group">
+                                    <div class="form-row">
+                                        <select id="manage-provider-selector" aria-label="Select provider to manage">
+                                            <option value="">Select a provider to manage...</option>
+                                        </select>
+                                        <button onclick="removeEmbeddingProvider()" id="remove-provider-button" class="danger">
+                                            <span>Remove Provider</span>
+                                            <div class="spinner"></div>
+                                        </button>
+                                    </div>
+                                    <button onclick="refreshProviderList()" id="refresh-providers-button">
+                                        <span>Refresh Provider List</span>
+                                        <div class="spinner"></div>
+                                    </button>
+                                </div>
+                                <div class="response-container" id="manage-provider-response">
+                                    <div class="response-label">Provider Details:</div>
+                                    <div id="manage-provider-output" class="output"></div>
+                                </div>
+                            </div>
+
                             <!-- Create Index Section -->
                             <div class="config-section">
                                 <h2>
@@ -992,12 +1054,15 @@
                 // Add provider options
                 embeddingProviders.forEach(provider => {
                     const displayName = provider.type === 'ollama' 
-                        ? `Ollama - ${provider.model}` 
-                        : provider.model;
+                        ? `Ollama - ${provider.model || provider.name}` 
+                        : (provider.model || provider.name);
                     const option = new Option(displayName, provider.name);
                     selector.add(option);
                 });
             });
+            
+            // Also update the manage provider selector
+            updateManageProviderSelector();
         }
 
         // Vector Database API functions
@@ -1473,11 +1538,138 @@
             statsElement.style.display = 'block';
         }
 
+        // Provider management functions
+        async function addEmbeddingProvider() {
+            const name = document.getElementById('new-provider-name').value.trim();
+            const type = document.getElementById('new-provider-type').value;
+            const host = document.getElementById('new-provider-host').value.trim();
+            const model = document.getElementById('new-provider-model').value.trim();
+            const dimension = parseInt(document.getElementById('new-provider-dimension').value);
+            
+            if (!name || !host || !model || !dimension) {
+                showToast('Please fill in all fields', 'error');
+                return;
+            }
+            
+            if (dimension < 1 || dimension > 4096) {
+                showToast('Dimension must be between 1 and 4096', 'error');
+                return;
+            }
+            
+            showSpinner('add-provider-button');
+            try {
+                const response = await fetch('/api/vectordb/providers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        type,
+                        config: {
+                            host,
+                            model,
+                            dimension
+                        }
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                document.getElementById('add-provider-output').textContent = JSON.stringify(result, null, 2);
+                showResponse('add-provider-response');
+                showToast('Provider added successfully!');
+                
+                // Clear form
+                document.getElementById('new-provider-name').value = '';
+                document.getElementById('new-provider-model').value = '';
+                document.getElementById('new-provider-dimension').value = '';
+                
+                // Refresh provider lists
+                await loadEmbeddingProviders();
+                updateManageProviderSelector();
+            } catch (error) {
+                document.getElementById('add-provider-output').textContent = JSON.stringify({ error: error.message }, null, 2);
+                showResponse('add-provider-response');
+                showToast('Failed to add provider: ' + error.message, 'error');
+            } finally {
+                hideSpinner('add-provider-button');
+            }
+        }
+
+        async function removeEmbeddingProvider() {
+            const providerName = document.getElementById('manage-provider-selector').value;
+            
+            if (!providerName) {
+                showToast('Please select a provider to remove', 'error');
+                return;
+            }
+            
+            if (!confirm(`Are you sure you want to remove provider "${providerName}"? This action cannot be undone.`)) {
+                return;
+            }
+            
+            showSpinner('remove-provider-button');
+            try {
+                const response = await fetch(`/api/vectordb/providers/${encodeURIComponent(providerName)}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                document.getElementById('manage-provider-output').textContent = JSON.stringify(result, null, 2);
+                showResponse('manage-provider-response');
+                showToast('Provider removed successfully!');
+                
+                // Refresh provider lists
+                await loadEmbeddingProviders();
+                updateManageProviderSelector();
+            } catch (error) {
+                document.getElementById('manage-provider-output').textContent = JSON.stringify({ error: error.message }, null, 2);
+                showResponse('manage-provider-response');
+                showToast('Failed to remove provider: ' + error.message, 'error');
+            } finally {
+                hideSpinner('remove-provider-button');
+            }
+        }
+
+        async function refreshProviderList() {
+            showSpinner('refresh-providers-button');
+            try {
+                await loadEmbeddingProviders();
+                updateManageProviderSelector();
+                showToast('Provider list refreshed successfully!');
+            } catch (error) {
+                showToast('Failed to refresh provider list: ' + error.message, 'error');
+            } finally {
+                hideSpinner('refresh-providers-button');
+            }
+        }
+
+        function updateManageProviderSelector() {
+            const selector = document.getElementById('manage-provider-selector');
+            if (!selector) return;
+            
+            // Clear existing options except the first one
+            selector.innerHTML = '<option value="">Select a provider to manage...</option>';
+            
+            // Add provider options (only show registry providers that can be removed)
+            embeddingProviders.forEach(provider => {
+                const option = new Option(provider.name, provider.name);
+                selector.appendChild(option);
+            });
+        }
+
         // Initialize the page
         document.addEventListener('DOMContentLoaded', async () => {
             // Load initial data for search tab
             await loadEmbeddingProviders();
             await listVectorIndices();
+            updateManageProviderSelector();
         });
     </script>
 </body>
