@@ -6,3 +6,4 @@ dist/
 .ipython/
 .ipynb_checkpoints/
 .env
+example_agents_data/

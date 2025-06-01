@@ -8,7 +8,8 @@
     "pyodide": "npm:pyodide@0.27.5",
     "node:events": "https://deno.land/std@0.177.0/node/events.ts",
     "comlink": "https://esm.sh/comlink@4.3.1",
-    "ollama": "npm:ollama@^0.5.0"
+    "ollama": "npm:ollama@^0.5.0",
+    "openai": "npm:openai@^4.65.0"
   },
   "tasks": {
     "test": "deno test -A --no-check tests/worker_test.ts tests/vectordb_comprehensive_test.ts",
@@ -17,6 +18,7 @@
     "test-vectordb-ollama": "deno test -A --no-check tests/vectordb_ollama_test.ts",
     "test-vectordb-stress": "deno run -A --no-check tests/vectordb_stress_test.ts",
     "test-vectordb-integration": "deno run -A --no-check tests/vectordb_integration_test.ts",
+    "test-agents": "deno test -A --no-check tests/agents_test.ts",
     "example": "deno run -A examples/main.ts",
     "example-ollama": "deno run -A --no-check examples/vectordb-ollama-example.ts",
     "generate-wheels": "cd kernel && python3 generate-wheels-js.py",
