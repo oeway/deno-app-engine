@@ -286,77 +286,91 @@ export async function* chatCompletion({
         }
 
         // Handle script execution
-        if(!onExecuteCode){
-          throw new Error('onExecuteCode is not defined');
-        }
-
-
-        // Extract script content if it exists
         const scriptContent = extractScript(accumulatedResponse);
         if (scriptContent) {
-          // Check if abort signal was triggered before tool execution
-          if (signal.aborted) {
-            console.log('Chat completion tool execution aborted by user');
-            return;
-          }
+          if (!onExecuteCode) {
+            // No code execution handler available - skip execution and inform the model
+            console.warn('Script execution detected but no onExecuteCode handler available');
+            
+            // Get the script tag type that was actually used
+            const scriptTagType = getScriptTagType(accumulatedResponse);
+            
+            // Add the tool call to messages with XML format
+            messages.push({
+              role: 'assistant',
+              content: `<thoughts>${thoughts}</thoughts>\n<${scriptTagType} id="${completionId}">${scriptContent}</${scriptTagType}>`
+            });
 
-          yield {
-            type: 'function_call',
-            name: 'runCode',
-            arguments: {
-              code: scriptContent,
-            },
-            call_id: completionId
-          };
+            // Add an error message to indicate code execution is not available
+            messages.push({
+              role: 'user',
+              content: `<observation>Code execution is not available in this context. Please provide a text-based response instead.</observation>`
+            });
+          } else {
+            // Check if abort signal was triggered before tool execution
+            if (signal.aborted) {
+              console.log('Chat completion tool execution aborted by user');
+              return;
+            }
 
-          // Get the script tag type that was actually used
-          const scriptTagType = getScriptTagType(accumulatedResponse);
-
-          // Add the tool call to messages with XML format
-          messages.push({
-            role: 'assistant',
-            content: `<thoughts>${thoughts}</thoughts>\n<${scriptTagType} id="${completionId}">${scriptContent}</${scriptTagType}>`
-          });
-
-          // on Streaming about executing the code
-          if(onStreaming){
-            onStreaming(completionId, `Executing code...`);
-          }
-
-          // Execute the tool call
-          try {
-            const result = await onExecuteCode(
-              completionId,
-              scriptContent
-            );
-
-            // Yield the tool call output
             yield {
-              type: 'function_call_output',
-              content: result,
+              type: 'function_call',
+              name: 'runCode',
+              arguments: {
+                code: scriptContent,
+              },
               call_id: completionId
             };
 
-            // Add tool response to messages
-            messages.push({
-              role: 'user',
-              content: `<observation>I have executed the code. Here are the outputs:\n\`\`\`\n${result}\n\`\`\`\nNow continue with the next step.</observation>`
-            });
-          } catch (error) {
-            console.error('Error executing code:', error);
-            const errorMessage = `Error executing code: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            // Get the script tag type that was actually used
+            const scriptTagType = getScriptTagType(accumulatedResponse);
 
-            yield {
-              type: 'error',
-              content: errorMessage,
-              error: error instanceof Error ? error : new Error(errorMessage)
-            };
-
-            // Add error message to messages so the model can attempt recovery
+            // Add the tool call to messages with XML format
             messages.push({
-              role: 'user',
-              content: `<observation>Error executing the code: ${error instanceof Error ? error.message : 'Unknown error'}\nPlease try a different approach.</observation>`
+              role: 'assistant',
+              content: `<thoughts>${thoughts}</thoughts>\n<${scriptTagType} id="${completionId}">${scriptContent}</${scriptTagType}>`
             });
+
+            // on Streaming about executing the code
+            if(onStreaming){
+              onStreaming(completionId, `Executing code...`);
+            }
+
+            // Execute the tool call
+            try {
+              const result = await onExecuteCode(
+                completionId,
+                scriptContent
+              );
+
+              // Yield the tool call output
+              yield {
+                type: 'function_call_output',
+                content: result,
+                call_id: completionId
+              };
+
+              // Add tool response to messages
+              messages.push({
+                role: 'user',
+                content: `<observation>I have executed the code. Here are the outputs:\n\`\`\`\n${result}\n\`\`\`\nNow continue with the next step.</observation>`
+              });
+            } catch (error) {
+              console.error('Error executing code:', error);
+              const errorMessage = `Error executing code: ${error instanceof Error ? error.message : 'Unknown error'}`;
+
+              yield {
+                type: 'error',
+                content: errorMessage,
+                error: error instanceof Error ? error : new Error(errorMessage)
+              };
+
+              // Add error message to messages so the model can attempt recovery
+              messages.push({
+                role: 'user',
+                content: `<observation>Error executing the code: ${error instanceof Error ? error.message : 'Unknown error'}\nPlease try a different approach.</observation>`
+              });
+            }
           }
         }
         else{

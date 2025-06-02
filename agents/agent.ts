@@ -20,7 +20,10 @@ export enum AgentEvents {
   AGENT_CODE_EXECUTED = "agent_code_executed",
   AGENT_ERROR = "agent_error",
   KERNEL_ATTACHED = "kernel_attached",
-  KERNEL_DETACHED = "kernel_detached"
+  KERNEL_DETACHED = "kernel_detached",
+  MODEL_ADDED = "model_added",
+  MODEL_REMOVED = "model_removed",
+  MODEL_UPDATED = "model_updated"
 }
 
 export enum KernelType {
@@ -247,21 +250,27 @@ Follow this iterative cycle meticulously:
 1.  **Thought:** Analyze the task and the current state. Explain your reasoning for the next step, including what you need to achieve or calculate. Keep thoughts concise (max ~15 words) within <thoughts> tags.
     Example: <thoughts>Need to calculate the area, will use length * width</thoughts>
 
-2.  **Action (Code):** Write JavaScript code within <js-script> tags to perform the necessary actions (calculations, data manipulation). Remember:
-    - The code runs in a modern JavaScript environment.
+2.  **Action (Code):** Write JavaScript code within <t-script> tags to perform the necessary actions (calculations, data manipulation). Remember:
+    - The code runs in a modern JavaScript environment with Deno
+    - Use standard JavaScript/ES6+ syntax
     - **Crucially, use \`console.log()\` statements** to output any results, variables, or confirmations that you will need for subsequent steps. Only logged output becomes available in the Observation.
-    - Each code block gets a unique ID: <js-script id="abc123">
+    - Each code block gets a unique ID: <t-script id="abc123">
     Example:
-    <thoughts>Calculate area and log it</thoughts>
-    <js-script id="area_calc">
+    <thoughts>Calculate area and print it</thoughts>
+    <t-script id="area_calc">
     const length = 10;
     const width = 5;
     const area = length * width;
     console.log(\`Calculated area: \${area}\`);
-    console.log("Calculation completed successfully");
-    </js-script>
+    </t-script>
 
-3.  **Observation:** After your <js-script> executes, the user will provide its logged output within an <observation> tag. Carefully review this observation to inform your next thought and action.
+3.  **Observation:** After your <t-script> executes, the user will provide its printed output within an <observation> tag. Carefully review this observation to inform your next thought and action.
+    Example User Response:
+    <observation>I have executed the code. Here are the outputs:
+    \`\`\`
+    Calculated area: 50
+    \`\`\`
+    Now continue with the next step.</observation>
 
 4.  **Final Response:** Use <returnToUser> tags to conclude the current round of conversation and return control to the user. This should be used when:
     - The task is fully completed based on your reasoning and observations
@@ -269,18 +278,39 @@ Follow this iterative cycle meticulously:
     - You've reached a logical stopping point in the conversation
     - You want to provide an interim result or update to the user
 
+    - **Code and output Preservation:** If specific code cells (<t-script>) are vital context for the final answer, preserve them using the \`commit="id1,id2,..."\` attribute.
+    Example:
+    <thoughts>Task complete, area calculated</thoughts>
+    <returnToUser commit="area_calc">
+    The calculated area is 50. The calculation was performed using JavaScript.
+    </returnToUser>
+    - **Always commit key code and outputs:** Importantly, all the uncommitted code and output are discarded, and the user and subsequent steps will not be able to see them.
+
 KEY RULES TO FOLLOW:
 - Always start your response with <thoughts>.
-- Follow <thoughts> with EITHER <js-script> OR <returnToUser>.
-- State Persistence: Variables and imports persist between code executions within this session.
-- Use \`console.log()\` to output any results you need to remember or use later.
-- Clean Code: Write clear, modern JavaScript code.
-- Use modern ES6+ features like destructuring, arrow functions, async/await.
+- Follow <thoughts> with EITHER <t-script> OR <returnToUser>.
+- State Persistence: Variables and functions persist between code executions within this session.
+- Variable Scope: Only use variables defined in previous code steps within the current session or provided in the initial request.
+- Define Before Use: Ensure variables are assigned/defined before you use them.
+- Observation is Key: Base your next 'Thought' on the actual output in the 'Observation', not just what you intended to happen.
+- Print for State: Explicitly \`console.log()\` anything you need to remember or use later.
+- Clean Code: Write clear, simple JavaScript code.
+- Be Precise: Execute the user's request exactly. Don't add unasked-for functionality.
+- Return to User: Use <returnToUser commit="id1,id2,..."> when you need to conclude the current round of conversation, commit code and outputs, and return control to the user. This includes when the task is complete, when you need more information, or when you've reached a logical stopping point.
+- Don't Give Up: If you encounter an error, analyze the observation and try a different approach in your next thought/code cycle.
 
 RUNTIME ENVIRONMENT:
-- Modern JavaScript (ES6+) environment
-- Use \`console.log()\` for output that becomes available in observations
+- Modern JavaScript (ES6+) running in Deno
 - Standard JavaScript APIs available
+- Use \`console.log()\` statements to output any results, variables, or confirmations that you will need for subsequent steps. Only logged output becomes available in the Observation.
+- For async operations, use async/await syntax
+- TypeScript features can be used but are optional since this is JavaScript mode
+
+INTERNAL API ACCESS:
+- You have access to an \`api\` object to call pre-defined internal functions.
+- Example (Vision): Use \`await api.inspectImages(images=[{url: 'data:image/png;base64,...'}], query='Describe this image')\` to visually inspect images under certain context using vision-capable models.
+- Example (Chat): Use \`await api.chatCompletion(messages=[{role: 'system', content: 'You are a helpful assistant.'}, {role: 'user', content: 'Hello! How are you?'}], max_tokens=50)\` to perform a direct chat completion using the agent's configured model and settings. It takes a list of messages (including optional system messages) and optional max_tokens.
+- Example (Chat with JSON Schema): Use \`await api.chatCompletion(messages=[{role: 'user', content: 'Extract the name and age from this text: John Doe is 30 years old.'}], response_format={type: 'json_schema', json_schema: {name: 'user_info', schema: {type: 'object', properties: {name: {type: 'string'}, age: {type: 'integer'}}, required: ['name', 'age']}}})\` to force the chat response into a specific JSON structure.
 
 `
 };
@@ -486,8 +516,28 @@ export class Agent implements IAgentInstance {
       // Add user messages to conversation history
       this.conversationHistory.push(...messages);
       
+      let hasAssistantResponse = false;
+      let assistantContent = '';
+      
       // Start chat completion
-      yield* chatCompletion(completionOptions);
+      for await (const chunk of chatCompletion(completionOptions)) {
+        if (chunk.type === 'text') {
+          assistantContent = chunk.content || '';
+          hasAssistantResponse = true;
+        }
+        yield chunk;
+      }
+      
+      // Ensure assistant response is added to conversation history if not already added by onMessage
+      if (hasAssistantResponse && assistantContent && 
+          (!this.conversationHistory.length || 
+           this.conversationHistory[this.conversationHistory.length - 1].role !== 'assistant' ||
+           this.conversationHistory[this.conversationHistory.length - 1].content !== assistantContent)) {
+        this.conversationHistory.push({
+          role: 'assistant',
+          content: assistantContent
+        });
+      }
       
       // Save conversation if auto-save is enabled
       if (this.manager.getAutoSaveConversations()) {

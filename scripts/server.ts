@@ -82,15 +82,31 @@ function getKernelManagerOptions(): IKernelManagerOptions {
       const [modeStr, langStr] = typeStr.trim().split("-");
       
       const mode = modeStr === "main_thread" ? KernelMode.MAIN_THREAD : KernelMode.WORKER;
-      const language = langStr === "typescript" ? KernelLanguage.TYPESCRIPT : KernelLanguage.PYTHON;
+      let language: KernelLanguage;
+      switch (langStr?.toLowerCase()) {
+        case "typescript":
+        case "ts":
+          language = KernelLanguage.TYPESCRIPT;
+          break;
+        case "javascript":
+        case "js":
+          language = KernelLanguage.JAVASCRIPT;
+          break;
+        case "python":
+        case "py":
+        default:
+          language = KernelLanguage.PYTHON;
+          break;
+      }
       
       return { mode, language };
     });
   } else {
-    // Default: only worker kernels for security
+    // Default: only worker kernels for security, supporting all three languages
     allowedKernelTypes = [
       { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
-      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT },
+      { mode: KernelMode.WORKER, language: KernelLanguage.JAVASCRIPT }
     ];
   }
   
@@ -109,7 +125,22 @@ function getKernelManagerOptions(): IKernelManagerOptions {
       const [modeStr, langStr] = typeStr.trim().split("-");
       
       const mode = modeStr === "main_thread" ? KernelMode.MAIN_THREAD : KernelMode.WORKER;
-      const language = langStr === "typescript" ? KernelLanguage.TYPESCRIPT : KernelLanguage.PYTHON;
+      let language: KernelLanguage;
+      switch (langStr?.toLowerCase()) {
+        case "typescript":
+        case "ts":
+          language = KernelLanguage.TYPESCRIPT;
+          break;
+        case "javascript":
+        case "js":
+          language = KernelLanguage.JAVASCRIPT;
+          break;
+        case "python":
+        case "py":
+        default:
+          language = KernelLanguage.PYTHON;
+          break;
+      }
       
       return { mode, language };
     });
@@ -375,10 +406,30 @@ export async function handleRequest(req: Request): Promise<Response> {
         try {
           const body = await req.json();
           
+          // Map language string to KernelLanguage enum
+          let language: KernelLanguage = KernelLanguage.PYTHON; // Default
+          if (body.lang) {
+            switch (body.lang.toLowerCase()) {
+              case "typescript":
+              case "ts":
+                language = KernelLanguage.TYPESCRIPT;
+                break;
+              case "javascript":
+              case "js":
+                language = KernelLanguage.JAVASCRIPT;
+                break;
+              case "python":
+              case "py":
+              default:
+                language = KernelLanguage.PYTHON;
+                break;
+            }
+          }
+          
           const kernelId = await kernelManager.createKernel({
             id: body.id || crypto.randomUUID(),
             mode: body.mode || KernelMode.WORKER,
-            lang: body.lang,
+            lang: language,
           });
           
           const kernel = kernelManager.getKernel(kernelId);
