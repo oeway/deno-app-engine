@@ -1,6 +1,7 @@
 import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
 import { VectorDBManager, type IDocument, type IQueryOptions, createOllamaEmbeddingProvider } from "../vectordb/mod.ts";
+import { AgentManager, AgentEvents, KernelType, type IAgentConfig } from "../agents/mod.ts";
 import { Status } from "https://deno.land/std@0.201.0/http/http_status.ts";
 import { contentType } from "https://deno.land/std/media_types/mod.ts";
 
@@ -35,6 +36,14 @@ const EMBEDDING_PROVIDERS = {
     dimension: 1024,
     description: "Ollama snowflake-arctic-embed model (1024D)"
   },
+};
+
+// Default model settings for agents
+const DEFAULT_AGENT_MODEL_SETTINGS = {
+  baseURL: Deno.env.get("AGENT_MODEL_BASE_URL") || "http://localhost:11434/v1/",
+  apiKey: Deno.env.get("AGENT_MODEL_API_KEY") || "ollama",
+  model: Deno.env.get("AGENT_MODEL_NAME") || "qwen2.5-coder:7b",
+  temperature: parseFloat(Deno.env.get("AGENT_MODEL_TEMPERATURE") || "0.7")
 };
 
 // Helper function to create preconfigured providers for the manager
@@ -161,6 +170,29 @@ console.log(`- Max instances: ${parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES")
 console.log(`- Offload directory: ${vectorDBOffloadDirectory}`);
 console.log(`- Default inactivity timeout: ${vectorDBDefaultTimeout}ms (${Math.round(vectorDBDefaultTimeout / 60000)} minutes)`);
 console.log(`- Activity monitoring enabled: ${vectorDBActivityMonitoring}`);
+
+// Configure agent manager options from environment variables
+const agentDataDirectory = Deno.env.get("AGENT_DATA_DIRECTORY") || "./agent_data";
+const maxAgents = parseInt(Deno.env.get("MAX_AGENTS") || "10");
+const autoSaveConversations = Deno.env.get("AUTO_SAVE_CONVERSATIONS") !== "false"; // Default true
+
+// Create a global agent manager instance
+const agentManager = new AgentManager({
+  defaultModelSettings: DEFAULT_AGENT_MODEL_SETTINGS,
+  agentDataDirectory,
+  maxAgents,
+  autoSaveConversations,
+  defaultKernelType: KernelType.PYTHON
+});
+
+// Set the kernel manager for agent kernel integration
+agentManager.setKernelManager(kernelManager);
+
+console.log("Server Agent Manager Configuration:");
+console.log(`- Default model: ${DEFAULT_AGENT_MODEL_SETTINGS.model}`);
+console.log(`- Max agents: ${maxAgents}`);
+console.log(`- Agent data directory: ${agentDataDirectory}`);
+console.log(`- Auto save conversations: ${autoSaveConversations}`);
 
 // Store execution sessions and their results
 interface ExecutionSession {
@@ -289,12 +321,17 @@ export async function handleRequest(req: Request): Promise<Response> {
 
   // Serve index.html at root
   if (path === "/" || path === "/index.html") {
-    return await serveStaticFile("index.html");
+    return await serveStaticFile("static/index.html");
   }
 
   // Serve vector database playground
   if (path === "/vectordb" || path === "/vectordb.html") {
-    return await serveStaticFile("vectordb.html");
+    return await serveStaticFile("static/vectordb.html");
+  }
+
+  // Serve agent playground
+  if (path === "/agents" || path === "/agents.html") {
+    return await serveStaticFile("static/agents.html");
   }
 
   // CORS headers
@@ -1571,6 +1608,372 @@ export async function handleRequest(req: Request): Promise<Response> {
           });
         } catch (error) {
           console.error("Error generating random documents:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Agent API Routes
+      
+      // List agents
+      if (path === "/api/agents" && req.method === "GET") {
+        try {
+          const agents = agentManager.listAgents();
+          return jsonResponse(agents);
+        } catch (error) {
+          console.error("Error listing agents:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Get agent stats
+      if (path === "/api/agents/stats" && req.method === "GET") {
+        try {
+          const stats = agentManager.getStats();
+          return jsonResponse(stats);
+        } catch (error) {
+          console.error("Error getting agent stats:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Create agent
+      if (path === "/api/agents" && req.method === "POST") {
+        try {
+          const body = await req.json();
+          
+          // Convert kernelType string to enum value
+          let kernelType: KernelType | undefined;
+          if (body.kernelType && typeof body.kernelType === 'string') {
+            // Handle both uppercase keys (from frontend) and lowercase values
+            const kernelTypeKey = body.kernelType.toUpperCase() as keyof typeof KernelType;
+            if (kernelTypeKey in KernelType) {
+              kernelType = KernelType[kernelTypeKey];
+              console.log(`✅ Converted kernelType "${body.kernelType}" to ${kernelType}`);
+            } else {
+              console.warn(`⚠️ Invalid kernelType: ${body.kernelType}`);
+            }
+          }
+          
+          const config: IAgentConfig = {
+            id: body.id || crypto.randomUUID(),
+            name: body.name || "New Agent",
+            description: body.description || "",
+            instructions: body.instructions || "You are a helpful assistant.",
+            kernelType: kernelType,
+            maxSteps: body.maxSteps,
+            ModelSettings: body.ModelSettings,
+            autoAttachKernel: body.autoAttachKernel
+          };
+          
+          console.log(`🤖 Creating agent with config:`, {
+            id: config.id,
+            name: config.name,
+            kernelType: config.kernelType,
+            autoAttachKernel: config.autoAttachKernel
+          });
+          
+          const agentId = await agentManager.createAgent(config);
+          const agent = agentManager.getAgent(agentId);
+          
+          // If auto-attach kernel is requested and we have a kernelType, attach it
+          if (config.autoAttachKernel && config.kernelType) {
+            try {
+              console.log(`🔧 Auto-attaching ${config.kernelType} kernel to agent ${agentId}`);
+              await agentManager.attachKernelToAgent(agentId, config.kernelType);
+              console.log(`✅ Kernel attached successfully to agent ${agentId}`);
+            } catch (kernelError) {
+              console.error(`❌ Failed to auto-attach kernel to agent ${agentId}:`, kernelError);
+              // Don't fail the agent creation, just log the error
+            }
+          }
+          
+          // Get updated agent info after potential kernel attachment
+          const updatedAgent = agentManager.getAgent(agentId);
+          
+          return jsonResponse({
+            id: agentId,
+            name: updatedAgent?.name,
+            description: updatedAgent?.description,
+            instructions: updatedAgent?.instructions,
+            kernelType: updatedAgent?.kernelType,
+            hasKernel: !!updatedAgent?.kernel,
+            created: updatedAgent?.created.toISOString(),
+            maxSteps: updatedAgent?.maxSteps
+          });
+        } catch (error) {
+          console.error("Error creating agent:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Get agent info
+      if (path.match(/^\/api\/agents\/[^\/]+$/) && req.method === "GET") {
+        try {
+          const agentId = decodeURIComponent(path.split("/")[3]);
+          const agent = agentManager.getAgent(agentId);
+          
+          if (!agent) {
+            return jsonResponse({ error: "Agent not found" }, Status.NotFound);
+          }
+          
+          return jsonResponse({
+            id: agent.id,
+            name: agent.name,
+            description: agent.description,
+            instructions: agent.instructions,
+            kernelType: agent.kernelType,
+            hasKernel: !!agent.kernel,
+            maxSteps: agent.maxSteps,
+            created: agent.created.toISOString(),
+            conversationLength: agent.conversationHistory.length,
+            ModelSettings: agent.ModelSettings
+          });
+        } catch (error) {
+          console.error("Error getting agent info:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Update agent
+      if (path.match(/^\/api\/agents\/[^\/]+$/) && req.method === "PUT") {
+        try {
+          const agentId = decodeURIComponent(path.split("/")[3]);
+          const body = await req.json();
+          
+          await agentManager.updateAgent(agentId, {
+            name: body.name,
+            description: body.description,
+            instructions: body.instructions,
+            kernelType: body.kernelType ? KernelType[body.kernelType as keyof typeof KernelType] : undefined,
+            maxSteps: body.maxSteps,
+            ModelSettings: body.ModelSettings
+          });
+          
+          const agent = agentManager.getAgent(agentId);
+          return jsonResponse({
+            success: true,
+            message: "Agent updated successfully",
+            agent: {
+              id: agent?.id,
+              name: agent?.name,
+              description: agent?.description,
+              instructions: agent?.instructions,
+              kernelType: agent?.kernelType,
+              hasKernel: !!agent?.kernel
+            }
+          });
+        } catch (error) {
+          console.error("Error updating agent:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Delete agent
+      if (path.match(/^\/api\/agents\/[^\/]+$/) && req.method === "DELETE") {
+        try {
+          const agentId = decodeURIComponent(path.split("/")[3]);
+          
+          await agentManager.destroyAgent(agentId);
+          
+          return jsonResponse({
+            success: true,
+            message: `Agent ${agentId} deleted successfully`
+          });
+        } catch (error) {
+          console.error("Error deleting agent:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Chat with agent
+      if (path.match(/^\/api\/agents\/[^\/]+\/chat$/) && req.method === "POST") {
+        try {
+          const agentId = decodeURIComponent(path.split("/")[3]);
+          const body = await req.json();
+          const message = body.message;
+          
+          if (!message) {
+            return jsonResponse({ error: "Message is required" }, Status.BadRequest);
+          }
+          
+          const agent = agentManager.getAgent(agentId);
+          if (!agent) {
+            return jsonResponse({ error: "Agent not found" }, Status.NotFound);
+          }
+          
+          // Add the user message to conversation history
+          const messages = [...agent.conversationHistory, { role: "user" as const, content: message }];
+          
+          // Set up streaming response
+          const stream = new ReadableStream({
+            async start(controller) {
+              let isClosed = false;
+              
+              try {
+                const sendEvent = (data: any) => {
+                  if (!isClosed) {
+                    try {
+                      const event = `data: ${JSON.stringify(data)}\n\n`;
+                      controller.enqueue(new TextEncoder().encode(event));
+                    } catch (error) {
+                      isClosed = true;
+                    }
+                  }
+                };
+                
+                // Start chat completion stream
+                for await (const chunk of agent.chatCompletion(messages)) {
+                  sendEvent(chunk);
+                  
+                  // If there's an error, break the stream
+                  if (chunk.type === 'error') {
+                    break;
+                  }
+                }
+                
+                if (!isClosed) {
+                  controller.close();
+                  isClosed = true;
+                }
+              } catch (error) {
+                if (!isClosed) {
+                  try {
+                    const errorEvent = `data: ${JSON.stringify({
+                      type: "error",
+                      error: error instanceof Error ? error.message : String(error)
+                    })}\n\n`;
+                    controller.enqueue(new TextEncoder().encode(errorEvent));
+                    controller.close();
+                    isClosed = true;
+                  } catch (closeError) {
+                    isClosed = true;
+                  }
+                }
+              }
+            }
+          });
+          
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type",
+            },
+          });
+        } catch (error) {
+          console.error("Error in agent chat:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Get agent conversation history
+      if (path.match(/^\/api\/agents\/[^\/]+\/conversation$/) && req.method === "GET") {
+        try {
+          const agentId = decodeURIComponent(path.split("/")[3]);
+          const agent = agentManager.getAgent(agentId);
+          
+          if (!agent) {
+            return jsonResponse({ error: "Agent not found" }, Status.NotFound);
+          }
+          
+          return jsonResponse({
+            conversation: agent.conversationHistory,
+            length: agent.conversationHistory.length
+          });
+        } catch (error) {
+          console.error("Error getting agent conversation:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Clear agent conversation
+      if (path.match(/^\/api\/agents\/[^\/]+\/conversation$/) && req.method === "DELETE") {
+        try {
+          const agentId = decodeURIComponent(path.split("/")[3]);
+          
+          await agentManager.clearConversation(agentId);
+          
+          return jsonResponse({
+            success: true,
+            message: "Conversation cleared successfully"
+          });
+        } catch (error) {
+          console.error("Error clearing agent conversation:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Attach kernel to agent
+      if (path.match(/^\/api\/agents\/[^\/]+\/kernel$/) && req.method === "POST") {
+        try {
+          const agentId = decodeURIComponent(path.split("/")[3]);
+          const body = await req.json();
+          const kernelType = body.kernelType ? KernelType[body.kernelType as keyof typeof KernelType] : KernelType.PYTHON;
+          
+          await agentManager.attachKernelToAgent(agentId, kernelType);
+          
+          const agent = agentManager.getAgent(agentId);
+          return jsonResponse({
+            success: true,
+            message: "Kernel attached successfully",
+            hasKernel: !!agent?.kernel,
+            kernelType: agent?.kernelType
+          });
+        } catch (error) {
+          console.error("Error attaching kernel to agent:", error);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            Status.InternalServerError
+          );
+        }
+      }
+
+      // Detach kernel from agent
+      if (path.match(/^\/api\/agents\/[^\/]+\/kernel$/) && req.method === "DELETE") {
+        try {
+          const agentId = decodeURIComponent(path.split("/")[3]);
+          
+          await agentManager.detachKernelFromAgent(agentId);
+          
+          return jsonResponse({
+            success: true,
+            message: "Kernel detached successfully"
+          });
+        } catch (error) {
+          console.error("Error detaching kernel from agent:", error);
           return jsonResponse(
             { error: error instanceof Error ? error.message : String(error) },
             Status.InternalServerError

@@ -16,7 +16,8 @@ export enum KernelMode {
 // Kernel language enum
 export enum KernelLanguage {
   PYTHON = "python",
-  TYPESCRIPT = "typescript"
+  TYPESCRIPT = "typescript",
+  JAVASCRIPT = "javascript"
 }
 
 // Extended WorkerOptions interface to include Deno permissions
@@ -164,7 +165,8 @@ export class KernelManager extends EventEmitter {
     // Set default allowed kernel types (worker mode only for security)
     this.allowedKernelTypes = options.allowedKernelTypes || [
       { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
-      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT },
+      { mode: KernelMode.WORKER, language: KernelLanguage.JAVASCRIPT }
     ];
     
     // Initialize pool configuration with defaults based on allowed types
@@ -899,9 +901,11 @@ export class KernelManager extends EventEmitter {
     
     // Create the appropriate kernel based on language
     let kernel: IKernel;
-    if (language === KernelLanguage.TYPESCRIPT) {
+    if (language === KernelLanguage.TYPESCRIPT || language === KernelLanguage.JAVASCRIPT) {
+      // Both TypeScript and JavaScript use the TypeScriptKernel since it handles both
       kernel = new TypeScriptKernel();
     } else {
+      // Default to Python kernel
       kernel = new Kernel();
     }
     
@@ -957,7 +961,8 @@ export class KernelManager extends EventEmitter {
     }
     
     // Select the worker file based on the language
-    const workerFile = language === KernelLanguage.TYPESCRIPT ? 
+    // Both TypeScript and JavaScript use the same TypeScript worker
+    const workerFile = (language === KernelLanguage.TYPESCRIPT || language === KernelLanguage.JAVASCRIPT) ? 
       "./tsWorker.ts" : 
       "./worker.ts";
     
@@ -2827,14 +2832,15 @@ export class KernelManager extends EventEmitter {
     try {
       // Get the kernel instance to check the language
       const instance = this.kernels.get(id);
-      const isTypeScriptKernel = instance?.language === KernelLanguage.TYPESCRIPT;
+      const isTypeScriptOrJavaScriptKernel = instance?.language === KernelLanguage.TYPESCRIPT || 
+                                             instance?.language === KernelLanguage.JAVASCRIPT;
       
-      if (isTypeScriptKernel) {
-        // TypeScript kernels don't support interrupt buffers like Python/Pyodide
+      if (isTypeScriptOrJavaScriptKernel) {
+        // TypeScript and JavaScript kernels don't support interrupt buffers like Python/Pyodide
         // But we still send the message to get acknowledgment and avoid timeout
         worker.postMessage({
           type: "SET_INTERRUPT_BUFFER",
-          buffer: null // No actual buffer for TypeScript
+          buffer: null // No actual buffer for TypeScript/JavaScript
         });
         
         // Wait for acknowledgment
@@ -2854,7 +2860,7 @@ export class KernelManager extends EventEmitter {
           worker.addEventListener("message", handler);
         });
         
-        return; // No actual buffer to store for TypeScript kernels
+        return; // No actual buffer to store for TypeScript/JavaScript kernels
       }
       
       // For Python kernels, create actual SharedArrayBuffer

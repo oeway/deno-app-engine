@@ -1,6 +1,7 @@
 {
   "version": "4",
   "specifiers": {
+    "jsr:@std/encoding@*": "1.0.10",
     "npm:fake-indexeddb@*": "6.0.1",
     "npm:hypha-rpc@*": "0.20.53-post-1",
     "npm:lodash@*": "4.17.21",
@@ -10,6 +11,11 @@
     "npm:openai@^4.65.0": "4.104.0",
     "npm:pyodide@*": "0.27.5",
     "npm:pyodide@0.27.5": "0.27.5"
+  },
+  "jsr": {
+    "@std/encoding@1.0.10": {
+      "integrity": "8783c6384a2d13abd5e9e87a7ae0520a30e9f56aeeaa3bdf910a3eaaf5c811a1"
+    }
   },
   "npm": {
     "@msgpack/msgpack@2.8.0": {

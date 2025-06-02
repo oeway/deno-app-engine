@@ -1,40 +1,33 @@
 // Agent Manager for Deno App Engine
 // This file manages AI agent instances with optional kernel integration
 
-import { EventEmitter } from "https://deno.land/std@0.177.0/node/events.ts";
+import { EventEmitter } from "node:events";
 import { ensureDir, exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
 import { join } from "https://deno.land/std@0.208.0/path/mod.ts";
 import { 
-  chatCompletion, 
-  type ChatCompletionOptions, 
   type ChatMessage,
   type ModelSettings,
   DefaultModelSettings
-} from "../resources/chatCompletion.ts";
+} from "./chatCompletion.ts";
 import type { IKernelInstance } from "../kernel/mod.ts";
+import { 
+  Agent, 
+  AgentEvents, 
+  KernelType, 
+  type IAgentConfig, 
+  type IAgentInstance 
+} from "./agent.ts";
+import { KernelLanguage } from "../kernel/manager.ts";
 
-// Agent events
-export enum AgentEvents {
-  AGENT_CREATED = "agent_created",
-  AGENT_DESTROYED = "agent_destroyed",
-  AGENT_UPDATED = "agent_updated",
-  AGENT_MESSAGE = "agent_message",
-  AGENT_STREAMING = "agent_streaming",
-  AGENT_CODE_EXECUTED = "agent_code_executed",
-  AGENT_ERROR = "agent_error",
-  KERNEL_ATTACHED = "kernel_attached",
-  KERNEL_DETACHED = "kernel_detached",
+// Model registry events (additional to AgentEvents)
+export enum ModelEvents {
   MODEL_ADDED = "model_added",
   MODEL_REMOVED = "model_removed",
   MODEL_UPDATED = "model_updated"
 }
 
-// Kernel types
-export enum KernelType {
-  PYTHON = "python",
-  TYPESCRIPT = "typescript", 
-  JAVASCRIPT = "javascript"
-}
+// All events (combining AgentEvents and ModelEvents)
+export { AgentEvents, KernelType, type IAgentConfig, type IAgentInstance };
 
 // Interface for model registry entry
 export interface IModelRegistryEntry {
@@ -47,39 +40,6 @@ export interface IModelRegistryEntry {
 // Interface for model registry configuration
 export interface IModelRegistryConfig {
   [modelId: string]: ModelSettings;
-}
-
-// Interface for agent configuration
-export interface IAgentConfig {
-  id: string;
-  name: string;
-  description?: string;
-  instructions?: string;
-  kernelType?: KernelType;
-  ModelSettings?: ModelSettings;
-  modelId?: string; // Name of model from registry
-  maxSteps?: number;
-  autoAttachKernel?: boolean; // Automatically attach kernel on creation
-}
-
-// Interface for agent instance
-export interface IAgentInstance {
-  id: string;
-  name: string;
-  description?: string;
-  instructions?: string;
-  kernelType?: KernelType;
-  kernel?: IKernelInstance;
-  ModelSettings: ModelSettings;
-  maxSteps: number;
-  created: Date;
-  lastUsed?: Date;
-  conversationHistory: ChatMessage[];
-  chatCompletion(messages: ChatMessage[], options?: Partial<ChatCompletionOptions>): AsyncGenerator<any, void, unknown>;
-  attachKernel(kernel: IKernelInstance): void;
-  detachKernel(): void;
-  updateConfig(config: Partial<IAgentConfig>): void;
-  destroy(): void;
 }
 
 // Interface for agent manager options
@@ -102,238 +62,6 @@ interface IConversationData {
   messages: ChatMessage[];
   savedAt: Date;
   metadata?: Record<string, any>;
-}
-
-/**
- * Agent class represents a single AI agent instance
- */
-class Agent implements IAgentInstance {
-  public id: string;
-  public name: string;
-  public description?: string;
-  public instructions?: string;
-  public kernelType?: KernelType;
-  public kernel?: IKernelInstance;
-  public ModelSettings: ModelSettings;
-  public maxSteps: number;
-  public created: Date;
-  public lastUsed?: Date;
-  public conversationHistory: ChatMessage[] = [];
-
-  private manager: AgentManager;
-
-  constructor(config: IAgentConfig, manager: AgentManager) {
-    this.id = config.id;
-    this.name = config.name;
-    this.description = config.description;
-    this.instructions = config.instructions;
-    this.kernelType = config.kernelType;
-    this.ModelSettings = config.ModelSettings || { ...DefaultModelSettings };
-    this.maxSteps = config.maxSteps || 10;
-    this.created = new Date();
-    this.manager = manager;
-
-    // Note: Auto-attach kernel is now handled in createAgent after the agent is added to the map
-  }
-
-  async *chatCompletion(
-    messages: ChatMessage[], 
-    options: Partial<ChatCompletionOptions> = {}
-  ): AsyncGenerator<any, void, unknown> {
-    this.lastUsed = new Date();
-    
-    // Merge agent's conversation history with new messages
-    const fullMessages = [...this.conversationHistory, ...messages];
-    
-    // Build system prompt with agent instructions
-    let systemPrompt = options.systemPrompt || '';
-    if (this.instructions) {
-      systemPrompt = this.instructions + (systemPrompt ? '\n\n' + systemPrompt : '');
-    }
-
-    const completionOptions: ChatCompletionOptions = {
-      messages: fullMessages,
-      systemPrompt,
-      model: options.model || this.ModelSettings.model,
-      temperature: options.temperature || this.ModelSettings.temperature,
-      baseURL: options.baseURL || this.ModelSettings.baseURL,
-      apiKey: options.apiKey || this.ModelSettings.apiKey,
-      maxSteps: options.maxSteps || this.maxSteps,
-      stream: options.stream !== undefined ? options.stream : true,
-      abortController: options.abortController,
-      onExecuteCode: this.kernel ? 
-        (async (completionId: string, code: string): Promise<string> => {
-          if (!this.kernel) {
-            throw new Error('No kernel attached to agent');
-          }
-
-          this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
-            agentId: this.id,
-            code,
-            completionId
-          });
-          
-          try {
-            // Set up event listeners to capture stdout/stderr via the kernel manager
-            let output = '';
-            let hasOutput = false;
-            
-            // Listen to manager events for this specific kernel
-            const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-              if (event.kernelId === this.kernel!.id) {
-                if (event.data.name === 'stdout' || event.data.name === 'stderr') {
-                  output += event.data.text;
-                  hasOutput = true;
-                } else if (event.data.data && event.data.data['text/plain']) {
-                  output += event.data.data['text/plain'] + '\n';
-                  hasOutput = true;
-                } else if (event.data.ename && event.data.evalue) {
-                  output += `${event.data.ename}: ${event.data.evalue}\n`;
-                  if (event.data.traceback && Array.isArray(event.data.traceback)) {
-                    output += event.data.traceback.join('\n') + '\n';
-                  }
-                  hasOutput = true;
-                }
-              }
-            };
-            
-            // Listen for kernel events through the manager
-            if (this.manager.kernelManager) {
-              this.manager.kernelManager.on('stream', handleManagerEvent);
-              this.manager.kernelManager.on('execute_result', handleManagerEvent);
-              this.manager.kernelManager.on('execute_error', handleManagerEvent);
-            }
-            
-            try {
-              // Execute the code through the kernel manager instead of directly
-              const result = this.manager.kernelManager 
-                ? await this.manager.kernelManager.execute(this.kernel.id, code)
-                : await this.kernel.kernel.execute(code);
-              
-              // Give a moment for any remaining events to be processed
-              await new Promise(resolve => setTimeout(resolve, 100));
-              
-              // Clean up listeners
-              if (this.manager.kernelManager) {
-                this.manager.kernelManager.off('stream', handleManagerEvent);
-                this.manager.kernelManager.off('execute_result', handleManagerEvent);
-                this.manager.kernelManager.off('execute_error', handleManagerEvent);
-              }
-              
-              if (result.success) {
-                // Return captured output if available, otherwise success message
-                return hasOutput ? output.trim() : 'Code executed successfully';
-              } else {
-                // Include any captured output plus the error
-                const errorMsg = result.error?.message || 'Code execution failed';
-                return hasOutput ? `${output.trim()}\n${errorMsg}` : errorMsg;
-              }
-            } catch (cleanupError) {
-              // Ensure listeners are cleaned up even if execution fails
-              if (this.manager.kernelManager) {
-                this.manager.kernelManager.off('stream', handleManagerEvent);
-                this.manager.kernelManager.off('execute_result', handleManagerEvent);
-                this.manager.kernelManager.off('execute_error', handleManagerEvent);
-              }
-              throw cleanupError;
-            }
-          } catch (error) {
-            throw new Error(`Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-          }
-        }) : 
-        options.onExecuteCode,
-      onMessage: (completionId: string, message: string, commitIds?: string[]) => {
-        this.manager.emit(AgentEvents.AGENT_MESSAGE, {
-          agentId: this.id,
-          completionId,
-          message,
-          commitIds
-        });
-        
-        // Update conversation history
-        this.conversationHistory.push({
-          role: 'assistant',
-          content: message
-        });
-        
-        if (options.onMessage) {
-          options.onMessage(completionId, message, commitIds);
-        }
-      },
-      onStreaming: (completionId: string, message: string) => {
-        this.manager.emit(AgentEvents.AGENT_STREAMING, {
-          agentId: this.id,
-          completionId,
-          message
-        });
-        
-        if (options.onStreaming) {
-          options.onStreaming(completionId, message);
-        }
-      }
-    };
-
-    try {
-      // Add user messages to conversation history
-      this.conversationHistory.push(...messages);
-      
-      // Start chat completion
-      yield* chatCompletion(completionOptions);
-      
-      // Save conversation if auto-save is enabled
-      if (this.manager.getAutoSaveConversations()) {
-        await this.manager.saveConversation(this.id);
-      }
-    } catch (error) {
-      this.manager.emit(AgentEvents.AGENT_ERROR, {
-        agentId: this.id,
-        error: error instanceof Error ? error : new Error('Unknown chat completion error'),
-        context: 'chat_completion'
-      });
-      throw error;
-    }
-  }
-
-  attachKernel(kernel: IKernelInstance): void {
-    this.kernel = kernel;
-    this.manager.emit(AgentEvents.KERNEL_ATTACHED, {
-      agentId: this.id,
-      kernelId: kernel.id
-    });
-  }
-
-  detachKernel(): void {
-    if (this.kernel) {
-      const kernelId = this.kernel.id;
-      this.kernel = undefined;
-      this.manager.emit(AgentEvents.KERNEL_DETACHED, {
-        agentId: this.id,
-        kernelId
-      });
-    }
-  }
-
-  updateConfig(config: Partial<IAgentConfig>): void {
-    if (config.name !== undefined) this.name = config.name;
-    if (config.description !== undefined) this.description = config.description;
-    if (config.instructions !== undefined) this.instructions = config.instructions;
-    if (config.kernelType !== undefined) this.kernelType = config.kernelType;
-    if (config.ModelSettings !== undefined) this.ModelSettings = { ...this.ModelSettings, ...config.ModelSettings };
-    if (config.maxSteps !== undefined) this.maxSteps = config.maxSteps;
-
-    this.manager.emit(AgentEvents.AGENT_UPDATED, {
-      agentId: this.id,
-      config
-    });
-  }
-
-  destroy(): void {
-    this.detachKernel();
-    this.conversationHistory = [];
-    this.manager.emit(AgentEvents.AGENT_DESTROYED, {
-      agentId: this.id
-    });
-  }
 }
 
 /**
@@ -400,7 +128,7 @@ export class AgentManager extends EventEmitter {
       console.log(`📝 Initialized model: ${modelId} (${modelSettings.model})`);
       
       // Emit model added event
-      this.emit(AgentEvents.MODEL_ADDED, {
+      this.emit(ModelEvents.MODEL_ADDED, {
         modelId,
         data: { 
           id: modelId, 
@@ -520,10 +248,7 @@ export class AgentManager extends EventEmitter {
       config: agentConfig
     });
 
-    // Auto-attach kernel if requested (must be done after agent is added to map)
-    if (config.autoAttachKernel && config.kernelType) {
-      this.attachKernelToAgent(config.id, config.kernelType).catch(console.error);
-    }
+    console.log(`✅ Created agent: ${config.id} (${config.name}) with kernelType: ${config.kernelType}`);
 
     return config.id;
   }
@@ -606,18 +331,17 @@ export class AgentManager extends EventEmitter {
     }
 
     // Create or get a kernel instance
-    const kernelLanguageMap = {
-      [KernelType.PYTHON]: "python",
-      [KernelType.TYPESCRIPT]: "typescript", 
-      [KernelType.JAVASCRIPT]: "javascript"
+    const kernelLanguageMap: Record<KernelType, KernelLanguage> = {
+      [KernelType.PYTHON]: KernelLanguage.PYTHON,
+      [KernelType.TYPESCRIPT]: KernelLanguage.TYPESCRIPT, 
+      [KernelType.JAVASCRIPT]: KernelLanguage.JAVASCRIPT
     };
 
     const kernelLanguage = kernelLanguageMap[kernelType];
     
     // createKernel returns a kernel ID, not the instance
     const kernelId = await this.kernelManager.createKernel({
-      language: kernelLanguage,
-      options: { agentId }
+      lang: kernelLanguage,
     });
 
     // Get the actual kernel instance using the ID
@@ -801,7 +525,7 @@ export class AgentManager extends EventEmitter {
 
     this.modelRegistry.set(id, entry);
 
-    this.emit(AgentEvents.MODEL_ADDED, {
+    this.emit(ModelEvents.MODEL_ADDED, {
       modelId: id,
       data: { 
         id, 
@@ -840,7 +564,7 @@ export class AgentManager extends EventEmitter {
 
     this.modelRegistry.delete(id);
 
-    this.emit(AgentEvents.MODEL_REMOVED, {
+    this.emit(ModelEvents.MODEL_REMOVED, {
       modelId: id,
       data: { id, model: entry.modelSettings.model }
     });
@@ -863,7 +587,7 @@ export class AgentManager extends EventEmitter {
     const oldSettings = { ...entry.modelSettings };
     entry.modelSettings = { ...modelSettings };
 
-    this.emit(AgentEvents.MODEL_UPDATED, {
+    this.emit(ModelEvents.MODEL_UPDATED, {
       modelId: id,
       data: { 
         id, 

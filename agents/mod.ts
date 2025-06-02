@@ -1,16 +1,11 @@
-// Agent Module for Deno App Engine
-// Main module file that exports all agent components
+// Agents module for Deno App Engine
+// This module provides AI agent management with optional kernel integration
 
-export {
-  AgentManager,
-  AgentEvents,
-  KernelType,
-  type IAgentConfig,
-  type IAgentInstance,
-  type IAgentManagerOptions,
-  type IModelRegistryEntry,
-  type IModelRegistryConfig
-} from "./manager.ts";
+// Export everything from manager (includes AgentManager and interfaces)
+export * from "./manager.ts";
+
+// Export everything from agent (includes Agent class and core interfaces)
+export * from "./agent.ts";
 
 // Re-export chat completion types for convenience
 export {
@@ -19,4 +14,4 @@ export {
   type ModelSettings,
   type ChatCompletionOptions,
   DefaultModelSettings
-} from "../resources/chatCompletion.ts"; 
+} from "./chatCompletion.ts"; 
