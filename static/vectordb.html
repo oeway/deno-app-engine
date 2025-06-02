@@ -853,6 +853,12 @@
                                         </select>
                                         <input type="number" id="inactivity-timeout" placeholder="Inactivity timeout (ms)" value="1800000">
                                     </div>
+                                    <div class="form-row">
+                                        <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                            <input type="checkbox" id="resume-index" style="margin: 0;">
+                                            Resume existing index (index ID must exist)
+                                        </label>
+                                    </div>
                                     <button onclick="createVectorIndex()" id="create-button">
                                         <span>Create Index</span>
                                         <div class="spinner"></div>
@@ -1170,10 +1176,12 @@
                 const namespace = document.getElementById('namespace').value;
                 const embeddingProvider = document.getElementById('embedding-provider-selector').value;
                 const inactivityTimeout = parseInt(document.getElementById('inactivity-timeout').value) || 1800000;
+                const resumeIndex = document.getElementById('resume-index').checked;
                 
                 const body = {
                     inactivityTimeout: inactivityTimeout,
-                    enableActivityMonitoring: true
+                    enableActivityMonitoring: true,
+                    resume: resumeIndex
                 };
                 if (indexId) body.id = indexId;
                 if (namespace) body.namespace = namespace;
@@ -1201,6 +1209,7 @@
                 document.getElementById('namespace').value = '';
                 document.getElementById('embedding-provider-selector').value = 'default';
                 document.getElementById('inactivity-timeout').value = '1800000';
+                document.getElementById('resume-index').checked = false;
                 
                 // Refresh lists
                 await listVectorIndices();
@@ -1673,5 +1682,4 @@
         });
     </script>
 </body>
-</html> 
 </html> 

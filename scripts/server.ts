@@ -1315,7 +1315,8 @@ export async function handleRequest(req: Request): Promise<Response> {
             embeddingModel: body.embeddingModel,
             embeddingProviderName: embeddingProviderName,
             inactivityTimeout: body.inactivityTimeout,
-            enableActivityMonitoring: body.enableActivityMonitoring
+            enableActivityMonitoring: body.enableActivityMonitoring,
+            resume: body.resume
           });
           
           const instance = vectorDBManager.getInstance(indexId);

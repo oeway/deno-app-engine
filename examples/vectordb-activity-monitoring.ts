@@ -158,7 +158,8 @@ async function demonstrateActivityMonitoring() {
   console.log(`   Attempting to recreate ${index1}...`);
   const resumedIndex = await manager.createIndex({
     id: "documents",
-    namespace: "workspace1"
+    namespace: "workspace1",
+    resume: true
   });
 
   console.log(`✅ Index recreated: ${resumedIndex}`);

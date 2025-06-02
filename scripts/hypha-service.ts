@@ -700,10 +700,11 @@ async function startHyphaService() {
       embeddingProviderName?: string,
       maxDocuments?: number,
       inactivityTimeout?: number,
-      enableActivityMonitoring?: boolean
+      enableActivityMonitoring?: boolean,
+      resume?: boolean
     }, context: {user: any, ws: string}) {
       try {
-        console.log(`Creating vector index with namespace: ${context.ws}, requested ID: ${options.id || "auto-generated"}`);
+        console.log(`Creating vector index with namespace: ${context.ws}, requested ID: ${options.id || "auto-generated"}, resume: ${options.resume || false}`);
         
         const indexId = await vectorDBManager.createIndex({
           id: options.id || crypto.randomUUID(),
@@ -712,7 +713,8 @@ async function startHyphaService() {
           embeddingProviderName: options.embeddingProviderName,
           maxDocuments: options.maxDocuments,
           inactivityTimeout: options.inactivityTimeout,
-          enableActivityMonitoring: options.enableActivityMonitoring
+          enableActivityMonitoring: options.enableActivityMonitoring,
+          resume: options.resume
         });
         
         console.log(`Vector index created with ID: ${indexId}`);

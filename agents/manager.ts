@@ -250,6 +250,24 @@ export class AgentManager extends EventEmitter {
 
     console.log(`✅ Created agent: ${config.id} (${config.name}) with kernelType: ${config.kernelType}`);
 
+    // Auto-attach kernel if requested and conditions are met
+    if (config.autoAttachKernel && config.kernelType && this.kernelManager_) {
+      try {
+        console.log(`🔧 Auto-attaching ${config.kernelType} kernel to agent: ${config.id}`);
+        await this.attachKernelToAgent(config.id, config.kernelType);
+        console.log(`✅ Successfully auto-attached kernel to agent: ${config.id}`);
+      } catch (error) {
+        console.error(`❌ Failed to auto-attach kernel to agent ${config.id}:`, error);
+        // Emit an error event but don't fail agent creation
+        this.emit(AgentEvents.AGENT_ERROR, {
+          agentId: config.id,
+          error: new Error(`Failed to auto-attach kernel: ${error instanceof Error ? error.message : String(error)}`)
+        });
+      }
+    } else if (config.autoAttachKernel && !this.kernelManager_) {
+      console.warn(`⚠️ Auto-attach kernel requested for agent ${config.id} but no kernel manager is set`);
+    }
+
     return config.id;
   }
 

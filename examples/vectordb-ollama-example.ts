@@ -1,81 +1,40 @@
 // VectorDB Ollama Integration Example
 // Demonstrates how to use VectorDB with Ollama as the embedding provider
 
-import { VectorDBManager, type IEmbeddingProvider } from "../vectordb/mod.ts";
+import { VectorDBManager, type IDocument, type IQueryOptions, createOllamaEmbeddingProvider } from "../vectordb/mod.ts";
 import { Ollama } from "npm:ollama";
 
-// Configuration
+// Example configuration
 const EXAMPLE_CONFIG = {
-  ollamaHost: "http://127.0.0.1:11434",
-  embeddingModel: "nomic-embed-text", // Good embedding model for Ollama
-  offloadDirectory: "./example_vectordb_ollama_offload"
+  ollamaHost: Deno.env.get("OLLAMA_HOST") || "http://localhost:11434",
+  embeddingModel: "nomic-embed-text", // A popular embedding model
+  offloadDirectory: "./ollama_vectordb_offload",
+  testDocumentCount: 20,
 };
 
-/**
- * Ollama Embedding Provider implementation
- */
-class OllamaEmbeddingProvider implements IEmbeddingProvider {
-  private ollama: Ollama;
-  private model: string;
-  private dimension: number;
+console.log("Ollama VectorDB Example with Activity Monitoring");
+console.log("==============================================");
 
-  constructor(model: string = EXAMPLE_CONFIG.embeddingModel, host: string = EXAMPLE_CONFIG.ollamaHost) {
-    this.ollama = new Ollama({ host });
-    this.model = model;
-    // nomic-embed-text typically has 768 dimensions
-    this.dimension = model === "nomic-embed-text" ? 768 : 384;
-  }
-
-  async generateEmbedding(text: string): Promise<number[]> {
-    try {
-      const response = await this.ollama.embed({
-        model: this.model,
-        input: text
-      });
-      
-      if (!response.embeddings || response.embeddings.length === 0) {
-        throw new Error("No embeddings returned from Ollama");
-      }
-      
-      return response.embeddings[0];
-    } catch (error) {
-      console.error(`Ollama embedding error for model ${this.model}:`, error);
-      throw new Error(`Failed to generate embedding with Ollama: ${error}`);
-    }
-  }
-
-  getDimension(): number {
-    return this.dimension;
-  }
-
-  getName(): string {
-    return `Ollama-${this.model}`;
-  }
-}
-
-// Helper function to check if Ollama is available
 async function checkOllamaAvailability(): Promise<boolean> {
   try {
     const ollama = new Ollama({ host: EXAMPLE_CONFIG.ollamaHost });
     await ollama.list();
-    console.log("✅ Ollama is available");
     return true;
   } catch (error) {
-    console.log("❌ Ollama is not available:", error instanceof Error ? error.message : String(error));
-    console.log("   Please ensure Ollama is running: ollama serve");
+    console.error("❌ Ollama is not available:", error instanceof Error ? error.message : String(error));
     return false;
   }
 }
 
-// Helper function to ensure model is available
 async function ensureModelAvailable(model: string): Promise<boolean> {
   try {
     const ollama = new Ollama({ host: EXAMPLE_CONFIG.ollamaHost });
     const models = await ollama.list();
+    
     const modelExists = models.models.some(m => m.name.includes(model));
     
     if (!modelExists) {
-      console.log(`📥 Pulling model ${model}... (this may take a few minutes)`);
+      console.log(`📥 Model ${model} not found, pulling...`);
       await ollama.pull({ model });
       console.log(`✅ Model ${model} pulled successfully`);
     } else {
@@ -84,7 +43,7 @@ async function ensureModelAvailable(model: string): Promise<boolean> {
     
     return true;
   } catch (error) {
-    console.log(`❌ Failed to ensure model ${model} is available:`, error instanceof Error ? error.message : String(error));
+    console.error(`❌ Failed to ensure model ${model} is available:`, error);
     return false;
   }
 }
@@ -115,9 +74,14 @@ async function runOllamaExample() {
   try {
     // Create Ollama embedding provider
     console.log("\n🤖 Creating Ollama embedding provider...");
-    const embeddingProvider = new OllamaEmbeddingProvider();
-    console.log(`   Provider: ${embeddingProvider.getName()}`);
-    console.log(`   Dimension: ${embeddingProvider.getDimension()}`);
+    const embeddingProvider = createOllamaEmbeddingProvider(
+      "ollama-nomic-embed-text", // name
+      EXAMPLE_CONFIG.ollamaHost, // ollamaHost 
+      EXAMPLE_CONFIG.embeddingModel, // embeddingModel
+      768 // dimension for nomic-embed-text
+    );
+    console.log(`   Provider: ${embeddingProvider.name}`);
+    console.log(`   Dimension: ${embeddingProvider.dimension}`);
 
     // Create VectorDB manager with Ollama provider
     console.log("\n🔧 Creating VectorDB manager...");
@@ -233,7 +197,8 @@ async function runOllamaExample() {
       console.log("\n📂 Resuming from offload...");
       const resumedId = await manager.createIndex({
         id: "ollama-example",
-        namespace: "demo"
+        namespace: "demo",
+        resume: true
       });
       
       const resumedInstance = manager.getInstance(resumedId);

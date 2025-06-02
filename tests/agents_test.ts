@@ -505,19 +505,22 @@ Deno.test("Agents Module - Full Integration Test", async () => {
 
     let conversationComplete = false;
     let responseReceived = false;
+    let finalResponse = "";
 
+    // Consume the entire generator to ensure conversation history is updated
     for await (const chunk of agent.chatCompletion(messages)) {
       if (chunk.type === 'text') {
         console.log("💬 Agent response received:", chunk.content?.slice(0, 50) + "...");
+        finalResponse = chunk.content || "";
         responseReceived = true;
-        conversationComplete = true;
-        break;
+        // Don't break here - let the generator complete to update conversation history
       } else if (chunk.type === 'error') {
         console.error("❌ Error in integration test:", chunk.error);
         throw chunk.error;
       }
     }
 
+    // Generator has completed, conversation history should now be updated
     if (responseReceived) {
       console.log("✅ Integration test successful!");
       
@@ -527,7 +530,7 @@ Deno.test("Agents Module - Full Integration Test", async () => {
         console.log(`📝 ${idx}: ${msg.role}: ${msg.content?.slice(0, 50)}...`);
       });
       
-      // Verify conversation history - should have at least user message
+      // Verify conversation history - should have user message and assistant response
       assert(agent.conversationHistory.length >= 1, "Should have at least user message in conversation history");
       
       // Test stats

@@ -336,7 +336,8 @@ Deno.test("VectorDB - Activity Monitoring", async (t) => {
     // Create index with same ID should resume from offload
     const resumedId = await manager.createIndex({
       id: "activity-test",
-      namespace: "test"
+      namespace: "test",
+      resume: true
     });
     
     assertEquals(resumedId, indexId);
@@ -443,7 +444,8 @@ Deno.test("VectorDB - Binary Format Storage", async (t) => {
   await t.step("should resume from binary format", async () => {
     const resumedId = await manager.createIndex({
       id: "binary-test",
-      namespace: "test"
+      namespace: "test",
+      resume: true
     });
     
     assertEquals(resumedId, indexId);
@@ -657,7 +659,8 @@ Deno.test("VectorDB - Offload Management", async (t) => {
     // Resume first
     const resumedId = await manager.createIndex({
       id: "offload-test",
-      namespace: "test"
+      namespace: "test",
+      resume: true
     });
     
     const success = manager.setInactivityTimeout(resumedId, 5000);

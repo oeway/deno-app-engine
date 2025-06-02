@@ -157,7 +157,8 @@ async function demonstrateBinaryFormat() {
   console.log("\n🔄 Testing resume from binary format...");
   const resumedId = await manager.createIndex({
     id: "binary-format-example",
-    namespace: "demo"
+    namespace: "demo",
+    resume: true
   });
   
   const resumedInstance = manager.getInstance(resumedId);

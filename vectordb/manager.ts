@@ -67,6 +67,7 @@ export interface IVectorDBOptions {
   persistData?: boolean;
   inactivityTimeout?: number; // Time in milliseconds after which an inactive index will be offloaded
   enableActivityMonitoring?: boolean; // Whether to monitor activity and auto-offload
+  resume?: boolean; // Whether to resume an existing index or create a new one
 }
 
 // Interface for document to be added
@@ -855,6 +856,7 @@ export class VectorDBManager extends EventEmitter {
     
     const baseId = options.id || crypto.randomUUID();
     const namespace = options.namespace;
+    const resume = options.resume || false;
     
     // Check namespace permissions
     if (this.allowedNamespaces && namespace && !this.allowedNamespaces.includes(namespace)) {
@@ -864,9 +866,28 @@ export class VectorDBManager extends EventEmitter {
     // Apply namespace prefix if provided
     const id = namespace ? `${namespace}:${baseId}` : baseId;
     
-    // Check if instance with this ID already exists
+    // Check if instance with this ID already exists in memory
     if (this.instances.has(id)) {
-      throw new Error(`Vector database with ID ${id} already exists`);
+      if (resume) {
+        throw new Error(`Vector database with ID ${id} is already running in memory`);
+      } else {
+        throw new Error(`Vector database with ID ${id} already exists`);
+      }
+    }
+    
+    // Check if there's an offloaded index for this ID
+    const hasOffloaded = await this.hasOffloadedIndex(id);
+    
+    if (resume) {
+      // If resume=true, the index must exist (either in memory or offloaded)
+      if (!hasOffloaded) {
+        throw new Error(`Cannot resume: Vector database with ID ${id} does not exist`);
+      }
+    } else {
+      // If resume=false or not set, we're creating a new index
+      if (hasOffloaded) {
+        throw new Error(`Vector database with ID ${id} already exists. Use resume=true to resume the existing index`);
+      }
     }
     
     // Resolve embedding provider from registry if embeddingProviderName is specified
@@ -880,8 +901,6 @@ export class VectorDBManager extends EventEmitter {
       providerEntry.lastUsed = new Date();
     }
 
-    // Check if there's an offloaded index for this ID
-    const hasOffloaded = await this.hasOffloadedIndex(id);
     if (hasOffloaded) {
       console.log(`📂 Found offloaded index for ${id}, resuming...`);
       

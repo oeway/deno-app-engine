@@ -39,6 +39,7 @@ export interface ChatCompletionOptions {
   apiKey?: string; // API key for authentication
   stream?: boolean;
   abortController?: AbortController; // Add abortController to options
+  reset?: boolean; // Reset memory and start fresh
 }
 
 // Update DefaultModelSettings to use the ModelSettings interface
@@ -175,55 +176,105 @@ export async function* chatCompletion({
 
       let accumulatedResponse = '';
 
-      // Create standard completion stream with abort signal
+      // Create completion (streaming or non-streaming based on stream parameter)
       try {
-        const completionStream: any = await openai.chat.completions.create(
-          {
-            model,
-            messages: fullMessages as OpenAI.Chat.ChatCompletionMessageParam[],
-            temperature,
-            stream: stream,
-          },
-          {
-            signal // Pass the abort signal as part of the request options
-          }
-        );
+        const completionRequest = {
+          model,
+          messages: fullMessages as OpenAI.Chat.ChatCompletionMessageParam[],
+          temperature,
+          stream: stream,
+        };
 
-        // Process the stream and accumulate JSON
-        try {
-          for await (const chunk of completionStream) {
-            // Check if abort signal was triggered during streaming
+        const requestOptions = {
+          signal // Pass the abort signal as part of the request options
+        };
+
+        if (stream) {
+          // Handle streaming response
+          const completionStream = await openai.chat.completions.create(
+            completionRequest,
+            requestOptions
+          ) as any; // Type as any since we know it's a stream when stream=true
+
+          // Process the stream and accumulate JSON
+          try {
+            for await (const chunk of completionStream) {
+              // Check if abort signal was triggered during streaming
+              if (signal.aborted) {
+                console.log('Chat completion stream aborted by user');
+                return;
+              }
+
+              // Debug log the chunk structure to understand the issue
+              console.log('DEBUG: Raw chunk structure:', JSON.stringify(chunk, null, 2));
+
+              // More robust content extraction with better error handling
+              let content = '';
+              if (chunk && chunk.choices && Array.isArray(chunk.choices) && chunk.choices.length > 0) {
+                const choice = chunk.choices[0];
+                if (choice && choice.delta) {
+                  content = choice.delta.content || '';
+                } else if (choice && choice.message) {
+                  // Handle non-streaming format that might come through
+                  content = choice.message.content || '';
+                }
+              } else {
+                console.warn('Unexpected chunk format:', chunk);
+                continue; // Skip this chunk if it doesn't have the expected structure
+              }
+
+              accumulatedResponse += content;
+
+              if(onStreaming){
+                onStreaming(completionId, accumulatedResponse);
+              }
+              yield {
+                type: 'text',
+                content: accumulatedResponse
+              };
+            }
+          } catch (error) {
+            // Check if error is due to abortion
             if (signal.aborted) {
-              console.log('Chat completion stream aborted by user');
+              console.log('Stream processing aborted by user');
               return;
             }
 
-            const content = chunk.choices[0]?.delta?.content || '';
-            accumulatedResponse += content;
-
-            if(onStreaming){
-              onStreaming(completionId, accumulatedResponse);
-            }
+            console.error('Error processing streaming response:', error);
             yield {
-              type: 'text',
-              content: accumulatedResponse
+              type: 'error',
+              content: `Error processing response: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              error: error instanceof Error ? error : new Error('Unknown error processing response')
             };
+            return; // Exit generator on stream processing error
           }
-        } catch (error) {
-          // Check if error is due to abortion
+        } else {
+          // Handle non-streaming response
+          const completion = await openai.chat.completions.create(
+            { ...completionRequest, stream: false }, // Explicitly set stream: false
+            requestOptions
+          ) as OpenAI.Chat.ChatCompletion; // Type as ChatCompletion since stream=false
+
+          // Check if abort signal was triggered
           if (signal.aborted) {
-            console.log('Stream processing aborted by user');
+            console.log('Chat completion aborted by user');
             return;
           }
 
-          console.error('Error processing streaming response:', error);
+          accumulatedResponse = completion.choices[0]?.message?.content || '';
+          
+          if(onStreaming){
+            onStreaming(completionId, accumulatedResponse);
+          }
           yield {
-            type: 'error',
-            content: `Error processing response: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            error: error instanceof Error ? error : new Error('Unknown error processing response')
+            type: 'text',
+            content: accumulatedResponse
           };
-          return; // Exit generator on stream processing error
         }
+
+        // Log the assistant response for debugging (similar to how user queries are logged)
+        console.log('DEBUG: assistant response', completionId, 'content:', accumulatedResponse.slice(0, 200) + (accumulatedResponse.length > 200 ? '...' : ''));
+
       } catch (error) {
         console.error('Error connecting to LLM API:', error);
         let errorMessage = 'Failed to connect to the language model API';
