@@ -9,6 +9,7 @@ import {
   DefaultModelSettings
 } from "./chatCompletion.ts";
 import type { IKernelInstance } from "../kernel/mod.ts";
+import { KernelLanguage } from "../kernel/mod.ts";
 
 // Re-export enums and interfaces that the Agent needs
 export enum AgentEvents {
@@ -118,6 +119,13 @@ export class AgentMaxStepsError extends AgentError {
   }
 }
 
+export class AgentObservationError extends AgentError {
+  constructor(message: string) {
+    super(message, 'invalid_observation');
+    this.name = 'AgentObservationError';
+  }
+}
+
 // Memory management for agent interactions
 export class AgentMemory {
   public steps: (TaskStep | ActionStep | PlanningStep | SystemPromptStep)[] = [];
@@ -167,7 +175,7 @@ export class AgentMemory {
         const taskStep = step as TaskStep;
         messages.push({
           role: 'user',
-          content: `New task:\n${taskStep.task}`
+          content: taskStep.task
         });
         break;
 
@@ -230,14 +238,15 @@ export class AgentMemory {
   }
 
   private cleanMessageList(messages: ChatMessage[]): ChatMessage[] {
-    // Merge consecutive messages with same role
+    // Merge consecutive assistant messages, but keep user messages separate
     const cleaned: ChatMessage[] = [];
     
     for (const message of messages) {
       const lastMessage = cleaned[cleaned.length - 1];
       
-      if (lastMessage && lastMessage.role === message.role) {
-        // Merge messages
+      // Only merge consecutive assistant messages, not user messages
+      if (lastMessage && lastMessage.role === message.role && message.role === 'assistant') {
+        // Merge assistant messages
         lastMessage.content = `${lastMessage.content}\n${message.content}`;
       } else {
         cleaned.push({ ...message });
@@ -254,6 +263,7 @@ export interface IAgentConfig {
   name: string;
   description?: string;
   instructions?: string;
+  startupScript?: string; // Script to execute when kernel is initialized (stdout/stderr added to system prompt)
   kernelType?: KernelType;
   ModelSettings?: ModelSettings;
   modelId?: string; // Name of model from registry
@@ -270,6 +280,7 @@ export interface IAgentInstance {
   name: string;
   description?: string;
   instructions?: string;
+  startupScript?: string;
   kernelType?: KernelType;
   kernel?: IKernelInstance;
   ModelSettings: ModelSettings;
@@ -281,7 +292,7 @@ export interface IAgentInstance {
   lastUsed?: Date;
   conversationHistory: ChatMessage[];
   chatCompletion(messages: ChatMessage[], options?: Partial<ChatCompletionOptions>): AsyncGenerator<any, void, unknown>;
-  attachKernel(kernel: IKernelInstance): void;
+  attachKernel(kernel: IKernelInstance): Promise<void>;
   detachKernel(): void;
   updateConfig(config: Partial<IAgentConfig>): void;
   destroy(): void;
@@ -293,6 +304,14 @@ const CODE_EXECUTION_INSTRUCTIONS = {
 You are a powerful coding assistant capable of solving complex tasks by writing and executing Python code.
 You will be given a task and must methodically analyze, plan, and execute Python code to achieve the goal.
 
+**FUNDAMENTAL REQUIREMENT: ALWAYS USE CODE AND TOOLS**
+- Never provide purely text-based responses without code execution
+- Every task must involve writing and executing Python code, except for simple questions
+- Use available tools, services, and APIs to gather information and solve problems
+- If you need to explain something, demonstrate it with code examples
+- If you need to research something, write code to search or analyze data
+- Transform theoretical knowledge into practical, executable solutions
+
 ## Core Execution Cycle
 
 Follow this structured approach for every task:
@@ -303,6 +322,7 @@ Before writing any code, analyze what you need to accomplish. Write your analysi
 - Identify what data, libraries, or resources you'll need
 - Consider potential challenges or edge cases
 - Plan your approach step by step
+- **Always plan to use code execution - no task should be answered without running code**
 
 Example: <thoughts>Need to analyze sales data - will load CSV, calculate monthly trends, and create visualization</thoughts>
 
@@ -325,11 +345,15 @@ print(f"Columns: {list(df.columns)}")
 print(df.head())
 </py-script>
 
+Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed.
+
 ### 3. **Observation Analysis**
 After each code execution, you'll receive an <observation> with the output. Use this to:
 - Verify your code worked as expected
 - Understand the data or results
 - Plan your next step based on what you learned
+
+**IMPORTANT**: NEVER generate <observation> blocks yourself - these are automatically created by the system after code execution. Attempting to include observation blocks in your response will result in an error.
 
 ### 4. **Final Response**
 Use <returnToUser> tags when you have completed the task or need to return control:
@@ -424,6 +448,14 @@ Remember: Every piece of information you need for subsequent steps must be expli
 You are a powerful coding assistant capable of solving complex tasks by writing and executing TypeScript code.
 You will be given a task and must methodically analyze, plan, and execute TypeScript code to achieve the goal.
 
+**FUNDAMENTAL REQUIREMENT: ALWAYS USE CODE AND TOOLS**
+- Never provide purely text-based responses without code execution
+- Every task must involve writing and executing TypeScript code, even for simple questions
+- Use available tools, services, and APIs to gather information and solve problems
+- If you need to explain something, demonstrate it with code examples
+- If you need to research something, write code to search or analyze data
+- Transform theoretical knowledge into practical, executable solutions
+
 ## Core Execution Cycle
 
 Follow this structured approach for every task:
@@ -434,6 +466,7 @@ Before writing any code, analyze what you need to accomplish. Write your analysi
 - Identify what interfaces, types, or modules you'll need
 - Consider async/await patterns and error handling
 - Plan your approach step by step
+- **Always plan to use code execution - no task should be answered without running code**
 
 Example: <thoughts>Need to build REST API client - will define interfaces, implement fetch wrapper, handle responses</thoughts>
 
@@ -469,11 +502,15 @@ const users = await fetchUsers();
 console.log('Users:', users);
 </t-script>
 
+Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed.
+
 ### 3. **Observation Analysis**
 After each code execution, you'll receive an <observation> with the console output. Use this to:
 - Verify your code compiled and executed correctly
 - Understand the results and any type information
 - Plan your next step based on what you learned
+
+**IMPORTANT**: NEVER generate <observation> blocks yourself - these are automatically created by the system after code execution. Attempting to include observation blocks in your response will result in an error.
 
 ### 4. **Final Response**
 Use <returnToUser> tags when you have completed the task:
@@ -540,6 +577,14 @@ Remember: Every piece of information you need for subsequent steps must be expli
 You are a powerful coding assistant capable of solving complex tasks by writing and executing JavaScript code.
 You will be given a task and must methodically analyze, plan, and execute JavaScript code to achieve the goal.
 
+**FUNDAMENTAL REQUIREMENT: ALWAYS USE CODE AND TOOLS**
+- Never provide purely text-based responses without code execution
+- Every task must involve writing and executing JavaScript code, even for simple questions
+- Use available tools, services, and APIs to gather information and solve problems
+- If you need to explain something, demonstrate it with code examples
+- If you need to research something, write code to search or analyze data
+- Transform theoretical knowledge into practical, executable solutions
+
 ## Core Execution Cycle
 
 Follow this structured approach for every task:
@@ -550,6 +595,7 @@ Before writing any code, analyze what you need to accomplish. Write your analysi
 - Identify what functions, objects, or modules you'll need
 - Consider async patterns and error handling
 - Plan your approach step by step
+- **Always plan to use code execution - no task should be answered without running code**
 
 Example: <thoughts>Need to process JSON data - will parse input, transform structure, validate results</thoughts>
 
@@ -590,11 +636,15 @@ const result = processUserData(sampleData);
 console.log('Final result:', result);
 </t-script>
 
+Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed.
+
 ### 3. **Observation Analysis**
 After each code execution, you'll receive an <observation> with the console output. Use this to:
 - Verify your code executed correctly
 - Understand the results and data structures
 - Plan your next step based on what you learned
+
+**IMPORTANT**: NEVER generate <observation> blocks yourself - these are automatically created by the system after code execution. Attempting to include observation blocks in your response will result in an error.
 
 ### 4. **Final Response**
 Use <returnToUser> tags when you have completed the task:
@@ -750,6 +800,7 @@ export class Agent implements IAgentInstance {
   public name: string;
   public description?: string;
   public instructions?: string;
+  public startupScript?: string;
   public kernelType?: KernelType;
   public kernel?: IKernelInstance;
   public ModelSettings: ModelSettings;
@@ -762,6 +813,7 @@ export class Agent implements IAgentInstance {
   public memory: AgentMemory;
   private stepNumber: number = 1;
   private hyphaServices: Record<string, any>;
+  private startupOutput?: string; // Captured output from startup script
 
   private manager: any; // AgentManager reference
 
@@ -770,6 +822,7 @@ export class Agent implements IAgentInstance {
     this.name = config.name;
     this.description = config.description;
     this.instructions = config.instructions;
+    this.startupScript = config.startupScript;
     this.kernelType = config.kernelType;
     this.ModelSettings = config.ModelSettings || { ...DefaultModelSettings };
     this.maxSteps = config.maxSteps || 10;
@@ -782,6 +835,23 @@ export class Agent implements IAgentInstance {
   }
 
   /**
+   * Validate agent output to ensure it doesn't contain observation blocks
+   */
+  private validateAgentOutput(content: string): void {
+    // Check for observation blocks that should only be generated by the system
+    const observationPattern = /<observation[^>]*>[\s\S]*?<\/observation>/gi;
+    const matches = content.match(observationPattern);
+    
+    if (matches && matches.length > 0) {
+      const errorMessage = `Agent attempted to generate observation blocks, which are reserved for system use only. Found: ${matches.length} observation block(s). Observation blocks should NEVER be included in agent responses - they are automatically generated by the system after code execution.`;
+      
+      console.error(`🚫 Agent ${this.id} attempted to generate observation blocks:`, matches);
+      
+      throw new AgentObservationError(errorMessage);
+    }
+  }
+
+  /**
    * Generate kernel-aware system prompt with planning context
    */
   private generateSystemPrompt(basePrompt?: string): string {
@@ -790,6 +860,14 @@ export class Agent implements IAgentInstance {
     // Add agent's base instructions first
     if (this.instructions) {
       systemPrompt = this.instructions + (systemPrompt ? '\n\n' + systemPrompt : '');
+    }
+    
+    // Add startup script output if available
+    if (this.startupOutput) {
+      console.log(`📋 Including startup output in system prompt for agent: ${this.id}`);
+      systemPrompt += "\n" + this.startupOutput;
+    } else {
+      console.log(`⚠️  No startup output available for agent: ${this.id}`);
     }
     
     // Add kernel-specific instructions based on configured kernelType
@@ -828,6 +906,23 @@ export class Agent implements IAgentInstance {
   private getKernelSpecificInstructions(kernelType: KernelType): string {
     const instructionKey = kernelType.toUpperCase() as keyof typeof CODE_EXECUTION_INSTRUCTIONS;
     return CODE_EXECUTION_INSTRUCTIONS[instructionKey] || '';
+  }
+
+  /**
+   * Map KernelLanguage to KernelType
+   */
+  private mapKernelLanguageToType(kernelLanguage: KernelLanguage): KernelType {
+    switch (kernelLanguage) {
+      case KernelLanguage.PYTHON:
+        return KernelType.PYTHON;
+      case KernelLanguage.TYPESCRIPT:
+        return KernelType.TYPESCRIPT;
+      case KernelLanguage.JAVASCRIPT:
+        return KernelType.JAVASCRIPT;
+      default:
+        console.warn(`Unknown kernel language: ${kernelLanguage}, defaulting to PYTHON`);
+        return KernelType.PYTHON;
+    }
   }
 
   /**
@@ -917,7 +1012,7 @@ export class Agent implements IAgentInstance {
       temperature: this.ModelSettings.temperature,
       baseURL: this.ModelSettings.baseURL,
       apiKey: this.ModelSettings.apiKey,
-      maxSteps: 1, // Single completion for planning
+      maxSteps: 3, // Allow limited steps for planning
       stream: false
     });
 
@@ -941,40 +1036,40 @@ export class Agent implements IAgentInstance {
   ): AsyncGenerator<any, void, unknown> {
     this.lastUsed = new Date();
     
-    // Initialize memory if this is a new conversation
-    if (this.memory.steps.length === 0 || options.reset) {
-      this.memory.reset();
-      this.stepNumber = 1;
-      
-      // Initialize system prompt
-      const systemPrompt = this.generateSystemPrompt(options.systemPrompt);
+    // Initialize memory for this completion session
+    this.memory.reset();
+    this.stepNumber = 1;
+    
+    // Initialize system prompt
+    const systemPrompt = this.generateSystemPrompt(options.systemPrompt);
+    this.memory.addStep({
+      type: StepType.SYSTEM_PROMPT,
+      systemPrompt,
+      startTime: Date.now(),
+      endTime: Date.now()
+    });
+
+    console.log(`🚀 [Agent ${this.id}] Step ${this.stepNumber}: System prompt generated`);
+    console.log(`📋 System prompt:`, systemPrompt);
+
+    // Add the latest user message as a task step (the server sends the full conversation context)
+    const userMessages = messages.filter(msg => msg.role === 'user');
+    if (userMessages.length > 0) {
+      // Use only the last user message as the current task
+      const lastUserMessage = userMessages[userMessages.length - 1];
       this.memory.addStep({
-        type: StepType.SYSTEM_PROMPT,
-        systemPrompt,
+        type: StepType.TASK,
+        task: lastUserMessage.content || '',
         startTime: Date.now(),
         endTime: Date.now()
       });
 
-      // Add task step
-      const userMessage = messages[messages.length - 1];
-      if (userMessage && userMessage.role === 'user') {
-        this.memory.addStep({
-          type: StepType.TASK,
-          task: userMessage.content || '',
-          startTime: Date.now(),
-          endTime: Date.now()
-        });
-      }
-
-      // Execute planning step if enabled and this is the first step
+      // Execute planning step if enabled
       if (this.enablePlanning && this.planningInterval === 1) {
-        await this.executePlanningStep(userMessage?.content || '', true);
+        await this.executePlanningStep(lastUserMessage.content || '', true);
       }
     }
 
-    // Merge conversation history with new messages
-    const fullMessages = [...this.conversationHistory, ...messages];
-    
     // Execute main agent loop
     let finalAnswer: any = null;
     let loopCount = 0;
@@ -1000,22 +1095,40 @@ export class Agent implements IAgentInstance {
       try {
         // Execute main completion step
         const systemPrompt = this.generateSystemPrompt(options.systemPrompt);
+        
+        // Update system prompt in memory if it has changed (e.g., due to kernel attach/detach)
+        const currentSystemPrompt = this.memory.systemPrompt?.systemPrompt;
+        if (currentSystemPrompt !== systemPrompt) {
+          console.log(`🔄 [Agent ${this.id}] Step ${this.stepNumber}: System prompt updated (kernel state changed)`);
+          this.memory.systemPrompt = {
+            type: StepType.SYSTEM_PROMPT,
+            systemPrompt,
+            startTime: Date.now(),
+            endTime: Date.now()
+          };
+        }
+        
         const completionOptions: ChatCompletionOptions = {
-          messages: this.memory.toMessages(),
+          messages: messages, // Use the full conversation context from the server
           systemPrompt,
           model: options.model || this.ModelSettings.model,
           temperature: options.temperature || this.ModelSettings.temperature,
           baseURL: options.baseURL || this.ModelSettings.baseURL,
           apiKey: options.apiKey || this.ModelSettings.apiKey,
-          maxSteps: 1, // Single step execution
+          maxSteps: Math.min(this.maxSteps, this.manager.getMaxStepsCap()), // Use agent's maxSteps config, capped at manager-configured limit
           stream: options.stream !== undefined ? options.stream : true,
           abortController: options.abortController,
           onExecuteCode: this.kernel ? 
             (async (completionId: string, code: string): Promise<string> => {
+              console.log(`🚀 [Agent ${this.id}] Step ${this.stepNumber}: Executing code`);
+              console.log(`📋 Code (${code.length} chars):`, code.substring(0, 200) + (code.length > 200 ? '...' : ''));  
               return await this.executeCode(completionId, code, actionStep);
             }) : 
             options.onExecuteCode,
           onMessage: (completionId: string, message: string, commitIds?: string[]) => {
+            // Validate final message before processing
+            this.validateAgentOutput(message);
+            
             // This is a final answer
             finalAnswer = message;
             actionStep.actionOutput = message;
@@ -1047,11 +1160,17 @@ export class Agent implements IAgentInstance {
         // Execute the step
         for await (const chunk of chatCompletion(completionOptions)) {
           if (chunk.type === 'text' && chunk.content) {
+            // Validate agent output before processing
+            this.validateAgentOutput(chunk.content);
+            
             actionStep.modelOutput = chunk.content;
             actionStep.modelOutputMessage = {
               role: 'assistant',
               content: chunk.content
             };
+            
+            // Check if this completion was concluded naturally by chatCompletion
+            // (the finalAnswer is now set by the onMessage callback in chatCompletion.ts)
           }
           yield chunk;
         }
@@ -1087,18 +1206,86 @@ export class Agent implements IAgentInstance {
       }
     }
 
-    // Update conversation history
-    this.conversationHistory.push(...messages);
-    if (finalAnswer) {
-      this.conversationHistory.push({
-        role: 'assistant',
-        content: finalAnswer
-      });
-    }
+    // The server manages conversation history - agent should not modify it
+    // This will be handled by the server after the completion
 
     // Save conversation if auto-save is enabled
     if (this.manager.getAutoSaveConversations?.()) {
       await this.manager.saveConversation?.(this.id);
+    }
+  }
+
+  /**
+   * Execute startup script and capture output for system prompt
+   */
+  private async executeStartupScript(): Promise<void> {
+    if (!this.startupScript || !this.kernel) {
+      return;
+    }
+
+    console.log(`🚀 Executing startup script for agent: ${this.id}`);
+    
+    try {
+      let output = '';
+      let hasOutput = false;
+      
+      // Set up event listeners to capture stdout/stderr
+      const handleManagerEvent = (event: { kernelId: string; data: any }) => {
+        if (event.kernelId === this.kernel!.id) {
+          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
+            output += event.data.text;
+            hasOutput = true;
+          } else if (event.data.data && event.data.data['text/plain']) {
+            output += event.data.data['text/plain'] + '\n';
+            hasOutput = true;
+          } else if (event.data.ename && event.data.evalue) {
+            output += `${event.data.ename}: ${event.data.evalue}\n`;
+            if (event.data.traceback && Array.isArray(event.data.traceback)) {
+              output += event.data.traceback.join('\n') + '\n';
+            }
+            hasOutput = true;
+          }
+        }
+      };
+      
+      // Listen for kernel events through the manager
+      if (this.manager.kernelManager) {
+        this.manager.kernelManager.on('stream', handleManagerEvent);
+        this.manager.kernelManager.on('execute_result', handleManagerEvent);
+        this.manager.kernelManager.on('execute_error', handleManagerEvent);
+      }
+      
+      try {
+        const result = this.manager.kernelManager 
+          ? await this.manager.kernelManager.execute(this.kernel.id, this.startupScript)
+          : await this.kernel.kernel.execute(this.startupScript);
+        
+        // Give a moment for any remaining events to be processed
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Store the captured output
+        this.startupOutput = hasOutput ? output.trim() : 'Startup script executed successfully (no output)';
+        
+        if (!result.success) {
+          const errorMsg = result.error?.message || 'Startup script execution failed';
+          this.startupOutput += `\nError: ${errorMsg}`;
+        }
+        
+        console.log(`✅ Startup script completed for agent: ${this.id}`);
+        console.log(`📝 Captured startup output: ${this.startupOutput}`);
+        
+      } finally {
+        // Clean up listeners
+        if (this.manager.kernelManager) {
+          this.manager.kernelManager.off('stream', handleManagerEvent);
+          this.manager.kernelManager.off('execute_result', handleManagerEvent);
+          this.manager.kernelManager.off('execute_error', handleManagerEvent);
+        }
+      }
+    } catch (error) {
+      const errorMsg = `Startup script execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      this.startupOutput = errorMsg;
+      console.error(`❌ Startup script failed for agent ${this.id}:`, error);
     }
   }
 
@@ -1109,6 +1296,10 @@ export class Agent implements IAgentInstance {
     if (!this.kernel) {
       throw new Error('No kernel attached to agent');
     }
+
+    // Console log to mark code execution step
+    console.log(`🚀 [Agent ${this.id}] Step ${this.stepNumber}: Executing ${this.kernelType} code`);
+    console.log(`📋 Code (${code.length} chars):`, code.substring(0, 200) + (code.length > 200 ? '...' : ''));
 
     this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
       agentId: this.id,
@@ -1162,9 +1353,14 @@ export class Agent implements IAgentInstance {
         }];
         
         if (result.success) {
+          console.log(`✅ [Agent ${this.id}] Step ${this.stepNumber}: Code execution completed successfully`);
+          if (hasOutput) {
+            console.log(`📤 Output (${output.trim().length} chars):`, output.trim().substring(0, 200) + (output.trim().length > 200 ? '...' : ''));
+          }
           return hasOutput ? output.trim() : 'Code executed successfully';
         } else {
           const errorMsg = result.error?.message || 'Code execution failed';
+          console.log(`❌ [Agent ${this.id}] Step ${this.stepNumber}: Code execution failed - ${errorMsg}`);
           actionStep.error = new AgentExecutionError(errorMsg);
           return hasOutput ? `${output.trim()}\n${errorMsg}` : errorMsg;
         }
@@ -1178,26 +1374,68 @@ export class Agent implements IAgentInstance {
       }
     } catch (error) {
       const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      console.log(`💥 [Agent ${this.id}] Step ${this.stepNumber}: Kernel execution exception - ${errorMsg}`);
       actionStep.error = new AgentExecutionError(errorMsg);
       throw new Error(errorMsg);
     }
   }
 
-  attachKernel(kernel: IKernelInstance): void {
+  async attachKernel(kernel: IKernelInstance): Promise<void> {
+    const previousKernelType = this.kernelType;
+    
     this.kernel = kernel;
+    
+    // Update kernelType based on the attached kernel's language
+    this.kernelType = this.mapKernelLanguageToType(kernel.language);
+    
+    console.log(`🔗 Attached ${this.kernelType} kernel to agent: ${this.id}`);
+    
+    // Log if the kernel type changed
+    if (previousKernelType !== this.kernelType) {
+      console.log(`📝 Agent kernel type updated: ${previousKernelType || 'none'} → ${this.kernelType}`);
+      
+      // Clear previous startup output since the kernel type changed
+      this.startupOutput = undefined;
+    }
+    
     this.manager.emit(AgentEvents.KERNEL_ATTACHED, {
       agentId: this.id,
-      kernelId: kernel.id
+      kernelId: kernel.id,
+      kernelType: this.kernelType
     });
+    
+    // Execute startup script if available and wait for completion
+    if (this.startupScript) {
+      try {
+        await this.executeStartupScript();
+      } catch (error) {
+        console.error(`Failed to execute startup script for agent ${this.id}:`, error);
+        this.manager.emit(AgentEvents.AGENT_ERROR, {
+          agentId: this.id,
+          error: new Error(`Startup script execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`),
+          context: 'startup_script_execution'
+        });
+      }
+    }
   }
 
   detachKernel(): void {
     if (this.kernel) {
       const kernelId = this.kernel.id;
+      const previousKernelType = this.kernelType;
+      
       this.kernel = undefined;
+      // Clear kernelType when no kernel is attached
+      this.kernelType = undefined;
+      // Clear startup output since kernel is detached
+      this.startupOutput = undefined;
+      
+      console.log(`🔗 Detached ${previousKernelType || 'unknown'} kernel from agent: ${this.id}`);
+      
       this.manager.emit(AgentEvents.KERNEL_DETACHED, {
         agentId: this.id,
-        kernelId
+        kernelId,
+        previousKernelType
       });
     }
   }
@@ -1206,6 +1444,17 @@ export class Agent implements IAgentInstance {
     if (config.name !== undefined) this.name = config.name;
     if (config.description !== undefined) this.description = config.description;
     if (config.instructions !== undefined) this.instructions = config.instructions;
+    if (config.startupScript !== undefined) {
+      this.startupScript = config.startupScript;
+      // Clear previous startup output when script changes
+      this.startupOutput = undefined;
+      // Re-execute startup script if kernel is available
+      if (this.kernel && this.startupScript) {
+        this.executeStartupScript().catch(error => {
+          console.error(`Failed to re-execute startup script for agent ${this.id}:`, error);
+        });
+      }
+    }
     if (config.kernelType !== undefined) this.kernelType = config.kernelType;
     if (config.ModelSettings !== undefined) this.ModelSettings = { ...this.ModelSettings, ...config.ModelSettings };
     if (config.maxSteps !== undefined) this.maxSteps = config.maxSteps;

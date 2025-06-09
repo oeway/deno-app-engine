@@ -120,6 +120,8 @@ function getScriptTagType(script: string): string {
   return 'py-script'; // Default fallback
 }
 
+
+
 export async function* chatCompletion({
   messages,
   systemPrompt,
@@ -167,7 +169,14 @@ export async function* chatCompletion({
         ? [{ role: 'system' as const, content: systemPrompt }, ...messages]
         : messages;
       const completionId = generateId();
-      console.log('DEBUG: new completion', completionId, 'fullMessages:', fullMessages);
+      
+      // Enhanced debugging for system prompt inclusion
+      if (systemPrompt) {
+        console.log('DEBUG: System prompt included:', systemPrompt.slice(0, 100) + (systemPrompt.length > 100 ? '...' : ''));
+      } else {
+        console.log('DEBUG: No system prompt provided');
+      }
+      console.log('DEBUG: new completion', completionId, 'total messages:', fullMessages.length, 'roles:', fullMessages.map(m => m.role));
 
       yield {
         type: 'new_completion',
@@ -205,8 +214,16 @@ export async function* chatCompletion({
                 return;
               }
 
-              // Debug log the chunk structure to understand the issue
-              console.log('DEBUG: Raw chunk structure:', JSON.stringify(chunk, null, 2));
+              // Debug log the content being streamed (extract content first for debug)
+              let chunkContent = '';
+              if (chunk && chunk.choices && Array.isArray(chunk.choices) && chunk.choices.length > 0) {
+                const choice = chunk.choices[0];
+                if (choice && choice.delta) {
+                  chunkContent = choice.delta.content || '';
+                } else if (choice && choice.message) {
+                  chunkContent = choice.message.content || '';
+                }
+              }
 
               // More robust content extraction with better error handling
               let content = '';
@@ -225,6 +242,16 @@ export async function* chatCompletion({
 
               accumulatedResponse += content;
 
+              // Progressive debug logging - show accumulated content on one line
+              if (content) {
+                // Truncate if too long and show preview on single line
+                const displayContent = accumulatedResponse.length > 100 
+                  ? accumulatedResponse.substring(0, 100) + '...'
+                  : accumulatedResponse;
+                // Use \r to overwrite the same line
+                process.stdout.write(`\rDEBUG Streaming content: ${displayContent}`);
+              }
+
               if(onStreaming){
                 onStreaming(completionId, accumulatedResponse);
               }
@@ -232,6 +259,10 @@ export async function* chatCompletion({
                 type: 'text',
                 content: accumulatedResponse
               };
+            }
+            // Complete the debug line with a newline after streaming finishes
+            if (accumulatedResponse) {
+              console.log(); // Add newline to complete the progressive debug line
             }
           } catch (error) {
             // Check if error is due to abortion
@@ -425,11 +456,32 @@ export async function* chatCompletion({
           }
         }
         else{
-          // if no <thoughts> or script tag produced
-          messages.push({
-            role: 'assistant',
-            content: `<thoughts>${accumulatedResponse} (Reminder: I need to use appropriate script tags to execute code or \`returnToUser\` tag with commit property to conclude the session)</thoughts>`
-          });
+          // Check if response contains any special tags
+          const hasThoughts = extractThoughts(accumulatedResponse);
+          const hasSpecialTags = hasThoughts || 
+                                accumulatedResponse.includes('<py-script') ||
+                                accumulatedResponse.includes('<js-script') ||
+                                accumulatedResponse.includes('<t-script') ||
+                                accumulatedResponse.includes('<script') ||
+                                accumulatedResponse.includes('<returnToUser');
+          
+          if (!hasSpecialTags) {
+            // Plain text response without any special tags - treat as final
+            if(onMessage){
+              onMessage(completionId, accumulatedResponse, []);
+            }
+            yield {
+              type: 'text',
+              content: accumulatedResponse
+            };
+            return; // End the conversation naturally
+          } else {
+            // Has special tags but no executable content - add reminder
+            messages.push({
+              role: 'assistant',
+              content: `<thoughts>${accumulatedResponse} (Reminder: I need to use appropriate script tags to execute code or \`returnToUser\` tag with commit property to conclude the session)</thoughts>`
+            });
+          }
         }
         // add a reminder message if we are approaching the max steps
         if(loopCount >= maxSteps - 2){

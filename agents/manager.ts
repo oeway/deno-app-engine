@@ -48,6 +48,7 @@ export interface IAgentManagerOptions {
   defaultModelSettings?: ModelSettings;
   defaultModelId?: string; // Name of default model from registry
   defaultMaxSteps?: number;
+  maxStepsCap?: number; // Maximum cap for individual completion steps within agents
   agentDataDirectory?: string;
   autoSaveConversations?: boolean;
   defaultKernelType?: KernelType;
@@ -73,6 +74,7 @@ export class AgentManager extends EventEmitter {
   private defaultModelSettings: ModelSettings;
   private defaultModelId?: string;
   private defaultMaxSteps: number;
+  private maxStepsCap: number;
   private agentDataDirectory: string;
   private autoSaveConversations: boolean;
   private defaultKernelType?: KernelType;
@@ -91,6 +93,7 @@ export class AgentManager extends EventEmitter {
     this.defaultModelSettings = options.defaultModelSettings || { ...DefaultModelSettings };
     this.defaultModelId = options.defaultModelId;
     this.defaultMaxSteps = options.defaultMaxSteps || 10;
+    this.maxStepsCap = options.maxStepsCap || 10;
     this.agentDataDirectory = options.agentDataDirectory || "./agent_data";
     this.autoSaveConversations = options.autoSaveConversations || false;
     this.defaultKernelType = options.defaultKernelType;
@@ -214,6 +217,11 @@ export class AgentManager extends EventEmitter {
     this.kernelManager_ = kernelManager;
   }
 
+  // Getter for maxStepsCap to allow agent access
+  getMaxStepsCap(): number {
+    return this.maxStepsCap;
+  }
+
   // Create a new agent
   async createAgent(config: IAgentConfig): Promise<string> {
     // Validate input
@@ -288,6 +296,7 @@ export class AgentManager extends EventEmitter {
     description?: string;
     kernel_type?: KernelType;
     hasKernel: boolean;
+    hasStartupScript: boolean;
     created: Date;
     lastUsed?: Date;
     conversationLength: number;
@@ -298,6 +307,7 @@ export class AgentManager extends EventEmitter {
       description: agent.description,
       kernel_type: agent.kernelType,
       hasKernel: !!agent.kernel,
+      hasStartupScript: !!agent.startupScript,
       created: agent.created,
       lastUsed: agent.lastUsed,
       conversationLength: agent.conversationHistory.length
@@ -369,7 +379,7 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Failed to retrieve kernel instance with ID: ${kernelId}`);
     }
 
-    agent.attachKernel(kernelInstance);
+    await agent.attachKernel(kernelInstance);
   }
 
   // Detach kernel from an agent
