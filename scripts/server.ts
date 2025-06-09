@@ -1723,6 +1723,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             name: body.name || "New Agent",
             description: body.description || "",
             instructions: body.instructions || "You are a helpful assistant.",
+            startupScript: body.startupScript && body.startupScript.trim() ? body.startupScript : undefined,
             kernelType: kernelType,
             maxSteps: body.maxSteps,
             ModelSettings: body.ModelSettings,
@@ -1759,6 +1760,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             name: updatedAgent?.name,
             description: updatedAgent?.description,
             instructions: updatedAgent?.instructions,
+            startupScript: updatedAgent?.startupScript,
             kernelType: updatedAgent?.kernelType,
             hasKernel: !!updatedAgent?.kernel,
             created: updatedAgent?.created.toISOString(),
@@ -1788,6 +1790,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             name: agent.name,
             description: agent.description,
             instructions: agent.instructions,
+            startupScript: agent.startupScript,
             kernelType: agent.kernelType,
             hasKernel: !!agent.kernel,
             maxSteps: agent.maxSteps,
@@ -1814,6 +1817,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             name: body.name,
             description: body.description,
             instructions: body.instructions,
+            startupScript: body.startupScript && body.startupScript.trim() ? body.startupScript : undefined,
             kernelType: body.kernelType ? KernelType[body.kernelType as keyof typeof KernelType] : undefined,
             maxSteps: body.maxSteps,
             ModelSettings: body.ModelSettings
@@ -1828,6 +1832,7 @@ export async function handleRequest(req: Request): Promise<Response> {
               name: agent?.name,
               description: agent?.description,
               instructions: agent?.instructions,
+              startupScript: agent?.startupScript,
               kernelType: agent?.kernelType,
               hasKernel: !!agent?.kernel
             }

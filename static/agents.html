@@ -303,6 +303,14 @@
             margin-top: 0.5rem;
         }
 
+        #agent-startup-script {
+            min-height: 300px;
+        }
+
+        #agent-instructions {
+            min-height: 300px;
+        }
+
         .chat-input {
             background: white;
             border-top: 1px solid var(--border-color);
@@ -677,6 +685,13 @@
                 <textarea id="agent-instructions" rows="4" 
                     placeholder="You are a helpful assistant. Always be polite and provide accurate information."></textarea>
 
+                <label for="agent-startup-script">Startup Script (Optional):</label>
+                <small style="color: var(--text-secondary); margin-bottom: 0.5rem; display: block;">
+                    Code to execute when kernel initializes. Output will be included in the agent's context.
+                </small>
+                <textarea id="agent-startup-script" rows="3" 
+                    placeholder="# Python code to run when kernel starts (e.g., import libraries, set variables)&#10;import numpy as np&#10;import pandas as pd"></textarea>
+
                 <label for="agent-kernel-type">Kernel Type (Optional):</label>
                 <select id="agent-kernel-type">
                     <option value="">No Kernel</option>
@@ -851,6 +866,7 @@
                             <div class="status-indicator ${agent.hasKernel ? 'active' : 'inactive'}"></div>
                             ${kernelDisplay}
                             ${kernelBadge}
+                            ${agent.hasStartupScript ? '<span class="kernel-badge" style="background: var(--success-color); margin-left: 0.25rem;">📜</span>' : ''}
                         </div>
                     </div>
                 `;
@@ -1140,6 +1156,7 @@
                 name: document.getElementById('agent-name').value,
                 description: document.getElementById('agent-description').value,
                 instructions: document.getElementById('agent-instructions').value,
+                startupScript: document.getElementById('agent-startup-script').value,
                 kernelType: kernelType,
                 autoAttachKernel: !!kernelType, // Automatically attach if kernel type is selected
                 maxSteps: parseInt(document.getElementById('agent-max-steps').value) || 10
@@ -1179,6 +1196,10 @@
                     <div><strong>Created:</strong> ${new Date(currentAgentData.created).toLocaleString()}</div>
                     <div style="margin-top: 1rem;"><strong>Instructions:</strong></div>
                     <div style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; margin-top: 0.5rem; white-space: pre-wrap;">${currentAgentData.instructions}</div>
+                    ${currentAgentData.startupScript ? `
+                        <div style="margin-top: 1rem;"><strong>Startup Script:</strong></div>
+                        <div style="background: #1f2937; color: #f9fafb; padding: 1rem; border-radius: 0.5rem; margin-top: 0.5rem; font-family: 'Monaco', 'Consolas', monospace; white-space: pre-wrap;">${currentAgentData.startupScript}</div>
+                    ` : ''}
                 </div>
             `;
             
