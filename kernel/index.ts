@@ -64,6 +64,7 @@ export interface IFilesystemMountOptions {
 // Interface for kernel options
 export interface IKernelOptions {
   filesystem?: IFilesystemMountOptions;
+  env?: Record<string, string>; // Environment variables to set in the kernel
 }
 
 // Interface for kernel
@@ -142,6 +143,9 @@ export class Kernel extends EventEmitter implements IKernel {
   private _interruptBuffer: Uint8Array | null = null;
   private _interruptSupported = false;
   
+  // Environment variables
+  private environmentVariables: Record<string, string> = {};
+  
   constructor() {
     super();
     super.setMaxListeners(20);
@@ -173,6 +177,11 @@ export class Kernel extends EventEmitter implements IKernel {
       };
     }
 
+    // Set environment variables if provided
+    if (options?.env) {
+      this.environmentVariables = { ...options.env };
+    }
+
     this.initPromise = this._initializeInternal();
     return this.initPromise;
   }
@@ -191,6 +200,11 @@ export class Kernel extends EventEmitter implements IKernel {
       await this.initPackageManager();
       await this.initKernel();
       await this.initGlobals();
+      
+      // Set environment variables if provided
+      if (Object.keys(this.environmentVariables).length > 0) {
+        await this.setEnvironmentVariables();
+      }
       
       this.initialized = true;
       this._status = "active";
@@ -987,6 +1001,47 @@ await micropip.install(ipykernel_url)
     } catch (error) {
       console.error("[KERNEL] Error setting interrupt buffer:", error);
       this._interruptSupported = false;
+    }
+  }
+
+  /**
+   * Set environment variables in Python's os.environ
+   */
+  private async setEnvironmentVariables(): Promise<void> {
+    try {
+      console.log("Setting environment variables...");
+      
+      // Filter out null, undefined, and non-string values
+      const validEnvVars = Object.entries(this.environmentVariables)
+        .filter(([key, value]) => {
+          if (value === null || value === undefined) {
+            console.warn(`Skipping environment variable ${key}: value is ${value}`);
+            return false;
+          }
+          return true;
+        })
+        .map(([key, value]) => [key, String(value)]);
+      
+      if (validEnvVars.length === 0) {
+        console.log("No valid environment variables to set");
+        return;
+      }
+      
+      // Import os module and set environment variables
+      const pythonCode = `
+import os
+${validEnvVars.map(([key, value]) => 
+  `os.environ[${JSON.stringify(key)}] = ${JSON.stringify(value)}`
+).join('\n')}
+`;
+      
+      // Execute the code to set environment variables
+      await this.pyodide.runPython(pythonCode);
+      
+      console.log(`Set ${validEnvVars.length} environment variables`);
+    } catch (error) {
+      console.error("Error setting environment variables:", error);
+      throw error;
     }
   }
 }

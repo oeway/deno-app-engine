@@ -4,7 +4,7 @@
 [![Docker Image](https://ghcr-badge.egpl.dev/oeway/deno-app-engine/latest_tag?color=%2344cc11&ignore=latest&label=docker&trim=)](https://github.com/oeway/deno-app-engine/pkgs/container/deno-app-engine)
 [![Docker Size](https://ghcr-badge.egpl.dev/oeway/deno-app-engine/size?color=%2344cc11&tag=latest&label=docker%20size&trim=)](https://github.com/oeway/deno-app-engine/pkgs/container/deno-app-engine)
 
-A Deno-based app engine that provides Jupyter kernel-like functionality with Pyodide integration. This project enables running Python code in both main thread and worker contexts, with filesystem mounting capabilities and secure permission management.
+A comprehensive Deno-based app engine that provides Jupyter kernel-like functionality with Pyodide integration, intelligent agents, and vector database capabilities. This project enables running Python code in both main thread and worker contexts, with advanced agent management, environment variables support, and secure permission management.
 
 ## 🚀 Quick Start
 
@@ -36,6 +36,24 @@ cd deno-app-engine
 - **Dual Execution Modes**
   - Main Thread Mode: Direct Pyodide execution
   - Worker Mode: Isolated execution in Web Workers
+
+- **Intelligent Agent System**
+  - Advanced agent management with configurable environment variables
+  - Automatic kernel attachment and lifecycle management
+  - Conversation history and memory management
+  - Event-driven architecture with comprehensive monitoring
+
+- **Comprehensive Environment Variables Support**
+  - Agent-level environment configuration
+  - Kernel environment variable inheritance
+  - Cross-language environment support (Python/TypeScript)
+  - Secure environment variable handling and validation
+
+- **Vector Database Integration**
+  - High-performance vector search and storage
+  - Concurrent operations and memory management
+  - Automatic offloading and resource optimization
+  - Event-driven monitoring and statistics
 
 - **Filesystem Integration**
   - Mount local directories into the Python environment
@@ -215,7 +233,80 @@ The kernel type format is `mode-language` where:
 
 ## Usage
 
-### Basic Example
+### Agent Management with Environment Variables
+
+```typescript
+// Import agent modules
+import { AgentManager, KernelType } from "./agents/mod.ts";
+import { KernelManager } from "./kernel/mod.ts";
+
+// Create agent manager with model configuration
+const agentManager = new AgentManager({
+  defaultModelSettings: {
+    baseURL: "http://localhost:11434/v1/",
+    apiKey: "ollama",
+    model: "qwen2.5-coder:7b",
+    temperature: 0.3
+  },
+  agentDataDirectory: "./agent_data"
+});
+
+// Set up kernel manager for agent execution
+const kernelManager = new KernelManager();
+agentManager.setKernelManager(kernelManager);
+
+// Create an agent with environment variables
+const agentId = await agentManager.createAgent({
+  id: "data-analysis-agent",
+  name: "Data Analysis Assistant",
+  instructions: "You are a Python data analysis assistant with configured environment variables.",
+  kernelType: KernelType.PYTHON,
+  kernelEnvirons: {
+    "API_KEY": "your-secret-api-key",
+    "DATABASE_URL": "postgresql://localhost:5432/analytics",
+    "DEBUG_MODE": "true",
+    "MAX_WORKERS": "4"
+  },
+  autoAttachKernel: true
+});
+
+// Create an agent with startup script and environment
+const tsAgentId = await agentManager.createAgent({
+  id: "web-dev-agent", 
+  name: "Web Development Assistant",
+  instructions: "You are a TypeScript web development assistant.",
+  kernelType: KernelType.TYPESCRIPT,
+  kernelEnvirons: {
+    "NODE_ENV": "development",
+    "API_ENDPOINT": "https://api.example.com",
+    "VERSION": "1.0.0"
+  },
+  startupScript: `
+// Initialize development environment
+const config = {
+  apiUrl: (globalThis as any).ENVIRONS?.API_ENDPOINT,
+  environment: (globalThis as any).ENVIRONS?.NODE_ENV,
+  version: (globalThis as any).ENVIRONS?.VERSION
+};
+console.log("Development environment initialized:", config);
+`,
+  autoAttachKernel: true
+});
+
+// Update agent environment variables
+agentManager.updateAgent(agentId, {
+  kernelEnvirons: {
+    "API_KEY": "updated-secret-key",
+    "NEW_CONFIG": "additional-setting"
+  }
+});
+
+// Get agent information
+const agent = agentManager.getAgent(agentId);
+console.log("Agent environment variables:", agent?.kernelEnvirons);
+```
+
+### Basic Kernel Usage
 
 ```typescript
 // Import from the main module
@@ -430,6 +521,93 @@ await manager.interruptKernel(workerKernelId);    // More reliable
 await manager.interruptKernel(mainThreadKernelId); // Limited support
 ```
 
+### Environment Variables
+
+Kernels support setting environment variables that are accessible within the execution environment:
+
+```typescript
+// Create a kernel with environment variables
+const kernelId = await manager.createKernel({
+  mode: KernelMode.WORKER,
+  env: {
+    "API_KEY": "your-secret-key",
+    "DEBUG_MODE": "true",
+    "DATABASE_URL": "postgresql://localhost:5432/mydb",
+    "CONFIG_JSON": JSON.stringify({
+      "timeout": 5000,
+      "retries": 3
+    })
+  }
+});
+
+// For Python kernels, environment variables are available via os.environ
+const pythonResult = await manager.execute(kernelId, `
+import os
+import json
+
+# Access environment variables
+api_key = os.environ.get('API_KEY')
+debug_mode = os.environ.get('DEBUG_MODE') == 'true'
+database_url = os.environ.get('DATABASE_URL')
+
+# Parse JSON configuration
+config_json = os.environ.get('CONFIG_JSON')
+if config_json:
+    config = json.loads(config_json)
+    print(f"Timeout: {config['timeout']}")
+    print(f"Retries: {config['retries']}")
+
+print(f"API Key: {api_key}")
+print(f"Debug Mode: {debug_mode}")
+print(f"Database URL: {database_url}")
+
+# Environment variables are properly filtered (null/undefined values are skipped)
+print("All environment variables:")
+for key, value in os.environ.items():
+    if key.startswith(('API_', 'DEBUG_', 'DATABASE_', 'CONFIG_')):
+        print(f"  {key}: {value}")
+`);
+
+// For TypeScript/JavaScript kernels, environment variables are available via globalThis.ENVIRONS
+const tsKernelId = await manager.createKernel({
+  mode: KernelMode.WORKER,
+  lang: KernelLanguage.TYPESCRIPT,
+  env: {
+    "NODE_ENV": "development",
+    "API_ENDPOINT": "https://api.example.com",
+    "VERSION": "1.0.0",
+    "FEATURES": JSON.stringify(["auth", "analytics", "logging"])
+  }
+});
+
+const tsResult = await manager.execute(tsKernelId, `
+// Access environment variables
+const env = (globalThis as any).ENVIRONS;
+const nodeEnv = env?.NODE_ENV || 'production';
+const apiEndpoint = env?.API_ENDPOINT;
+const version = env?.VERSION;
+
+// Parse JSON features
+const features = env?.FEATURES ? JSON.parse(env.FEATURES) : [];
+
+console.log('Environment:', nodeEnv);
+console.log('API Endpoint:', apiEndpoint);
+console.log('Version:', version);
+console.log('Features:', features);
+
+// Type-safe environment access
+interface AppEnvironment {
+  NODE_ENV: string;
+  API_ENDPOINT: string;
+  VERSION: string;
+  FEATURES: string;
+}
+
+const typedEnv = env as AppEnvironment;
+console.log('Typed environment access:', typedEnv.NODE_ENV);
+`);
+```
+
 ### Worker with Restricted Permissions
 
 ```typescript
@@ -455,11 +633,60 @@ const kernelId = await manager.createKernel({
 - `KernelEvents`: Enum for kernel event types
 - `ensureWheelsExist()`: Utility to check and generate Python wheels
 
+### Agent Management
+
+The agent system provides intelligent task automation with environment variable support:
+
+#### AgentManager
+
+- `createAgent(config)`: Creates a new agent instance
+  - `config.id`: Unique agent identifier
+  - `config.name`: Human-readable agent name
+  - `config.instructions`: Agent behavior instructions
+  - `config.kernelType`: Kernel type (PYTHON, TYPESCRIPT, JAVASCRIPT)
+  - `config.kernelEnvirons`: Environment variables as key-value pairs
+  - `config.startupScript`: Code to execute when kernel is attached
+  - `config.autoAttachKernel`: Whether to automatically attach a kernel
+  - `config.enablePlanning`: Enable agent planning capabilities
+  - `config.maxSteps`: Maximum steps for agent execution
+- `updateAgent(id, updates)`: Updates agent configuration including environment variables
+- `getAgent(id)`: Gets agent instance by ID
+- `listAgents()`: Lists all agents with their configurations
+- `destroyAgent(id)`: Destroys an agent and its associated resources
+- `attachKernelToAgent(agentId, kernelType)`: Attaches a kernel to an agent
+- `detachKernelFromAgent(agentId)`: Detaches kernel from an agent
+
+#### Environment Variables in Agents
+
+Agents support comprehensive environment variable configuration:
+
+```typescript
+// Environment variables are passed to attached kernels
+const agent = await agentManager.createAgent({
+  kernelEnvirons: {
+    "API_CREDENTIALS": "secret-key",
+    "SERVICE_CONFIG": JSON.stringify(config),
+    "ENVIRONMENT": "production"
+  }
+});
+
+// Environment variables are automatically available in kernel execution context
+// Python kernels: os.environ['API_CREDENTIALS']
+// TypeScript kernels: globalThis.ENVIRONS.API_CREDENTIALS
+```
+
 ### KernelManager
 
 The main class for managing kernel instances.
 
 - `createKernel(options?)`: Creates a new kernel instance
+  - `options.mode`: Execution mode (MAIN_THREAD or WORKER)
+  - `options.lang`: Kernel language (PYTHON, TYPESCRIPT, JAVASCRIPT)
+  - `options.env`: Environment variables as key-value pairs
+  - `options.filesystem`: Filesystem mounting options
+  - `options.deno.permissions`: Deno permissions for worker mode
+  - `options.inactivityTimeout`: Auto-shutdown timeout in milliseconds
+  - `options.maxExecutionTime`: Maximum execution time before considering stuck
 - `destroyKernel(id)`: Destroys a kernel instance
 - `destroyAll(namespace?)`: Destroys all kernels or those in a namespace
 - `getKernel(id)`: Gets a kernel instance by ID
@@ -495,11 +722,43 @@ The main class for managing kernel instances.
 
 ### Running Tests
 
-To run all tests (including worker and server tests):
+To run all tests (including enhanced agent, kernel, and vectordb tests):
 
 ```bash
+# Run complete test suite with enhanced coverage
 deno test -A --unstable-worker-options
+
+# Run enhanced agent tests (18+ test scenarios)
+deno test -A --no-check tests/agents_enhanced_test.ts
+
+# Run enhanced kernel tests with environment variables
+deno test -A --no-check tests/kernel_enhanced_test.ts
+
+# Run enhanced vectordb tests with concurrent operations
+deno test -A --no-check tests/vectordb_enhanced_test.ts
+
+# Run all enhanced tests together
+deno test -A --no-check tests/agents_enhanced_test.ts tests/kernel_enhanced_test.ts tests/vectordb_enhanced_test.ts
 ```
+
+### Enhanced Test Coverage
+
+The project includes comprehensive test coverage for:
+
+- **Agent Environment Variables**: Testing environment variable configuration, inheritance, and validation across agent lifecycle
+- **Kernel Environment Variables**: Testing environment variable handling in both Python and TypeScript kernels
+- **Cross-System Integration**: Testing environment variable flow from agents through kernels to execution contexts
+- **Edge Cases**: Testing null/undefined handling, invalid configurations, and error scenarios
+- **Resource Management**: Testing proper cleanup and memory management
+- **Concurrent Operations**: Testing multi-agent and multi-kernel scenarios
+
+The enhanced test suite includes 18+ test scenarios covering:
+- Environment variables configuration and inheritance
+- Startup script execution with environment context
+- Agent lifecycle management and resource cleanup
+- Error handling and edge cases
+- Performance and memory management
+- Event system integration
 
 To run a specific test file:
 
@@ -514,6 +773,8 @@ deno test --allow-net --allow-read tests/manager_test.ts
 
 - **Run all tests:**  
   `deno test -A --unstable-worker-options`
+- **Run enhanced tests:**  
+  `deno test -A --no-check tests/*_enhanced_test.ts`
 - **Format code:**  
   `deno fmt`
 - **Check for lint errors:**  
@@ -523,15 +784,24 @@ deno test --allow-net --allow-read tests/manager_test.ts
 
 ```
 .
+├── agents/
+│   ├── manager.ts       # Agent management with environment variables
+│   ├── agent.ts         # Individual agent implementation
+│   └── mod.ts           # Agent module exports
 ├── kernel/
 │   ├── index.ts         # Core interfaces and types
 │   ├── manager.ts       # Kernel manager implementation
 │   ├── worker.ts        # Worker implementation
 │   ├── check-wheels.ts  # Wheel checking functionality
 │   └── pypi/            # Python wheel files
-├── mod.ts               # Main entry point and public API
+├── vectordb/
+│   ├── manager.ts       # Vector database management
+│   ├── worker.ts        # Vector database worker implementation
+│   └── mod.ts           # VectorDB module exports
 ├── tests/
-│   └── manager_test.ts  # Test suite
+│   ├── *_enhanced_test.ts # Enhanced test suites
+│   └── manager_test.ts    # Original test suite
+├── mod.ts               # Main entry point and public API
 └── README.md
 ```
 

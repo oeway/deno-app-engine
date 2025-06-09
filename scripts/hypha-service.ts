@@ -2,6 +2,7 @@ import { hyphaWebsocketClient } from "npm:hypha-rpc";
 import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
 import { VectorDBManager, VectorDBEvents, type IVectorDBManagerOptions, type IDocument, type IQueryOptions, createOllamaEmbeddingProvider } from "../vectordb/mod.ts";
+import { AgentManager, AgentEvents, KernelType, type IAgentConfig } from "../agents/mod.ts";
 
 // Add type declaration for global variable
 declare global {
@@ -217,12 +218,20 @@ async function startHyphaService() {
   // Create a global kernel manager instance with configuration
   const kernelManager = new KernelManager(getKernelManagerOptions());
   
-  // Configure vector database manager options from environment variables
-  const vectorDBOffloadDirectory = Deno.env.get("VECTORDB_OFFLOAD_DIRECTORY") || "./vectordb_offload";
-  const vectorDBDefaultTimeout = parseInt(Deno.env.get("VECTORDB_DEFAULT_INACTIVITY_TIMEOUT") || "1800000"); // 30 minutes default
-  const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") !== "false"; // Default true
-  
-  // Create a global vector database manager instance
+  // Default model settings for agents
+const DEFAULT_AGENT_MODEL_SETTINGS = {
+  baseURL: Deno.env.get("AGENT_MODEL_BASE_URL") || "http://localhost:11434/v1/",
+  apiKey: Deno.env.get("AGENT_MODEL_API_KEY") || "ollama",
+  model: Deno.env.get("AGENT_MODEL_NAME") || "qwen2.5-coder:7b",
+  temperature: parseFloat(Deno.env.get("AGENT_MODEL_TEMPERATURE") || "0.7")
+};
+
+// Configure vector database manager options from environment variables
+const vectorDBOffloadDirectory = Deno.env.get("VECTORDB_OFFLOAD_DIRECTORY") || "./vectordb_offload";
+const vectorDBDefaultTimeout = parseInt(Deno.env.get("VECTORDB_DEFAULT_INACTIVITY_TIMEOUT") || "1800000"); // 30 minutes default
+const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") !== "false"; // Default true
+
+// Create a global vector database manager instance
   const vectorDBManager = new VectorDBManager({
     defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mock-model", // Use mock model as default
     maxInstances: parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES") || "20"),
@@ -289,6 +298,32 @@ async function startHyphaService() {
   console.log(`- Offload directory: ${vectorDBOffloadDirectory}`);
   console.log(`- Default inactivity timeout: ${vectorDBDefaultTimeout}ms (${Math.round(vectorDBDefaultTimeout / 60000)} minutes)`);
   console.log(`- Activity monitoring enabled: ${vectorDBActivityMonitoring}`);
+
+  // Configure agent manager options from environment variables
+  const agentDataDirectory = Deno.env.get("AGENT_DATA_DIRECTORY") || "./agent_data";
+  const maxAgents = parseInt(Deno.env.get("MAX_AGENTS") || "10");
+  const autoSaveConversations = Deno.env.get("AUTO_SAVE_CONVERSATIONS") !== "false"; // Default true
+  const maxStepsCap = parseInt(Deno.env.get("AGENT_MAX_STEPS_CAP") || "10");
+
+  // Create a global agent manager instance
+  const agentManager = new AgentManager({
+    defaultModelSettings: DEFAULT_AGENT_MODEL_SETTINGS,
+    agentDataDirectory,
+    maxAgents,
+    autoSaveConversations,
+    defaultKernelType: KernelType.PYTHON,
+    maxStepsCap
+  });
+
+  // Set the kernel manager for agent kernel integration
+  agentManager.setKernelManager(kernelManager);
+
+  console.log("Hypha Service Agent Manager Configuration:");
+  console.log(`- Default model: ${DEFAULT_AGENT_MODEL_SETTINGS.model}`);
+  console.log(`- Max agents: ${maxAgents}`);
+  console.log(`- Agent data directory: ${agentDataDirectory}`);
+  console.log(`- Auto save conversations: ${autoSaveConversations}`);
+  console.log(`- Max steps cap: ${maxStepsCap}`);
 
   
   const svc = await server.registerService({
@@ -1276,6 +1311,402 @@ async function startHyphaService() {
           providerUsage: workspaceProviderUsage
         }
       };
+    },
+
+    // ===== AGENT MANAGEMENT METHODS =====
+
+    listAgents(context: {user: any, ws: string}) {
+      console.log(`Listing agents for workspace: ${context.ws}`);
+      try {
+        const agents = agentManager.listAgents();
+        return agents.map(agent => ({
+          id: agent.id,
+          name: agent.name,
+          description: agent.description,
+          kernelType: agent.kernel_type,
+          hasKernel: agent.hasKernel,
+          created: agent.created.toISOString(),
+          conversationLength: agent.conversationLength
+        }));
+      } catch (error) {
+        console.error("Error listing agents:", error);
+        throw error;
+      }
+    },
+
+    getAgentStats(context: {user: any, ws: string}) {
+      console.log(`Getting agent statistics for workspace: ${context.ws}`);
+      try {
+        const stats = agentManager.getStats();
+        return stats;
+      } catch (error) {
+        console.error("Error getting agent stats:", error);
+        throw error;
+      }
+    },
+
+    async createAgent(options: {
+      id?: string,
+      name?: string,
+      description?: string,
+      instructions?: string,
+      startupScript?: string,
+      kernelType?: string,
+      kernelEnvirons?: Record<string, string>,
+      maxSteps?: number,
+      ModelSettings?: any,
+      autoAttachKernel?: boolean
+    }, context: {user: any, ws: string}) {
+      try {
+        console.log(`Creating agent for workspace: ${context.ws}`);
+        
+        // Convert kernelType string to enum value
+        let kernelType: KernelType | undefined;
+        if (options.kernelType && typeof options.kernelType === 'string') {
+          const kernelTypeKey = options.kernelType.toUpperCase() as keyof typeof KernelType;
+          if (kernelTypeKey in KernelType) {
+            kernelType = KernelType[kernelTypeKey];
+            console.log(`✅ Converted kernelType "${options.kernelType}" to ${kernelType}`);
+          } else {
+            console.warn(`⚠️ Invalid kernelType: ${options.kernelType}`);
+          }
+        }
+        
+        const config: IAgentConfig = {
+          id: options.id || crypto.randomUUID(),
+          name: options.name || "New Agent",
+          description: options.description || "",
+          instructions: options.instructions || "You are a helpful assistant.",
+          startupScript: options.startupScript && options.startupScript.trim() ? options.startupScript : undefined,
+          kernelType: kernelType,
+          kernelEnvirons: options.kernelEnvirons,
+          maxSteps: options.maxSteps,
+          ModelSettings: options.ModelSettings,
+          autoAttachKernel: options.autoAttachKernel
+        };
+        
+        console.log(`🤖 Creating agent with config:`, {
+          id: config.id,
+          name: config.name,
+          kernelType: config.kernelType,
+          autoAttachKernel: config.autoAttachKernel
+        });
+        
+        const agentId = await agentManager.createAgent(config);
+        const agent = agentManager.getAgent(agentId);
+        
+        // If auto-attach kernel is requested and we have a kernelType, attach it
+        if (config.autoAttachKernel && config.kernelType) {
+          try {
+            console.log(`🔧 Auto-attaching ${config.kernelType} kernel to agent ${agentId}`);
+            await agentManager.attachKernelToAgent(agentId, config.kernelType);
+            console.log(`✅ Kernel attached successfully to agent ${agentId}`);
+          } catch (kernelError) {
+            console.error(`❌ Failed to auto-attach kernel to agent ${agentId}:`, kernelError);
+            // Don't fail the agent creation, just log the error
+          }
+        }
+        
+        // Get updated agent info after potential kernel attachment
+        const updatedAgent = agentManager.getAgent(agentId);
+        
+        return {
+          id: agentId,
+          name: updatedAgent?.name,
+          description: updatedAgent?.description,
+          instructions: updatedAgent?.instructions,
+          startupScript: updatedAgent?.startupScript,
+          kernelType: updatedAgent?.kernelType,
+          hasKernel: !!updatedAgent?.kernel,
+          created: updatedAgent?.created.toISOString(),
+          maxSteps: updatedAgent?.maxSteps
+        };
+      } catch (error) {
+        console.error("Error creating agent:", error);
+        throw error;
+      }
+    },
+
+    getAgentInfo({agentId}: {agentId: string}, context: {user: any, ws: string}) {
+      console.log(`Getting agent info: ${agentId} for workspace: ${context.ws}`);
+      try {
+                 const agent = agentManager.getAgent(agentId);
+         
+         if (!agent) {
+           throw new Error("Agent not found");
+         }
+         
+         return {
+           id: agent.id,
+           name: agent.name,
+           description: agent.description,
+           instructions: agent.instructions,
+           startupScript: agent.startupScript,
+           kernelType: agent.kernelType,
+           hasKernel: !!agent.kernel,
+           maxSteps: agent.maxSteps,
+           created: agent.created.toISOString(),
+           conversationLength: agent.conversationHistory.length,
+           ModelSettings: agent.ModelSettings
+         };
+      } catch (error) {
+        console.error("Error getting agent info:", error);
+        throw error;
+      }
+    },
+
+    async updateAgent({agentId, name, description, instructions, startupScript, kernelType, maxSteps, ModelSettings}: {
+      agentId: string,
+      name?: string,
+      description?: string,
+      instructions?: string,
+      startupScript?: string,
+      kernelType?: string,
+      maxSteps?: number,
+      ModelSettings?: any
+    }, context: {user: any, ws: string}) {
+      try {
+        console.log(`Updating agent: ${agentId} for workspace: ${context.ws}`);
+        
+        // Convert kernelType string to enum value if provided
+        let kernelTypeEnum: KernelType | undefined;
+        if (kernelType) {
+          kernelTypeEnum = KernelType[kernelType as keyof typeof KernelType];
+        }
+        
+        await agentManager.updateAgent(agentId, {
+          name,
+          description,
+          instructions,
+          startupScript: startupScript && startupScript.trim() ? startupScript : undefined,
+          kernelType: kernelTypeEnum,
+          maxSteps,
+          ModelSettings
+        });
+        
+        const agent = agentManager.getAgent(agentId);
+        return {
+          success: true,
+          message: "Agent updated successfully",
+          agent: {
+            id: agent?.id,
+            name: agent?.name,
+            description: agent?.description,
+            instructions: agent?.instructions,
+            startupScript: agent?.startupScript,
+            kernelType: agent?.kernelType,
+            hasKernel: !!agent?.kernel
+          }
+        };
+      } catch (error) {
+        console.error("Error updating agent:", error);
+        throw error;
+      }
+    },
+
+    async destroyAgent({agentId}: {agentId: string}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Destroying agent: ${agentId} for workspace: ${context.ws}`);
+        
+        await agentManager.destroyAgent(agentId);
+        
+        return {
+          success: true,
+          message: `Agent ${agentId} deleted successfully`
+        };
+      } catch (error) {
+        console.error("Error destroying agent:", error);
+        throw error;
+      }
+    },
+
+    async *chatWithAgent({agentId, message}: {agentId: string, message: string}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Starting chat with agent: ${agentId} for workspace: ${context.ws}`);
+        
+        if (!message) {
+          throw new Error("Message is required");
+        }
+        
+        const agent = agentManager.getAgent(agentId);
+        if (!agent) {
+          throw new Error("Agent not found");
+        }
+        
+        // Create messages for this chat completion - include conversation history and new message
+        const newUserMessage = { role: "user" as const, content: message };
+        
+        // Add the user message to conversation history
+        agent.conversationHistory.push(newUserMessage);
+        
+        // Always include the new message in the context for the agent
+        const messages = [...agent.conversationHistory];
+        
+        let finalResponse = '';
+        
+        try {
+          // Start chat completion stream
+          for await (const chunk of agent.chatCompletion(messages)) {
+            yield chunk;
+            
+            // Capture the final response text
+            if (chunk.type === 'text' && chunk.content) {
+              finalResponse = chunk.content;
+            }
+            
+            // If there's an error, break the stream
+            if (chunk.type === 'error') {
+              break;
+            }
+          }
+          
+          // Add the assistant response to conversation history
+          if (finalResponse) {
+            agent.conversationHistory.push({
+              role: 'assistant',
+              content: finalResponse
+            });
+          }
+        } catch (error) {
+          yield {
+            type: "error",
+            error: error instanceof Error ? error.message : String(error)
+          };
+        }
+      } catch (error) {
+        yield {
+          type: "error", 
+          error: error instanceof Error ? error.message : String(error)
+        };
+      }
+    },
+
+    getAgentConversation({agentId}: {agentId: string}, context: {user: any, ws: string}) {
+      console.log(`Getting conversation for agent: ${agentId} for workspace: ${context.ws}`);
+      try {
+        const agent = agentManager.getAgent(agentId);
+        
+        if (!agent) {
+          throw new Error("Agent not found");
+        }
+        
+        return {
+          conversation: agent.conversationHistory,
+          length: agent.conversationHistory.length
+        };
+      } catch (error) {
+        console.error("Error getting agent conversation:", error);
+        throw error;
+      }
+    },
+
+    async clearAgentConversation({agentId}: {agentId: string}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Clearing conversation for agent: ${agentId} for workspace: ${context.ws}`);
+        
+        await agentManager.clearConversation(agentId);
+        
+        return {
+          success: true,
+          message: "Conversation cleared successfully"
+        };
+      } catch (error) {
+        console.error("Error clearing agent conversation:", error);
+        throw error;
+      }
+    },
+
+    async attachKernelToAgent({agentId, kernelType}: {agentId: string, kernelType?: string}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Attaching kernel to agent: ${agentId} for workspace: ${context.ws}`);
+        
+        const kernelTypeEnum = kernelType ? KernelType[kernelType as keyof typeof KernelType] : KernelType.PYTHON;
+        
+        await agentManager.attachKernelToAgent(agentId, kernelTypeEnum);
+        
+        const agent = agentManager.getAgent(agentId);
+        return {
+          success: true,
+          message: "Kernel attached successfully",
+          hasKernel: !!agent?.kernel,
+          kernelType: agent?.kernelType
+        };
+      } catch (error) {
+        console.error("Error attaching kernel to agent:", error);
+        throw error;
+      }
+    },
+
+    async detachKernelFromAgent({agentId}: {agentId: string}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Detaching kernel from agent: ${agentId} for workspace: ${context.ws}`);
+        
+        await agentManager.detachKernelFromAgent(agentId);
+        
+        return {
+          success: true,
+          message: "Kernel detached successfully"
+        };
+      } catch (error) {
+        console.error("Error detaching kernel from agent:", error);
+        throw error;
+      }
+    },
+
+    // ===== ADDITIONAL VECTOR DATABASE METHODS =====
+
+    generateRandomDocuments({count}: {count?: number}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Generating random documents for workspace: ${context.ws}`);
+        const docCount = Math.min(count || 10, 100); // Limit to 100 documents
+        
+        const topics = [
+          "artificial intelligence and machine learning algorithms",
+          "web development with modern JavaScript frameworks",
+          "data science and statistical analysis techniques", 
+          "cloud computing and distributed systems architecture",
+          "mobile application development for iOS and Android",
+          "cybersecurity threats and protection strategies",
+          "blockchain technology and cryptocurrency systems",
+          "internet of things devices and sensor networks",
+          "virtual reality gaming and immersive experiences",
+          "robotics automation and industrial applications",
+          "quantum computing and advanced physics research",
+          "renewable energy and sustainable technology solutions",
+          "biotechnology and genetic engineering breakthroughs",
+          "space exploration and astronomical discoveries",
+          "environmental science and climate change research"
+        ];
+        
+        const documents: IDocument[] = [];
+        
+        for (let i = 0; i < docCount; i++) {
+          const topic = topics[i % topics.length];
+          const randomSuffix = Math.random().toString(36).substring(7);
+          const randomNumber = Math.floor(Math.random() * 1000);
+          
+          documents.push({
+            id: `doc-${Date.now()}-${i}-${randomSuffix}`,
+            text: `${topic} - Document ${randomNumber} discussing advanced concepts and practical applications in this field. This content includes detailed analysis and research findings with unique identifier ${randomSuffix}.`,
+            metadata: {
+              topic: topic.split(" ")[0],
+              category: i % 3 === 0 ? "research" : i % 3 === 1 ? "tutorial" : "analysis",
+              priority: Math.floor(Math.random() * 5) + 1,
+              created: new Date().toISOString(),
+              randomId: randomSuffix
+            }
+          });
+        }
+        
+        return {
+          documents,
+          count: documents.length,
+          message: `Generated ${documents.length} random documents`
+        };
+      } catch (error) {
+        console.error("Error generating random documents:", error);
+        throw error;
+      }
     }
   });
   

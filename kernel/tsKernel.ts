@@ -310,8 +310,13 @@ export const result = typeof __lastResult !== 'undefined' ? __lastResult : undef
 export class TypeScriptKernel extends EventEmitter implements IKernel {
   private consoleCapture = new ConsoleCapture(this);
   private codeExecutor = new CodeExecutor();
-  private initialized = false;
   private pathMappings: Map<string, string> = new Map();
+  private initialized = false;
+  private _status: "active" | "busy" | "unknown" = "unknown";
+  private executionCount = 0;
+  
+  // Environment variables
+  private environmentVariables: Record<string, string> = {};
   
   constructor() {
     super();
@@ -333,6 +338,14 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
       } catch (error) {
         console.error("[TS_KERNEL] Error setting up filesystem:", error);
       }
+    }
+    
+    // Handle environment variables if provided
+    if (options?.env) {
+      this.environmentVariables = { ...options.env };
+      // Set up global ENVIRONS object for TypeScript/JavaScript
+      (globalThis as any).ENVIRONS = { ...this.environmentVariables };
+      console.log(`[TS_KERNEL] Set ${Object.keys(this.environmentVariables).length} environment variables in ENVIRONS`);
     }
     
     this.initialized = true;
@@ -471,7 +484,11 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
   }
   
   get status(): "active" | "busy" | "unknown" {
-    return this.initialized ? "active" : "unknown";
+    return this._status;
+  }
+  
+  getStatus(): "active" | "busy" | "unknown" {
+    return this._status;
   }
   
   async inputReply(content: { value: string }): Promise<void> {

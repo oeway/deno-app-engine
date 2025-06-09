@@ -83,6 +83,7 @@ export interface IManagerKernelOptions {
     permissions?: IDenoPermissions;
   };
   filesystem?: IFilesystemMountOptions;
+  env?: Record<string, string>; // Environment variables to set in the kernel
   inactivityTimeout?: number; // Time in milliseconds after which an inactive kernel will be shut down
   maxExecutionTime?: number; // Maximum time in milliseconds a single execution can run before considered stuck/dead
 }
@@ -931,6 +932,11 @@ export class KernelManager extends EventEmitter {
       kernelOptions.filesystem = options.filesystem;
     }
     
+    // Add environment variables if provided
+    if (options.env) {
+      kernelOptions.env = options.env;
+    }
+    
     // Initialize the kernel
     await kernel.initialize(kernelOptions);
     
@@ -1020,6 +1026,7 @@ export class KernelManager extends EventEmitter {
       type: "INITIALIZE_KERNEL",
       options: {
         filesystem: options.filesystem,
+        env: options.env,
         lang: language
       }
     });

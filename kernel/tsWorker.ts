@@ -503,6 +503,11 @@ class TypeScriptKernel {
   private eventPort: MessagePort | null = null;
   private initialized = false;
   private pathMappings: Map<string, string> = new Map();
+  private _status: "active" | "busy" | "unknown" = "unknown";
+  private executionCount = 0;
+  
+  // Environment variables
+  private environmentVariables: Record<string, string> = {};
   
   constructor() {
     this.setupEventForwarding();
@@ -527,6 +532,14 @@ class TypeScriptKernel {
       } catch (error) {
         console.error("[TS_WORKER] Error setting up filesystem:", error);
       }
+    }
+    
+    // Handle environment variables if provided
+    if (options?.env) {
+      this.environmentVariables = { ...options.env };
+      // Set up global ENVIRONS object for TypeScript/JavaScript
+      (globalThis as any).ENVIRONS = { ...this.environmentVariables };
+      console.log(`[TS_WORKER] Set ${Object.keys(this.environmentVariables).length} environment variables in ENVIRONS`);
     }
     
     this.initialized = true;
@@ -570,8 +583,12 @@ class TypeScriptKernel {
     return this.initialized;
   }
   
+  get status(): "active" | "busy" | "unknown" {
+    return this._status;
+  }
+  
   getStatus(): "active" | "busy" | "unknown" {
-    return this.initialized ? "active" : "unknown";
+    return this._status;
   }
   
   async inputReply(content: { value: string }): Promise<void> {

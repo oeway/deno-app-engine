@@ -132,7 +132,13 @@ const agentId = await manager.createAgent({
   id: "my-agent",
   name: "My Assistant",
   instructions: "You are a helpful coding assistant.",
-  modelId: "ollama-qwen" // Use model from registry
+  modelId: "ollama-qwen", // Use model from registry
+  kernelType: KernelType.PYTHON,
+  kernelEnvirons: {
+    "API_KEY": "your-secret-key",
+    "DEBUG_MODE": "true"
+  },
+  autoAttachKernel: true
 });
 ```
 
@@ -229,6 +235,64 @@ const agentId = await manager.createAgent({
   },
   maxSteps: 20
 });
+```
+
+### Kernel Environment Variables
+
+Agents can specify environment variables that will be available in their attached kernels:
+
+```typescript
+// Create an agent with kernel environment variables
+const agentId = await manager.createAgent({
+  id: "data-agent",
+  name: "Data Analysis Agent",
+  instructions: "You are a data scientist with access to various APIs.",
+  kernelType: KernelType.PYTHON,
+  kernelEnvirons: {
+    "DATABASE_URL": "postgresql://localhost:5432/analytics",
+    "API_KEY": "your-secret-api-key",
+    "ENVIRONMENT": "development",
+    "DEBUG_MODE": "true"
+  },
+  autoAttachKernel: true
+});
+
+// The agent can now access these environment variables in code execution
+const agent = manager.getAgent(agentId)!;
+
+const messages = [{
+  role: "user" as const,
+  content: "Check the database connection and API key configuration"
+}];
+
+for await (const chunk of agent.chatCompletion(messages)) {
+  if (chunk.type === 'function_call' && chunk.name === 'execute_code') {
+    // The agent might execute code like:
+    // import os
+    // db_url = os.environ.get('DATABASE_URL')
+    // api_key = os.environ.get('API_KEY')
+    // print(f"Database: {db_url}")
+    // print(f"API Key configured: {'Yes' if api_key else 'No'}")
+  }
+}
+
+// Environment variables are also available for TypeScript/JavaScript kernels
+const tsAgentId = await manager.createAgent({
+  id: "ts-agent",
+  name: "TypeScript Agent",
+  kernelType: KernelType.TYPESCRIPT,
+  kernelEnvirons: {
+    "NODE_ENV": "development",
+    "API_ENDPOINT": "https://api.example.com"
+  },
+  autoAttachKernel: true
+});
+
+// In TypeScript kernels, environment variables are available via globalThis.ENVIRONS
+// The agent can execute code like:
+// const env = (globalThis as any).ENVIRONS?.NODE_ENV || 'production';
+// const endpoint = (globalThis as any).ENVIRONS?.API_ENDPOINT;
+// console.log(`Environment: ${env}, Endpoint: ${endpoint}`);
 ```
 
 ### Conversation Management

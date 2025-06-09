@@ -265,6 +265,7 @@ export interface IAgentConfig {
   instructions?: string;
   startupScript?: string; // Script to execute when kernel is initialized (stdout/stderr added to system prompt)
   kernelType?: KernelType;
+  kernelEnvirons?: Record<string, string>; // Environment variables to set in the kernel
   ModelSettings?: ModelSettings;
   modelId?: string; // Name of model from registry
   maxSteps?: number;
@@ -282,6 +283,7 @@ export interface IAgentInstance {
   instructions?: string;
   startupScript?: string;
   kernelType?: KernelType;
+  kernelEnvirons?: Record<string, string>;
   kernel?: IKernelInstance;
   ModelSettings: ModelSettings;
   maxSteps: number;
@@ -802,6 +804,7 @@ export class Agent implements IAgentInstance {
   public instructions?: string;
   public startupScript?: string;
   public kernelType?: KernelType;
+  public kernelEnvirons?: Record<string, string>;
   public kernel?: IKernelInstance;
   public ModelSettings: ModelSettings;
   public maxSteps: number;
@@ -824,6 +827,7 @@ export class Agent implements IAgentInstance {
     this.instructions = config.instructions;
     this.startupScript = config.startupScript;
     this.kernelType = config.kernelType;
+    this.kernelEnvirons = config.kernelEnvirons;
     this.ModelSettings = config.ModelSettings || { ...DefaultModelSettings };
     this.maxSteps = config.maxSteps || 10;
     this.created = new Date();
@@ -1052,11 +1056,18 @@ export class Agent implements IAgentInstance {
     console.log(`🚀 [Agent ${this.id}] Step ${this.stepNumber}: System prompt generated`);
     console.log(`📋 System prompt:`, systemPrompt);
 
-    // Add the latest user message as a task step (the server sends the full conversation context)
+    // Add the user message to conversation history if not already present
     const userMessages = messages.filter(msg => msg.role === 'user');
     if (userMessages.length > 0) {
-      // Use only the last user message as the current task
       const lastUserMessage = userMessages[userMessages.length - 1];
+      
+      // Add user message to conversation history if it's not already there
+      if (this.conversationHistory.length === 0 || 
+          this.conversationHistory[this.conversationHistory.length - 1].content !== lastUserMessage.content) {
+        this.conversationHistory.push(lastUserMessage);
+      }
+      
+      // Use only the last user message as the current task
       this.memory.addStep({
         type: StepType.TASK,
         task: lastUserMessage.content || '',
@@ -1206,8 +1217,13 @@ export class Agent implements IAgentInstance {
       }
     }
 
-    // The server manages conversation history - agent should not modify it
-    // This will be handled by the server after the completion
+    // Add assistant response to conversation history if we have a final answer
+    if (finalAnswer !== null) {
+      this.conversationHistory.push({
+        role: 'assistant',
+        content: finalAnswer
+      });
+    }
 
     // Save conversation if auto-save is enabled
     if (this.manager.getAutoSaveConversations?.()) {
@@ -1231,7 +1247,7 @@ export class Agent implements IAgentInstance {
       
       // Set up event listeners to capture stdout/stderr
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (event.kernelId === this.kernel!.id) {
+        if (this.kernel && event.kernelId === this.kernel.id) {
           if (event.data.name === 'stdout' || event.data.name === 'stderr') {
             output += event.data.text;
             hasOutput = true;
@@ -1313,7 +1329,7 @@ export class Agent implements IAgentInstance {
       
       // Set up event listeners to capture stdout/stderr
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (event.kernelId === this.kernel!.id) {
+        if (this.kernel && event.kernelId === this.kernel.id) {
           if (event.data.name === 'stdout' || event.data.name === 'stderr') {
             output += event.data.text;
             hasOutput = true;
@@ -1456,6 +1472,7 @@ export class Agent implements IAgentInstance {
       }
     }
     if (config.kernelType !== undefined) this.kernelType = config.kernelType;
+    if (config.kernelEnvirons !== undefined) this.kernelEnvirons = config.kernelEnvirons;
     if (config.ModelSettings !== undefined) this.ModelSettings = { ...this.ModelSettings, ...config.ModelSettings };
     if (config.maxSteps !== undefined) this.maxSteps = config.maxSteps;
     if (config.enablePlanning !== undefined) this.enablePlanning = config.enablePlanning;

@@ -367,10 +367,18 @@ export class AgentManager extends EventEmitter {
 
     const kernelLanguage = kernelLanguageMap[kernelType];
     
-    // createKernel returns a kernel ID, not the instance
-    const kernelId = await this.kernelManager.createKernel({
+    // Prepare kernel creation options with environment variables
+    const kernelOptions: any = {
       lang: kernelLanguage,
-    });
+    };
+    
+    // Add environment variables if the agent has them
+    if (agent.kernelEnvirons) {
+      kernelOptions.env = agent.kernelEnvirons;
+    }
+    
+    // createKernel returns a kernel ID, not the instance
+    const kernelId = await this.kernelManager.createKernel(kernelOptions);
 
     // Get the actual kernel instance using the ID
     const kernelInstance = this.kernelManager.getKernel(kernelId);
