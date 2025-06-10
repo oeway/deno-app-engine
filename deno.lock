@@ -1,7 +1,9 @@
 {
   "version": "4",
   "specifiers": {
+    "jsr:@std/assert@*": "1.0.13",
     "jsr:@std/encoding@*": "1.0.10",
+    "jsr:@std/internal@^1.0.6": "1.0.8",
     "npm:@types/node@*": "22.12.0",
     "npm:fake-indexeddb@*": "6.0.1",
     "npm:hypha-rpc@*": "0.20.53-post-1",
@@ -14,8 +16,17 @@
     "npm:pyodide@0.27.5": "0.27.5"
   },
   "jsr": {
+    "@std/assert@1.0.13": {
+      "integrity": "ae0d31e41919b12c656c742b22522c32fb26ed0cba32975cb0de2a273cb68b29",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
+    },
     "@std/encoding@1.0.10": {
       "integrity": "8783c6384a2d13abd5e9e87a7ae0520a30e9f56aeeaa3bdf910a3eaaf5c811a1"
+    },
+    "@std/internal@1.0.8": {
+      "integrity": "fc66e846d8d38a47cffd274d80d2ca3f0de71040f855783724bb6b87f60891f5"
     }
   },
   "npm": {

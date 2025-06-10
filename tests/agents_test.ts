@@ -126,8 +126,12 @@ Deno.test("Agents Module - Real LLM Chat Completion", async () => {
     for await (const chunk of agent.chatCompletion(messages)) {
       console.log("📦 Chunk:", chunk.type, chunk.content ? chunk.content.slice(0, 100) + "..." : "");
       
-      if (chunk.type === 'text') {
-        finalResponse = chunk.content || "";
+      if (chunk.type === 'text_chunk' && chunk.content) {
+        finalResponse += chunk.content;
+        hasResponse = true;
+      } else if (chunk.type === 'text' && chunk.content) {
+        // Final complete text
+        finalResponse = chunk.content;
         hasResponse = true;
       } else if (chunk.type === 'error') {
         console.error("❌ Error in chat:", chunk.error);
@@ -212,14 +216,14 @@ Deno.test("Agents Module - Agent with Kernel Integration", async () => {
         let hasResult = false;
 
         for await (const chunk of agent.chatCompletion(messages)) {
-          console.log("📦 Chunk type:", chunk.type);
-          
           if (chunk.type === 'function_call') {
             console.log("🔧 Code execution:", chunk.arguments?.code?.slice(0, 100));
             hasCodeExecution = true;
           } else if (chunk.type === 'function_call_output') {
             console.log("📊 Code result:", chunk.content);
             hasResult = true;
+          } else if (chunk.type === 'text_chunk') {
+            // Don't log individual chunks to avoid spam
           } else if (chunk.type === 'text') {
             console.log("💬 Response:", chunk.content?.slice(0, 100));
           } else if (chunk.type === 'error') {
@@ -306,8 +310,10 @@ Deno.test("Agents Module - Event System", async () => {
 
   try {
     for await (const chunk of agent.chatCompletion(messages)) {
-      if (chunk.type === 'text') {
-        break; // Exit after first response
+      if (chunk.type === 'text_chunk') {
+        // Accumulate chunks but don't break yet
+      } else if (chunk.type === 'text') {
+        break; // Exit after final complete response
       }
     }
 
@@ -509,11 +515,15 @@ Deno.test("Agents Module - Full Integration Test", async () => {
 
     // Consume the entire generator to ensure conversation history is updated
     for await (const chunk of agent.chatCompletion(messages)) {
-      if (chunk.type === 'text') {
-        console.log("💬 Agent response received:", chunk.content?.slice(0, 50) + "...");
-        finalResponse = chunk.content || "";
+      if (chunk.type === 'text_chunk' && chunk.content) {
+        console.log("💬 Agent response chunk:", chunk.content.slice(0, 50) + "...");
+        finalResponse += chunk.content;
         responseReceived = true;
         // Don't break here - let the generator complete to update conversation history
+      } else if (chunk.type === 'text' && chunk.content) {
+        console.log("💬 Agent final response:", chunk.content.slice(0, 50) + "...");
+        finalResponse = chunk.content;
+        responseReceived = true;
       } else if (chunk.type === 'error') {
         console.error("❌ Error in integration test:", chunk.error);
         throw chunk.error;

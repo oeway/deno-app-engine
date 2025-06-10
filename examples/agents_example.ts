@@ -103,15 +103,20 @@ async function main() {
     console.log("Assistant:");
 
     try {
+      let fullResponse = '';
       for await (const chunk of chatAgent.chatCompletion(messages)) {
-        if (chunk.type === 'text') {
+        if (chunk.type === 'text_chunk' && chunk.content) {
+          fullResponse += chunk.content;
           console.log(chunk.content);
-          break; // Exit after first complete response
+        } else if (chunk.type === 'text' && chunk.content) {
+          fullResponse = chunk.content; // Final complete response
+          // No need to write again since it was already streamed
         } else if (chunk.type === 'error') {
-          console.log(`❌ Error: ${chunk.error}`);
+          console.log(`\n❌ Error: ${chunk.error}`);
           break;
         }
       }
+      console.log(); // Add newline after streaming
     } catch (error: unknown) {
       if (error instanceof Error && (error.message.includes("ECONNREFUSED") || error.message.includes("404"))) {
         console.log("⚠️  Ollama not available. Please make sure Ollama is running with qwen2.5-coder model.");

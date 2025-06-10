@@ -1892,7 +1892,6 @@ export async function handleRequest(req: Request): Promise<Response> {
           const stream = new ReadableStream({
             async start(controller) {
               let isClosed = false;
-              let finalResponse = '';
               
               try {
                 const sendEvent = (data: any) => {
@@ -1913,24 +1912,13 @@ export async function handleRequest(req: Request): Promise<Response> {
                 for await (const chunk of agent.chatCompletion(messages)) {
                   sendEvent(chunk);
                   
-                  // Capture the final response text
-                  if (chunk.type === 'text' && chunk.content) {
-                    finalResponse = chunk.content;
-                  }
-                  
                   // If there's an error, break the stream
                   if (chunk.type === 'error') {
                     break;
                   }
                 }
                 
-                // Add the assistant response to conversation history
-                if (finalResponse) {
-                  agent.conversationHistory.push({
-                    role: 'assistant',
-                    content: finalResponse
-                  });
-                }
+                // Note: The agent handles adding responses to conversation history internally
                 
                 if (!isClosed) {
                   controller.close();

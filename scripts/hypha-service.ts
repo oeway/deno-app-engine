@@ -198,20 +198,29 @@ function getKernelManagerOptions(): IKernelManagerOptions {
   return options;
 }
 
-async function startHyphaService() {
+async function startHyphaService(options: {
+  skipLogin?: boolean;
+  serverUrl?: string;
+  workspace?: string;
+  token?: string;
+  clientId?: string;
+} = {}) {
   console.log("Connecting to hypha server...");
-  let token = Deno.env.get("HYPHA_TOKEN");
-  if(!token){
+  let token = options.token || Deno.env.get("HYPHA_TOKEN");
+  
+  // Skip login if explicitly requested (for testing)
+  if(!token && !options.skipLogin){
     token = await hyphaWebsocketClient.login({
-        "server_url": Deno.env.get("HYPHA_SERVER_URL") || "https://hypha.aicell.io",
+        "server_url": options.serverUrl || Deno.env.get("HYPHA_SERVER_URL") || "https://hypha.aicell.io",
     })
   }
+  
   const server = await hyphaWebsocketClient.connectToServer({
     // read the following from environment variables and use default
-    "server_url": Deno.env.get("HYPHA_SERVER_URL") || "https://hypha.aicell.io",
-    "workspace": Deno.env.get("HYPHA_WORKSPACE") || undefined,
+    "server_url": options.serverUrl || Deno.env.get("HYPHA_SERVER_URL") || "https://hypha.aicell.io",
+    "workspace": options.workspace || Deno.env.get("HYPHA_WORKSPACE") || undefined,
     "token": token,
-    "client_id": Deno.env.get("HYPHA_CLIENT_ID") || undefined,
+    "client_id": options.clientId || Deno.env.get("HYPHA_CLIENT_ID") || undefined,
   });
   
   console.log("Connected to hypha server, registering service...");
@@ -1536,23 +1545,13 @@ const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") 
         // Create messages for this chat completion - include conversation history and new message
         const newUserMessage = { role: "user" as const, content: message };
         
-        // Add the user message to conversation history
-        agent.conversationHistory.push(newUserMessage);
-        
         // Always include the new message in the context for the agent
-        const messages = [...agent.conversationHistory];
-        
-        let finalResponse = '';
+        const messages = [...agent.conversationHistory, newUserMessage];
         
         try {
           // Start chat completion stream
           for await (const chunk of agent.chatCompletion(messages)) {
             yield chunk;
-            
-            // Capture the final response text
-            if (chunk.type === 'text' && chunk.content) {
-              finalResponse = chunk.content;
-            }
             
             // If there's an error, break the stream
             if (chunk.type === 'error') {
@@ -1560,13 +1559,7 @@ const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") 
             }
           }
           
-          // Add the assistant response to conversation history
-          if (finalResponse) {
-            agent.conversationHistory.push({
-              role: 'assistant',
-              content: finalResponse
-            });
-          }
+          // Note: The agent itself will add the assistant response to conversation history
         } catch (error) {
           yield {
             type: "error",
@@ -1714,8 +1707,11 @@ const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") 
   console.log(`Service is available (id: ${svc.id}), you can try it at: https://hypha.aicell.io/${server.config.workspace}/services/${svc.id.split("/")[1]}`);
   
   // Keep the connection alive
-  return server;
+  return { server, service: svc };
 }
+
+// Export for testing
+export { startHyphaService };
 
 // Start the service if this is the main module
 if (import.meta.main) {

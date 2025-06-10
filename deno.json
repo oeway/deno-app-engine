@@ -19,6 +19,8 @@
     "test-vectordb-stress": "deno run -A --no-check tests/vectordb_stress_test.ts",
     "test-vectordb-integration": "deno run -A --no-check tests/vectordb_integration_test.ts",
     "test-agents": "deno test -A --no-check tests/agents_test.ts",
+    "test-hypha": "deno test -A --no-check tests/hypha-service-comprehensive.test.ts",
+    "test-hypha-client": "deno run -A --no-check scripts/hypha-service-client.ts",
     "example": "deno run -A examples/main.ts",
     "example-ollama": "deno run -A --no-check examples/vectordb-ollama-example.ts",
     "generate-wheels": "cd kernel && python3 generate-wheels-js.py",

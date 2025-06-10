@@ -135,6 +135,8 @@ Show all calculations and explain your reasoning step by step.`;
           if (chunk.content?.includes("matplotlib") || chunk.content?.includes("plot")) {
             hasVisualization = true;
           }
+        } else if (chunk.type === 'text_chunk') {
+          // Accumulate streaming chunks - don't log each one individually to avoid spam
         } else if (chunk.type === 'text') {
           logStep("Agent Response", chunk.content || "", "INFO");
         } else if (chunk.type === 'error') {
@@ -206,6 +208,8 @@ Use statistical methods and explain any patterns you discover.`;
           }
         } else if (chunk.type === 'function_call_output') {
           logStep(`Execution Result ${codeExecutions}`, chunk.content || "", "RESULT");
+        } else if (chunk.type === 'text_chunk') {
+          // Accumulate streaming chunks - don't log each one individually to avoid spam
         } else if (chunk.type === 'text') {
           logStep("Agent Response", chunk.content || "", "INFO");
         } else if (chunk.type === 'error') {
@@ -277,6 +281,8 @@ Show your decision-making process and explain how you handle trade-offs.`;
           }
         } else if (chunk.type === 'function_call_output') {
           logStep(`Execution Result ${codeExecutions}`, chunk.content || "", "RESULT");
+        } else if (chunk.type === 'text_chunk') {
+          // Accumulate streaming chunks - don't log each one individually to avoid spam
         } else if (chunk.type === 'text') {
           logStep("Agent Response", chunk.content || "", "INFO");
         } else if (chunk.type === 'error') {

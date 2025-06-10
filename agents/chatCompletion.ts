@@ -136,7 +136,7 @@ export async function* chatCompletion({
   stream = true,
   abortController, // Add abortController parameter
 }: ChatCompletionOptions): AsyncGenerator<{
-  type: 'text' | 'function_call' | 'function_call_output' | 'new_completion' | 'error';
+  type: 'text' | 'text_chunk' | 'function_call' | 'function_call_output' | 'new_completion' | 'error';
   content?: string;
   name?: string;
   arguments?: any;
@@ -214,17 +214,6 @@ export async function* chatCompletion({
                 return;
               }
 
-              // Debug log the content being streamed (extract content first for debug)
-              let chunkContent = '';
-              if (chunk && chunk.choices && Array.isArray(chunk.choices) && chunk.choices.length > 0) {
-                const choice = chunk.choices[0];
-                if (choice && choice.delta) {
-                  chunkContent = choice.delta.content || '';
-                } else if (choice && choice.message) {
-                  chunkContent = choice.message.content || '';
-                }
-              }
-
               // More robust content extraction with better error handling
               let content = '';
               if (chunk && chunk.choices && Array.isArray(chunk.choices) && chunk.choices.length > 0) {
@@ -242,27 +231,30 @@ export async function* chatCompletion({
 
               accumulatedResponse += content;
 
-              // Progressive debug logging - show accumulated content on one line
+              // Debug logging - show only the new content
               if (content) {
-                // Truncate if too long and show preview on single line
-                const displayContent = accumulatedResponse.length > 100 
-                  ? accumulatedResponse.substring(0, 100) + '...'
-                  : accumulatedResponse;
-                // Use \r to overwrite the same line
-                process.stdout.write(`\rDEBUG Streaming content: ${displayContent}`);
+                console.log(`DEBUG Streaming chunk: ${content}`);
               }
 
-              if(onStreaming){
-                onStreaming(completionId, accumulatedResponse);
+              if(onStreaming && content){
+                onStreaming(completionId, content);
               }
               yield {
-                type: 'text',
-                content: accumulatedResponse
+                type: 'text_chunk',
+                content: content
               };
             }
             // Complete the debug line with a newline after streaming finishes
             if (accumulatedResponse) {
               console.log(); // Add newline to complete the progressive debug line
+            }
+            
+            // Yield the final accumulated text for compatibility
+            if (accumulatedResponse) {
+              yield {
+                type: 'text',
+                content: accumulatedResponse
+              };
             }
           } catch (error) {
             // Check if error is due to abortion
@@ -294,7 +286,7 @@ export async function* chatCompletion({
 
           accumulatedResponse = completion.choices[0]?.message?.content || '';
           
-          if(onStreaming){
+          if(onStreaming && accumulatedResponse){
             onStreaming(completionId, accumulatedResponse);
           }
           yield {

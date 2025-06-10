@@ -348,6 +348,7 @@ print(df.head())
 </py-script>
 
 Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed.
+Unless explicitly asked, you should NEVER show user scripts or code.
 
 ### 3. **Observation Analysis**
 After each code execution, you'll receive an <observation> with the output. Use this to:
@@ -505,6 +506,7 @@ console.log('Users:', users);
 </t-script>
 
 Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed.
+Unless explicitly asked, you should NEVER show user scripts or code.
 
 ### 3. **Observation Analysis**
 After each code execution, you'll receive an <observation> with the console output. Use this to:
@@ -638,7 +640,8 @@ const result = processUserData(sampleData);
 console.log('Final result:', result);
 </t-script>
 
-Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed.
+Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed;
+Unless explicitly asked, you should NEVER show user scripts or code.
 
 ### 3. **Observation Analysis**
 After each code execution, you'll receive an <observation> with the console output. Use this to:
@@ -1155,23 +1158,41 @@ export class Agent implements IAgentInstance {
               options.onMessage(completionId, message, commitIds);
             }
           },
-          onStreaming: (completionId: string, message: string) => {
+          onStreaming: (completionId: string, chunk: string) => {
             this.manager.emit(AgentEvents.AGENT_STREAMING, {
               agentId: this.id,
               completionId,
-              message
+              chunk
             });
             
             if (options.onStreaming) {
-              options.onStreaming(completionId, message);
+              options.onStreaming(completionId, chunk);
             }
           }
         };
 
+        // Track accumulated content for this step
+        let stepAccumulatedContent = '';
+        
         // Execute the step
         for await (const chunk of chatCompletion(completionOptions)) {
-          if (chunk.type === 'text' && chunk.content) {
-            // Validate agent output before processing
+          if (chunk.type === 'text_chunk' && chunk.content) {
+            // Accumulate the content for this step
+            stepAccumulatedContent += chunk.content;
+            
+            // Validate agent output before processing (validate accumulated content)
+            this.validateAgentOutput(stepAccumulatedContent);
+            
+            actionStep.modelOutput = stepAccumulatedContent;
+            actionStep.modelOutputMessage = {
+              role: 'assistant',
+              content: stepAccumulatedContent
+            };
+            
+            // Check if this completion was concluded naturally by chatCompletion
+            // (the finalAnswer is now set by the onMessage callback in chatCompletion.ts)
+          } else if (chunk.type === 'text' && chunk.content) {
+            // Final accumulated text - validate and store
             this.validateAgentOutput(chunk.content);
             
             actionStep.modelOutput = chunk.content;
@@ -1179,9 +1200,6 @@ export class Agent implements IAgentInstance {
               role: 'assistant',
               content: chunk.content
             };
-            
-            // Check if this completion was concluded naturally by chatCompletion
-            // (the finalAnswer is now set by the onMessage callback in chatCompletion.ts)
           }
           yield chunk;
         }
