@@ -7,6 +7,9 @@ import "npm:fake-indexeddb/auto";
 // Import the Voy search engine
 import { Voy } from "./voy_search.js";
 
+// @ts-ignore Import Comlink from Deno
+import * as Comlink from "https://deno.land/x/comlink@4.4.1/mod.ts";
+
 // Interface for document
 interface IDocument {
   id: string;
@@ -30,279 +33,230 @@ interface IQueryResult {
   text?: string;
 }
 
-// Worker state
-let voyIndex: any = null;
-let documents: Map<string, IDocument> = new Map();
-let isInitialized = false;
-let instanceId = "";
-
-/**
- * Initialize the worker with Voy index
- */
-function initialize(options: any): void {
-  try {
-    instanceId = options.id;
-    
-    // Create empty Voy index
-    const resource = { embeddings: [] };
-    voyIndex = new Voy(resource);
-    
-    isInitialized = true;
-    
-    // Send ready signal
-    self.postMessage({
-      type: "WORKER_READY",
-      instanceId
-    });
-    
-  } catch (error) {
-    console.error("Error initializing vector database worker:", error);
-    self.postMessage({
-      type: "WORKER_ERROR",
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
+// Interface for vector database worker API
+export interface IVectorDBWorkerAPI {
+  initialize(options: any): Promise<void>;
+  addDocuments(docs: IDocument[]): Promise<{ success: boolean; count?: number; error?: string }>;
+  queryIndex(vector: number[], options: IQueryOptions): Promise<{ success: boolean; results?: IQueryResult[]; error?: string }>;
+  removeDocuments(documentIds: string[]): Promise<{ success: boolean; removedCount?: number; error?: string }>;
+  getStats(): Promise<{ success: boolean; stats?: any; error?: string }>;
+  getDocuments(): Promise<{ success: boolean; documents?: IDocument[]; error?: string }>;
 }
 
-/**
- * Add documents to the index
- */
-function addDocuments(docs: IDocument[]): void {
-  try {
-    if (!isInitialized || !voyIndex) {
-      throw new Error("Worker not initialized");
-    }
-    
-    // Store documents in our map
-    for (const doc of docs) {
-      documents.set(doc.id, doc);
-    }
-    
-    // Convert documents to Voy format
-    const voyEmbeddings = docs.map(doc => ({
-      id: doc.id,
-      title: doc.text || doc.id,
-      url: `/doc/${doc.id}`,
-      embeddings: doc.vector!
-    }));
-    
-    // Add to Voy index
-    const resource = { embeddings: voyEmbeddings };
-    voyIndex.add(resource);
-    
-    self.postMessage({
-      type: "ADD_DOCUMENTS_RESULT",
-      success: true,
-      count: docs.length
-    });
-    
-  } catch (error) {
-    console.error("Error adding documents:", error);
-    self.postMessage({
-      type: "ADD_DOCUMENTS_RESULT",
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-}
+// Vector Database Worker Implementation
+class VectorDBWorker implements IVectorDBWorkerAPI {
+  private voyIndex: any = null;
+  private documents: Map<string, IDocument> = new Map();
+  private isInitialized = false;
+  private instanceId = "";
 
-/**
- * Query the index
- */
-function queryIndex(vector: number[], options: IQueryOptions): void {
-  try {
-    if (!isInitialized || !voyIndex) {
-      throw new Error("Worker not initialized");
+  async initialize(options: any): Promise<void> {
+    try {
+      this.instanceId = options.id;
+      
+      // Create empty Voy index
+      const resource = { embeddings: [] };
+      this.voyIndex = new Voy(resource);
+      
+      this.isInitialized = true;
+      
+      console.log(`[VDB_WORKER] Initialized vector database instance: ${this.instanceId}`);
+    } catch (error) {
+      console.error("Error initializing vector database worker:", error);
+      throw error;
     }
-    
-    const k = options.k || 10;
-    const threshold = options.threshold || 0;
-    const includeMetadata = options.includeMetadata !== false;
-    
-    // Perform search
-    const queryVector = new Float32Array(vector);
-    const searchResults = voyIndex.search(queryVector, k);
-    
-    // Convert results to our format
-    const results: IQueryResult[] = searchResults.neighbors
-      .map((result: any, index: number) => {
-        const doc = documents.get(result.id);
-        
-        // Voy doesn't provide scores, so we'll use a simple ranking score
-        // Higher rank (lower index) = higher score
-        const score = 1.0 - (index / searchResults.neighbors.length);
-        
-        return {
-          id: result.id,
-          score: score,
-          metadata: includeMetadata ? doc?.metadata : undefined,
-          text: doc?.text
-        };
-      })
-      .filter((result: IQueryResult) => result.score >= threshold);
-    
-    self.postMessage({
-      type: "QUERY_RESULT",
-      success: true,
-      results
-    });
-    
-  } catch (error) {
-    console.error("Error querying index:", error);
-    self.postMessage({
-      type: "QUERY_RESULT",
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    });
   }
-}
 
-/**
- * Remove documents from the index
- */
-function removeDocuments(documentIds: string[]): void {
-  try {
-    if (!isInitialized || !voyIndex) {
-      throw new Error("Worker not initialized");
-    }
-    
-    // Remove from our document map
-    for (const id of documentIds) {
-      documents.delete(id);
-    }
-    
-    // For Voy, we need to rebuild the index without the removed documents
-    // Convert remaining documents to Voy format
-    const remainingDocs = Array.from(documents.values());
-    const voyEmbeddings = remainingDocs
-      .filter(doc => doc.vector) // Only include docs with vectors
-      .map(doc => ({
+  async addDocuments(docs: IDocument[]): Promise<{ success: boolean; count?: number; error?: string }> {
+    try {
+      if (!this.isInitialized || !this.voyIndex) {
+        throw new Error("Worker not initialized");
+      }
+      
+      // Store documents in our map
+      for (const doc of docs) {
+        this.documents.set(doc.id, doc);
+      }
+      
+      // Convert documents to Voy format
+      const voyEmbeddings = docs.map(doc => ({
         id: doc.id,
         title: doc.text || doc.id,
         url: `/doc/${doc.id}`,
         embeddings: doc.vector!
       }));
-    
-    // Rebuild the index
-    const resource = { embeddings: voyEmbeddings };
-    voyIndex = new Voy(resource);
-    
-    self.postMessage({
-      type: "REMOVE_DOCUMENTS_RESULT",
-      success: true,
-      removedCount: documentIds.length
-    });
-    
-  } catch (error) {
-    console.error("Error removing documents:", error);
-    self.postMessage({
-      type: "REMOVE_DOCUMENTS_RESULT",
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    });
+      
+      // Add to Voy index
+      const resource = { embeddings: voyEmbeddings };
+      this.voyIndex.add(resource);
+      
+      return {
+        success: true,
+        count: docs.length
+      };
+      
+    } catch (error) {
+      console.error("Error adding documents:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async queryIndex(vector: number[], options: IQueryOptions): Promise<{ success: boolean; results?: IQueryResult[]; error?: string }> {
+    try {
+      if (!this.isInitialized || !this.voyIndex) {
+        throw new Error("Worker not initialized");
+      }
+      
+      const k = options.k || 10;
+      const threshold = options.threshold || 0;
+      const includeMetadata = options.includeMetadata !== false;
+      
+      // Perform search
+      const queryVector = new Float32Array(vector);
+      const searchResults = this.voyIndex.search(queryVector, k);
+      
+      // Convert results to our format
+      const results: IQueryResult[] = searchResults.neighbors
+        .map((result: any, index: number) => {
+          const doc = this.documents.get(result.id);
+          
+          // Voy doesn't provide scores, so we'll use a simple ranking score
+          // Higher rank (lower index) = higher score
+          const score = 1.0 - (index / searchResults.neighbors.length);
+          
+          return {
+            id: result.id,
+            score: score,
+            metadata: includeMetadata ? doc?.metadata : undefined,
+            text: doc?.text
+          };
+        })
+        .filter((result: IQueryResult) => result.score >= threshold);
+      
+      return {
+        success: true,
+        results
+      };
+      
+    } catch (error) {
+      console.error("Error querying index:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async removeDocuments(documentIds: string[]): Promise<{ success: boolean; removedCount?: number; error?: string }> {
+    try {
+      if (!this.isInitialized || !this.voyIndex) {
+        throw new Error("Worker not initialized");
+      }
+      
+      // Remove from our document map
+      for (const id of documentIds) {
+        this.documents.delete(id);
+      }
+      
+      // For Voy, we need to rebuild the index without the removed documents
+      // Convert remaining documents to Voy format
+      const remainingDocs = Array.from(this.documents.values());
+      const voyEmbeddings = remainingDocs
+        .filter(doc => doc.vector) // Only include docs with vectors
+        .map(doc => ({
+          id: doc.id,
+          title: doc.text || doc.id,
+          url: `/doc/${doc.id}`,
+          embeddings: doc.vector!
+        }));
+      
+      // Rebuild the index
+      const resource = { embeddings: voyEmbeddings };
+      this.voyIndex = new Voy(resource);
+      
+      return {
+        success: true,
+        removedCount: documentIds.length
+      };
+      
+    } catch (error) {
+      console.error("Error removing documents:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async getStats(): Promise<{ success: boolean; stats?: any; error?: string }> {
+    try {
+      if (!this.isInitialized || !this.voyIndex) {
+        throw new Error("Worker not initialized");
+      }
+      
+      const stats = {
+        documentCount: this.documents.size,
+        indexSize: this.voyIndex.size(),
+        instanceId: this.instanceId
+      };
+      
+      return {
+        success: true,
+        stats
+      };
+      
+    } catch (error) {
+      console.error("Error getting stats:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async getDocuments(): Promise<{ success: boolean; documents?: IDocument[]; error?: string }> {
+    try {
+      if (!this.isInitialized) {
+        throw new Error("Worker not initialized");
+      }
+      
+      // Convert documents map to array
+      const documentsArray = Array.from(this.documents.values());
+      
+      return {
+        success: true,
+        documents: documentsArray
+      };
+      
+    } catch (error) {
+      console.error("Error getting documents:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
   }
 }
 
-/**
- * Get index statistics
- */
-function getStats(): void {
-  try {
-    if (!isInitialized || !voyIndex) {
-      throw new Error("Worker not initialized");
-    }
-    
-    const stats = {
-      documentCount: documents.size,
-      indexSize: voyIndex.size(),
-      instanceId
-    };
-    
-    self.postMessage({
-      type: "STATS_RESULT",
-      success: true,
-      stats
-    });
-    
-  } catch (error) {
-    console.error("Error getting stats:", error);
-    self.postMessage({
-      type: "STATS_RESULT",
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-}
+// Create worker instance
+const worker = new VectorDBWorker();
 
-/**
- * Get all documents from the index (for offloading)
- */
-function getDocuments(): void {
-  try {
-    if (!isInitialized) {
-      throw new Error("Worker not initialized");
-    }
-    
-    // Convert documents map to array
-    const documentsArray = Array.from(documents.values());
-    
-    self.postMessage({
-      type: "GET_DOCUMENTS_RESULT",
-      success: true,
-      documents: documentsArray
-    });
-    
-  } catch (error) {
-    console.error("Error getting documents:", error);
-    self.postMessage({
-      type: "GET_DOCUMENTS_RESULT",
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-}
-
-// Message handler
-self.addEventListener('message', (event: MessageEvent) => {
-  const { type, ...data } = event.data;
-  
-  try {
-    switch (type) {
-      case "INITIALIZE":
-        initialize(data.options);
-        break;
-        
-      case "ADD_DOCUMENTS":
-        addDocuments(data.documents);
-        break;
-        
-      case "QUERY":
-        queryIndex(data.vector, data.options);
-        break;
-        
-      case "REMOVE_DOCUMENTS":
-        removeDocuments(data.documentIds);
-        break;
-        
-      case "GET_STATS":
-        getStats();
-        break;
-        
-      case "GET_DOCUMENTS":
-        getDocuments();
-        break;
-        
-      default:
-        console.warn(`Unknown message type: ${type}`);
-    }
-  } catch (error) {
-    console.error(`Error handling message type ${type}:`, error);
-    self.postMessage({
-      type: "ERROR",
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
+// Global error handler
+self.addEventListener("error", (event) => {
+  console.error("[VDB_WORKER] Global error caught:", event.error);
+  event.preventDefault();
 });
+
+self.addEventListener("unhandledrejection", (event) => {
+  console.error("[VDB_WORKER] Unhandled promise rejection:", event.reason);
+  event.preventDefault();
+});
+
+// Expose worker via Comlink
+Comlink.expose(worker);
 
 // Send initial ready signal
 console.log("Vector database worker loaded"); 
