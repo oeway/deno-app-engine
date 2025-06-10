@@ -195,6 +195,9 @@ Deno.test("Enhanced Agents - Configuration and Memory Management", async () => {
   assertEquals(agent.planningInterval, 1, "Agent should have correct planning interval");
   assertEquals(agent.maxSteps, 5, "Agent should have correct max steps");
 
+  // Clean up agents to prevent resource leaks
+  await agentManager.destroyAll();
+
   await cleanupTestData();
 });
 
@@ -364,6 +367,9 @@ Deno.test("Enhanced Agents - Conversation Management", async () => {
   await agentManager.clearConversation(agentId);
   assertEquals(agent.conversationHistory.length, 0, "Conversation should be cleared");
 
+  // Clean up agents to prevent resource leaks
+  await agentManager.destroyAll();
+
   await cleanupTestData();
 });
 
@@ -428,6 +434,9 @@ Deno.test("Enhanced Agents - Agent Lifecycle and Resource Management", async () 
   const finalStats = agentManager.getStats();
   assertEquals(finalStats.totalAgents, 0, "Stats should reflect no agents");
 
+  // Clean up kernel manager
+  await kernelManager.destroyAll();
+
   await cleanupTestData();
 });
 
@@ -484,6 +493,9 @@ Deno.test("Enhanced Agents - Event System", async () => {
   assert(events.some(e => e.type === 'destroyed' && e.data.agentId === agentId), "Should emit destruction event");
 
   console.log(`📊 Total events captured: ${events.length}`);
+
+  // Allow time for all async operations to complete
+  await wait(100);
 
   await cleanupTestData();
 });
