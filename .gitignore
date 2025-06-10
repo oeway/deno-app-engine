@@ -1,7 +1,7 @@
 resources/
 node_modules/
 .DS_Store
-kernel/pypi/
+kernel/pypi/*.whl
 dist/
 .ipython/
 .ipynb_checkpoints/
