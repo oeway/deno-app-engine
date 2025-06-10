@@ -27,6 +27,12 @@ async function isOllamaAvailable(): Promise<boolean> {
         'Content-Type': 'application/json'
       }
     });
+    
+    // Consume the response body to prevent resource leaks
+    if (response.body) {
+      await response.body.cancel();
+    }
+    
     return response.ok;
   } catch {
     return false;

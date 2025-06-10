@@ -1609,8 +1609,11 @@ async function startHyphaService(options: {
         const messages = [...agent.conversationHistory, newUserMessage];
         
         try {
+          let hasYieldedResponse = false;
+          
           // Start chat completion stream
           for await (const chunk of agent.chatCompletion(messages)) {
+            hasYieldedResponse = true;
             yield chunk;
             
             // If there's an error, break the stream
@@ -1619,14 +1622,24 @@ async function startHyphaService(options: {
             }
           }
           
-          // Note: The agent itself will add the assistant response to conversation history
+          // If no response was yielded, it means the agent completed without any output
+          // This shouldn't happen with our fix to agent.ts, but just in case
+          if (!hasYieldedResponse) {
+            yield {
+              type: "error",
+              error: "Agent completed without generating any response"
+            };
+          }
+          
         } catch (error) {
+          console.error(`Error in agent chat completion:`, error);
           yield {
             type: "error",
             error: error instanceof Error ? error.message : String(error)
           };
         }
       } catch (error) {
+        console.error(`Error in chatWithAgent:`, error);
         yield {
           type: "error", 
           error: error instanceof Error ? error.message : String(error)

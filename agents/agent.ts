@@ -1241,6 +1241,46 @@ export class Agent implements IAgentInstance {
         role: 'assistant',
         content: finalAnswer
       });
+    } else {
+      // If we exit the loop without a final answer, this is an error condition
+      let errorMessage = '';
+      let errorType = 'execution_failed';
+      
+      // Check if any steps had errors
+      const actionSteps = this.memory.getStepsByType<ActionStep>(StepType.ACTION);
+      const errorsInSteps = actionSteps.filter(step => step.error);
+      
+      if (errorsInSteps.length > 0) {
+        // There were execution errors
+        const lastError = errorsInSteps[errorsInSteps.length - 1].error;
+        errorMessage = `Agent execution failed with error: ${lastError?.message || 'Unknown error'}`;
+        errorType = lastError?.context || 'execution_error';
+      } else if (loopCount >= (options.maxSteps || this.maxSteps)) {
+        // Reached max steps without completion
+        errorMessage = `Agent reached maximum number of steps (${options.maxSteps || this.maxSteps}) without providing a final response`;
+        errorType = 'max_steps_reached';
+      } else {
+        // Unknown reason for failure
+        errorMessage = `Agent failed to generate a response after ${loopCount} step(s)`;
+        errorType = 'no_response_generated';
+      }
+      
+      console.error(`❌ [Agent ${this.id}] ${errorMessage}`);
+      
+      // Create and throw appropriate error
+      const agentError = errorType === 'max_steps_reached' 
+        ? new AgentMaxStepsError(errorMessage)
+        : new AgentExecutionError(errorMessage);
+      
+      // Emit error event
+      this.manager.emit(AgentEvents.AGENT_ERROR, {
+        agentId: this.id,
+        error: agentError,
+        context: errorType
+      });
+      
+      // Throw the error to propagate it to the caller
+      throw agentError;
     }
 
     // Save conversation if auto-save is enabled

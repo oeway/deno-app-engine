@@ -323,7 +323,7 @@ await micropip.install(ipykernel_url)
 
     // First, load packages that are available in Pyodide distribution
     console.log("Loading Pyodide packages...");
-    await this.pyodide.loadPackage(['pure-eval', 'stack-data']);
+    await this.pyodide.loadPackage(['pure-eval', 'stack-data', 'pygments']);
     
     // Use piplite to install required packages
     const scriptLines: string[] = [];
