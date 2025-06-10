@@ -102,9 +102,6 @@ export class AgentManager extends EventEmitter {
 
     // Initialize model registry from config
     this.initializeModelRegistry(options.modelRegistry);
-
-    // Ensure data directory exists
-    this.ensureDataDirectory().catch(console.error);
   }
 
   /**
@@ -145,18 +142,6 @@ export class AgentManager extends EventEmitter {
     
     if (Object.keys(config).length > 0) {
       console.log(`✅ Initialized ${Object.keys(config).length} model(s) from configuration`);
-    }
-  }
-
-  /**
-   * Ensure the data directory exists
-   * @private
-   */
-  private async ensureDataDirectory(): Promise<void> {
-    try {
-      await ensureDir(this.agentDataDirectory);
-    } catch (error) {
-      console.error(`Failed to create agent data directory: ${error}`);
     }
   }
 
@@ -410,6 +395,13 @@ export class AgentManager extends EventEmitter {
     const agent = this.agents.get(agentId);
     if (!agent) {
       throw new Error(`Agent with ID "${agentId}" not found`);
+    }
+
+    // Ensure directory exists before saving
+    try {
+      await ensureDir(this.agentDataDirectory);
+    } catch (error) {
+      console.error(`Failed to create agent data directory: ${error}`);
     }
 
     const saveData: IConversationData = {
