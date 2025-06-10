@@ -549,21 +549,16 @@ export class VectorDBManager extends EventEmitter {
         }
       };
       
-      // Store the proxy for later use
+      // Store the proxy on the instance for access in other methods
       (instance as any).proxy = workerProxy;
       
-      console.log(`✅ Instance ${id} resumed from offload with ${metadata.documentCount} documents`);
+      // Store the instance
+      this.instances.set(id, instance);
       
-      // Emit resume event
-      this.emit(VectorDBEvents.INDEX_RESUMED, {
-        instanceId: id,
-        data: { 
-          id, 
-          documentCount: metadata.documentCount,
-          offloadedAt: metadata.offloadedAt,
-          resumedAt: new Date()
-        }
-      });
+      // Update activity tracking
+      this.updateInstanceActivity(id);
+      
+      console.log(`✅ Instance ${id} resumed from offload`);
       
       return instance;
       
@@ -903,7 +898,7 @@ export class VectorDBManager extends EventEmitter {
       }
     };
     
-    // Store the proxy for later use
+    // Store the proxy on the instance for access in other methods
     (instance as any).proxy = workerProxy;
     
     // Store the instance

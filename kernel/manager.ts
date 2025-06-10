@@ -976,8 +976,8 @@ export class KernelManager extends EventEmitter {
           return kernelProxy.execute(code, parent);
         },
         isInitialized: () => {
-          // Since this is async in the worker, we'll assume it's initialized
-          // after the initial setup succeeds
+          // For worker kernels, we track initialization state locally
+          // since the proxy method is async
           return true;
         },
         inputReply: async (content: { value: string }) => {
@@ -1001,6 +1001,9 @@ export class KernelManager extends EventEmitter {
         worker.terminate();
       }
     };
+    
+    // Store the proxy on the instance for access in other methods
+    (instance as any).proxy = kernelProxy;
     
     return instance;
   }

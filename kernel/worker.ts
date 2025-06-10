@@ -182,7 +182,12 @@ self.addEventListener("error", (event) => {
 });
 
 self.addEventListener("unhandledrejection", (event) => {
-  if (worker['isKeyboardInterrupt'](event.reason)) {
+  // Check if this is a KeyboardInterrupt
+  const error = event.reason;
+  if (error && 
+      typeof error === 'object' && 
+      (error.type === "KeyboardInterrupt" || 
+       (error.message && error.message.includes("KeyboardInterrupt")))) {
     console.log("[WORKER] KeyboardInterrupt caught in unhandled rejection handler - this is expected during interrupts");
   } else {
     console.error("[WORKER] Unhandled promise rejection:", event.reason);
