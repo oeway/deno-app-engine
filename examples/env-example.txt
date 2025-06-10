@@ -1,0 +1,36 @@
+# Example Environment Configuration for Hypha Service
+# Copy these variables to your .env file or export them in your shell
+
+# === HYPHA CONNECTION SETTINGS ===
+HYPHA_SERVER_URL=https://hypha.aicell.io
+HYPHA_WORKSPACE=my-workspace
+# HYPHA_TOKEN=your-token-here
+# HYPHA_CLIENT_ID=my-client-id
+
+# === KERNEL MANAGER SETTINGS ===
+ALLOWED_KERNEL_TYPES=worker-python,worker-typescript
+KERNEL_POOL_ENABLED=true
+KERNEL_POOL_SIZE=3
+KERNEL_POOL_AUTO_REFILL=true
+KERNEL_POOL_PRELOAD_CONFIGS=worker-python
+
+# === VECTOR DATABASE SETTINGS ===
+EMBEDDING_MODEL=mock-model
+DEFAULT_EMBEDDING_PROVIDER_NAME=ollama-nomic-embed-text
+MAX_VECTOR_DB_INSTANCES=25
+VECTORDB_OFFLOAD_DIRECTORY=./my_vectordb_offload
+VECTORDB_DEFAULT_INACTIVITY_TIMEOUT=2700000
+VECTORDB_ACTIVITY_MONITORING=true
+OLLAMA_HOST=http://localhost:11434
+
+# === AI AGENT MODEL SETTINGS ===
+AGENT_MODEL_BASE_URL=http://localhost:11434/v1/
+AGENT_MODEL_API_KEY=ollama
+AGENT_MODEL_NAME=llama3.1:8b
+AGENT_MODEL_TEMPERATURE=0.5
+
+# === AGENT MANAGER SETTINGS ===
+MAX_AGENTS=15
+AGENT_DATA_DIRECTORY=./my_agent_data
+AUTO_SAVE_CONVERSATIONS=true
+AGENT_MAX_STEPS_CAP=15 

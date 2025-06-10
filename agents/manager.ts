@@ -9,7 +9,6 @@ import {
   type ModelSettings,
   DefaultModelSettings
 } from "./chatCompletion.ts";
-import type { IKernelInstance } from "../kernel/mod.ts";
 import { 
   Agent, 
   AgentEvents, 

@@ -1,3 +1,46 @@
+/**
+ * Hypha Service for Deno App Engine
+ * 
+ * This service provides kernel management, vector database, and AI agent capabilities
+ * through a Hypha-compatible WebSocket service interface.
+ * 
+ * Environment Variables Configuration:
+ * 
+ * === HYPHA CONNECTION ===
+ * - HYPHA_SERVER_URL: Hypha server URL (default: https://hypha.aicell.io)
+ * - HYPHA_WORKSPACE: Hypha workspace name
+ * - HYPHA_TOKEN: Authentication token for Hypha server
+ * - HYPHA_CLIENT_ID: Client identifier for Hypha connections
+ * 
+ * === KERNEL MANAGER ===
+ * - ALLOWED_KERNEL_TYPES: Comma-separated allowed kernel types (e.g., "worker-python,worker-typescript,main_thread-python")
+ * - KERNEL_POOL_ENABLED: Enable kernel pooling (default: true)
+ * - KERNEL_POOL_SIZE: Pool size for kernels (default: 2)
+ * - KERNEL_POOL_AUTO_REFILL: Auto-refill kernel pool (default: true)
+ * - KERNEL_POOL_PRELOAD_CONFIGS: Comma-separated preload configs (e.g., "worker-python,main_thread-python")
+ * 
+ * === VECTOR DATABASE ===
+ * - EMBEDDING_MODEL: Default embedding model (default: "mock-model")
+ * - DEFAULT_EMBEDDING_PROVIDER_NAME: Name of default embedding provider from registry
+ * - MAX_VECTOR_DB_INSTANCES: Maximum vector DB instances (default: 20)
+ * - VECTORDB_OFFLOAD_DIRECTORY: Directory for offloaded vector indices (default: "./vectordb_offload")
+ * - VECTORDB_DEFAULT_INACTIVITY_TIMEOUT: Default inactivity timeout in ms (default: 1800000 = 30 minutes)
+ * - VECTORDB_ACTIVITY_MONITORING: Enable activity monitoring (default: true)
+ * - OLLAMA_HOST: Ollama server host for embedding providers (default: "http://localhost:11434")
+ * 
+ * === AI AGENT MODEL SETTINGS ===
+ * - AGENT_MODEL_BASE_URL: Base URL for agent model API (default: "http://localhost:11434/v1/")
+ * - AGENT_MODEL_API_KEY: API key for agent model (default: "ollama")
+ * - AGENT_MODEL_NAME: Model name for agents (default: "qwen2.5-coder:7b")
+ * - AGENT_MODEL_TEMPERATURE: Model temperature (default: 0.7)
+ * 
+ * === AGENT MANAGER ===
+ * - MAX_AGENTS: Maximum number of agents (default: 10)
+ * - AGENT_DATA_DIRECTORY: Directory for agent data (default: "./agent_data")
+ * - AUTO_SAVE_CONVERSATIONS: Auto-save agent conversations (default: true)
+ * - AGENT_MAX_STEPS_CAP: Maximum steps cap for agents (default: 10)
+ */
+
 import { hyphaWebsocketClient } from "npm:hypha-rpc";
 import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
@@ -227,22 +270,24 @@ async function startHyphaService(options: {
   // Create a global kernel manager instance with configuration
   const kernelManager = new KernelManager(getKernelManagerOptions());
   
-  // Default model settings for agents
-const DEFAULT_AGENT_MODEL_SETTINGS = {
-  baseURL: Deno.env.get("AGENT_MODEL_BASE_URL") || "http://localhost:11434/v1/",
-  apiKey: Deno.env.get("AGENT_MODEL_API_KEY") || "ollama",
-  model: Deno.env.get("AGENT_MODEL_NAME") || "qwen2.5-coder:7b",
-  temperature: parseFloat(Deno.env.get("AGENT_MODEL_TEMPERATURE") || "0.7")
-};
+  // Configure agent model settings from environment variables
+  const DEFAULT_AGENT_MODEL_SETTINGS = {
+    baseURL: Deno.env.get("AGENT_MODEL_BASE_URL") || "http://localhost:11434/v1/",
+    apiKey: Deno.env.get("AGENT_MODEL_API_KEY") || "ollama",
+    model: Deno.env.get("AGENT_MODEL_NAME") || "qwen2.5-coder:7b",
+    temperature: parseFloat(Deno.env.get("AGENT_MODEL_TEMPERATURE") || "0.7")
+  };
 
-// Configure vector database manager options from environment variables
-const vectorDBOffloadDirectory = Deno.env.get("VECTORDB_OFFLOAD_DIRECTORY") || "./vectordb_offload";
-const vectorDBDefaultTimeout = parseInt(Deno.env.get("VECTORDB_DEFAULT_INACTIVITY_TIMEOUT") || "1800000"); // 30 minutes default
-const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") !== "false"; // Default true
+  // Configure vector database manager options from environment variables
+  const vectorDBOffloadDirectory = Deno.env.get("VECTORDB_OFFLOAD_DIRECTORY") || "./vectordb_offload";
+  const vectorDBDefaultTimeout = parseInt(Deno.env.get("VECTORDB_DEFAULT_INACTIVITY_TIMEOUT") || "1800000"); // 30 minutes default
+  const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") !== "false"; // Default true
+  const defaultEmbeddingProviderName = Deno.env.get("DEFAULT_EMBEDDING_PROVIDER_NAME") || undefined;
 
-// Create a global vector database manager instance
+  // Create a global vector database manager instance
   const vectorDBManager = new VectorDBManager({
-    defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mock-model", // Use mock model as default
+    defaultEmbeddingModel: Deno.env.get("EMBEDDING_MODEL") || "mock-model",
+    defaultEmbeddingProviderName: defaultEmbeddingProviderName,
     maxInstances: parseInt(Deno.env.get("MAX_VECTOR_DB_INSTANCES") || "20"),
     allowedNamespaces: undefined, // Allow all namespaces for now
     offloadDirectory: vectorDBOffloadDirectory,
@@ -302,8 +347,21 @@ const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") 
     console.log(`✅ Successfully added ${providersAdded} Ollama providers`);
   }
 
+  // Validate that the default embedding provider name exists if specified
+  if (defaultEmbeddingProviderName) {
+    const hasProvider = vectorDBManager.getEmbeddingProvider(defaultEmbeddingProviderName);
+    if (!hasProvider) {
+      console.warn(`⚠️ Warning: DEFAULT_EMBEDDING_PROVIDER_NAME "${defaultEmbeddingProviderName}" was specified but provider not found.`);
+      console.warn(`   Available providers will be listed after service registration.`);
+      console.warn(`   Vector indices will fall back to default embedding model: ${Deno.env.get("EMBEDDING_MODEL") || "mock-model"}`);
+    } else {
+      console.log(`✅ Default embedding provider "${defaultEmbeddingProviderName}" is available`);
+    }
+  }
+
   console.log("Hypha Service VectorDB Manager Configuration:");
   console.log(`- Default embedding model: ${Deno.env.get("EMBEDDING_MODEL") || "mock-model"}`);
+  console.log(`- Default embedding provider: ${defaultEmbeddingProviderName || "none (will use default embedding model)"}`);
   console.log(`- Offload directory: ${vectorDBOffloadDirectory}`);
   console.log(`- Default inactivity timeout: ${vectorDBDefaultTimeout}ms (${Math.round(vectorDBDefaultTimeout / 60000)} minutes)`);
   console.log(`- Activity monitoring enabled: ${vectorDBActivityMonitoring}`);
@@ -329,6 +387,8 @@ const vectorDBActivityMonitoring = Deno.env.get("VECTORDB_ACTIVITY_MONITORING") 
 
   console.log("Hypha Service Agent Manager Configuration:");
   console.log(`- Default model: ${DEFAULT_AGENT_MODEL_SETTINGS.model}`);
+  console.log(`- Default base URL: ${DEFAULT_AGENT_MODEL_SETTINGS.baseURL}`);
+  console.log(`- Default temperature: ${DEFAULT_AGENT_MODEL_SETTINGS.temperature}`);
   console.log(`- Max agents: ${maxAgents}`);
   console.log(`- Agent data directory: ${agentDataDirectory}`);
   console.log(`- Auto save conversations: ${autoSaveConversations}`);

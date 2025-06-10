@@ -38,7 +38,7 @@ jobs:
       - name: Setup Deno
         uses: denoland/setup-deno@v1
         with:
-          deno-version: v2.x
+          deno-version: v2.3.5
           
       - name: Install Python build dependencies
         run: |
