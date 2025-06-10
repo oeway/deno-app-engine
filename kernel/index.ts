@@ -321,6 +321,10 @@ await micropip.install(ipykernel_url)
       'nbformat'
     ];
 
+    // First, load packages that are available in Pyodide distribution
+    console.log("Loading Pyodide packages...");
+    await this.pyodide.loadPackage(['pure-eval', 'stack-data']);
+    
     // Use piplite to install required packages
     const scriptLines: string[] = [];
 
