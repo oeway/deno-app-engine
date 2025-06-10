@@ -1,11 +1,21 @@
 // TypeScript Web Worker for Deno App Engine
 // Supports both JavaScript and TypeScript execution
-import * as Comlink from "comlink";
+// @ts-ignore Import Comlink from Deno
+import * as Comlink from "https://deno.land/x/comlink@4.4.1/mod.ts";
 // @ts-ignore Importing from npm
 import { EventEmitter } from 'node:events';
 import { KernelEvents } from "./index.ts";
 import { jupyter, hasDisplaySymbol } from "./jupyter.ts";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
+
+// Interface for TypeScript kernel worker API
+export interface ITypeScriptKernelWorkerAPI {
+  initialize(options: any, eventCallback: (event: { type: string; data: any }) => void): Promise<void>;
+  execute(code: string, parent?: any): Promise<{ success: boolean; result?: any; error?: Error }>;
+  isInitialized(): boolean;
+  inputReply(content: { value: string }): Promise<void>;
+  getStatus(): "active" | "busy" | "unknown";
+}
 
 // Console capture utility
 class ConsoleCapture {
@@ -495,12 +505,12 @@ class CodeExecutor {
   }
 }
 
-// Main TypeScript Kernel
-class TypeScriptKernel {
+// TypeScript Kernel Worker Implementation
+class TypeScriptKernelWorker implements ITypeScriptKernelWorkerAPI {
   private eventEmitter = new EventEmitter();
   private consoleCapture = new ConsoleCapture(this.eventEmitter);
   private codeExecutor = new CodeExecutor();
-  private eventPort: MessagePort | null = null;
+  private eventCallback: ((event: { type: string; data: any }) => void) | null = null;
   private initialized = false;
   private pathMappings: Map<string, string> = new Map();
   private _status: "active" | "busy" | "unknown" = "unknown";
@@ -515,12 +525,10 @@ class TypeScriptKernel {
     this.setupFileSystemInterception();
   }
   
-  setEventPort(port: MessagePort): void {
-    this.eventPort = port;
-  }
-  
-  async initialize(options?: any): Promise<void> {
+  async initialize(options: any, eventCallback: (event: { type: string; data: any }) => void): Promise<void> {
     if (this.initialized) return;
+    
+    this.eventCallback = eventCallback;
     
     console.log("[TS_WORKER] Initializing TypeScript/JavaScript kernel");
     
@@ -543,20 +551,15 @@ class TypeScriptKernel {
     }
     
     this.initialized = true;
-    
-    if (this.eventPort) {
-      this.eventPort.postMessage({
-        type: "KERNEL_INITIALIZED",
-        data: { success: true }
-      });
-    }
+    this._status = "active";
   }
   
-  async execute(code: string, parent?: any): Promise<{ success: boolean, result?: any, error?: Error }> {
+  async execute(code: string, parent?: any): Promise<{ success: boolean; result?: any; error?: Error }> {
     if (!this.initialized) {
-      await this.initialize();
+      await this.initialize({}, () => {});
     }
     
+    this._status = "busy";
     this.consoleCapture.start();
     
     try {
@@ -567,9 +570,11 @@ class TypeScriptKernel {
         this.emitExecutionResult(result);
       }
       
+      this._status = "active";
       return { success: true, result };
     } catch (error) {
       this.emitExecutionError(error);
+      this._status = "active";
       return { 
         success: false, 
         error: error instanceof Error ? error : new Error(String(error))
@@ -583,10 +588,6 @@ class TypeScriptKernel {
     return this.initialized;
   }
   
-  get status(): "active" | "busy" | "unknown" {
-    return this._status;
-  }
-  
   getStatus(): "active" | "busy" | "unknown" {
     return this._status;
   }
@@ -598,8 +599,8 @@ class TypeScriptKernel {
   private setupEventForwarding(): void {
     Object.values(KernelEvents).forEach((eventType) => {
       this.eventEmitter.on(eventType, (data: any) => {
-        if (this.eventPort) {
-          this.eventPort.postMessage({
+        if (this.eventCallback) {
+          this.eventCallback({
             type: eventType,
             data: data
           });
@@ -722,23 +723,17 @@ class TypeScriptKernel {
 }
 
 // Global kernel instance
-const kernel = new TypeScriptKernel();
+const worker = new TypeScriptKernelWorker();
 
-// Message handling
-self.addEventListener("message", (event) => {
-  if (event.data?.type === "SET_EVENT_PORT" && event.data?.port) {
-    kernel.setEventPort(event.data.port);
-  } else if (event.data?.type === "INITIALIZE_KERNEL") {
-    kernel.initialize(event.data.options).catch(error => {
-      console.error("[TS_WORKER] Error initializing kernel:", error);
-    });
-  } else if (event.data?.type === "SET_INTERRUPT_BUFFER") {
-    // TypeScript kernels don't support interrupt buffers like Python/Pyodide
-    console.log("[TS_WORKER] Interrupt buffer not supported for TypeScript kernels");
-    self.postMessage({
-      type: "INTERRUPT_BUFFER_SET"
-    });
-  }
+// Global error handlers
+self.addEventListener("error", (event) => {
+  console.error("[TS_WORKER] Global error caught:", event.error);
+  event.preventDefault();
+});
+
+self.addEventListener("unhandledrejection", (event) => {
+  console.error("[TS_WORKER] Unhandled promise rejection:", event.reason);
+  event.preventDefault();
 });
 
 // Cleanup on termination
@@ -750,13 +745,5 @@ self.addEventListener("beforeunload", () => {
   }
 });
 
-// Expose kernel interface via Comlink
-const kernelInterface = {
-  initialize: (options?: any) => kernel.initialize(options),
-  execute: (code: string, parent?: any) => kernel.execute(code, parent),
-  isInitialized: () => kernel.isInitialized(),
-  inputReply: (content: { value: string }) => kernel.inputReply(content),
-  getStatus: () => kernel.getStatus()
-};
-
-Comlink.expose(kernelInterface); 
+// Expose worker via Comlink
+Comlink.expose(worker); 

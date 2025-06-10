@@ -1,11 +1,13 @@
 // Vector Database Manager for Deno App Engine
 // This file manages vector database instances in web workers
 
-
+// @ts-ignore Import Comlink from Deno
+import * as Comlink from "https://deno.land/x/comlink@4.4.1/mod.ts";
 import { EventEmitter } from "https://deno.land/std@0.177.0/node/events.ts";
 import { ensureDir, exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
 import { join } from "https://deno.land/std@0.208.0/path/mod.ts";
 import { Ollama } from "npm:ollama";
+import type { IVectorDBWorkerAPI } from "./worker.ts";
 
 // Vector database events
 export enum VectorDBEvents {
@@ -489,43 +491,19 @@ export class VectorDBManager extends EventEmitter {
         { type: "module" }
       );
       
-      // Create a promise that resolves when the worker is initialized
-      const initPromise = new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("Worker initialization timeout"));
-        }, 30000);
-        
-        const handler = (event: MessageEvent) => {
-          if (event.data?.type === "WORKER_READY") {
-            worker.removeEventListener('message', handler);
-            clearTimeout(timeout);
-            resolve();
-          } else if (event.data?.type === "WORKER_ERROR") {
-            worker.removeEventListener('message', handler);
-            clearTimeout(timeout);
-            reject(new Error(event.data.error));
-          }
-        };
-        
-        worker.addEventListener('message', handler);
-      });
+      // Create a proxy to the worker using Comlink
+      const workerProxy = Comlink.wrap<IVectorDBWorkerAPI>(worker);
       
       // Merge options with metadata options, giving priority to new options
       const mergedOptions = { ...metadata.options, ...options };
       
       // Initialize the worker (exclude embeddingProvider as it can't be serialized)
       const { embeddingProvider, ...serializableOptions } = mergedOptions;
-      worker.postMessage({
-        type: "INITIALIZE",
-        options: {
-          id,
-          embeddingModel: this.embeddingModel,
-          ...serializableOptions
-        }
+      await workerProxy.initialize({
+        id,
+        embeddingModel: this.embeddingModel,
+        ...serializableOptions
       });
-      
-      // Wait for worker initialization
-      await initPromise;
       
       // Load documents from offload - handle both binary and legacy formats
       let documents: IDocument[] = [];
@@ -550,33 +528,13 @@ export class VectorDBManager extends EventEmitter {
       
       if (documents.length > 0) {
         // Add documents back to the worker
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error("Add documents timeout during resume"));
-          }, 60000);
-          
-          const handler = (event: MessageEvent) => {
-            if (event.data?.type === "ADD_DOCUMENTS_RESULT") {
-              worker.removeEventListener('message', handler);
-              clearTimeout(timeout);
-              
-              if (event.data.success) {
-                resolve();
-              } else {
-                reject(new Error(event.data.error));
-              }
-            }
-          };
-          
-          worker.addEventListener('message', handler);
-          worker.postMessage({
-            type: "ADD_DOCUMENTS",
-            documents
-          });
-        });
+        const result = await workerProxy.addDocuments(documents);
+        if (!result.success) {
+          throw new Error(result.error || "Failed to add documents during resume");
+        }
       }
       
-      // Create the instance
+      // Create the instance with Comlink proxy
       const instance: IVectorDBInstance = {
         id,
         worker,
@@ -586,9 +544,13 @@ export class VectorDBManager extends EventEmitter {
         embeddingDimension: metadata.embeddingDimension,
         isFromOffload: true,
         destroy: async () => {
+          workerProxy[Comlink.releaseProxy]();
           worker.terminate();
         }
       };
+      
+      // Store the proxy for later use
+      (instance as any).proxy = workerProxy;
       
       console.log(`✅ Instance ${id} resumed from offload with ${metadata.documentCount} documents`);
       
@@ -627,30 +589,17 @@ export class VectorDBManager extends EventEmitter {
     try {
       console.log(`💾 Offloading instance ${id} to disk...`);
       
+      // Get the worker proxy
+      const workerProxy = (instance as any).proxy as Comlink.Remote<IVectorDBWorkerAPI>;
+      
       // Get all documents from the worker
-      const documents = await new Promise<IDocument[]>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("Get documents timeout during offload"));
-        }, 30000);
-        
-        const handler = (event: MessageEvent) => {
-          if (event.data?.type === "GET_DOCUMENTS_RESULT") {
-            instance.worker.removeEventListener('message', handler);
-            clearTimeout(timeout);
-            
-            if (event.data.success) {
-              resolve(event.data.documents);
-            } else {
-              reject(new Error(event.data.error));
-            }
-          }
-        };
-        
-        instance.worker.addEventListener('message', handler);
-        instance.worker.postMessage({
-          type: "GET_DOCUMENTS"
-        });
-      });
+      const result = await workerProxy.getDocuments();
+      
+      if (!result.success) {
+        throw new Error(result.error || "Failed to get documents");
+      }
+      
+      const documents = result.documents!;
       
       // Create file paths
       const documentsFile = join(this.offloadDirectory, `${id}.documents.json`);
@@ -910,9 +859,6 @@ export class VectorDBManager extends EventEmitter {
       // Store the instance
       this.instances.set(id, instance);
       
-      // Set up event forwarding
-      this.setupEventForwarding(instance);
-      
       // Initialize activity tracking
       this.updateInstanceActivity(id);
       
@@ -933,42 +879,18 @@ export class VectorDBManager extends EventEmitter {
       { type: "module" }
     );
     
-    // Create a promise that resolves when the worker is initialized
-    const initPromise = new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Worker initialization timeout"));
-      }, 30000);
-      
-      const handler = (event: MessageEvent) => {
-        if (event.data?.type === "WORKER_READY") {
-          worker.removeEventListener('message', handler);
-          clearTimeout(timeout);
-          resolve();
-        } else if (event.data?.type === "WORKER_ERROR") {
-          worker.removeEventListener('message', handler);
-          clearTimeout(timeout);
-          reject(new Error(event.data.error));
-        }
-      };
-      
-      worker.addEventListener('message', handler);
-    });
+    // Create a proxy to the worker using Comlink
+    const workerProxy = Comlink.wrap<IVectorDBWorkerAPI>(worker);
     
     // Initialize the worker (exclude embeddingProvider as it can't be serialized)
     const { embeddingProvider, ...serializableOptions } = options;
-    worker.postMessage({
-      type: "INITIALIZE",
-      options: {
-        id,
-        embeddingModel: this.embeddingModel,
-        ...serializableOptions
-      }
+    await workerProxy.initialize({
+      id,
+      embeddingModel: this.embeddingModel,
+      ...serializableOptions
     });
     
-    // Wait for worker initialization
-    await initPromise;
-    
-    // Create the instance
+    // Create the instance with Comlink proxy
     const instance: IVectorDBInstance = {
       id,
       worker,
@@ -976,15 +898,16 @@ export class VectorDBManager extends EventEmitter {
       options,
       documentCount: 0,
       destroy: async () => {
+        workerProxy[Comlink.releaseProxy]();
         worker.terminate();
       }
     };
     
+    // Store the proxy for later use
+    (instance as any).proxy = workerProxy;
+    
     // Store the instance
     this.instances.set(id, instance);
-    
-    // Set up event forwarding
-    this.setupEventForwarding(instance);
     
     // Initialize activity tracking
     this.updateInstanceActivity(id);
@@ -1004,25 +927,6 @@ export class VectorDBManager extends EventEmitter {
     });
     
     return id;
-  }
-  
-  /**
-   * Setup event forwarding from worker to manager
-   * @param instance Vector database instance
-   * @private
-   */
-  private setupEventForwarding(instance: IVectorDBInstance): void {
-    const eventHandler = (event: MessageEvent) => {
-      if (event.data && event.data.type && event.data.type.startsWith('EVENT_')) {
-        const eventType = event.data.type.replace('EVENT_', '').toLowerCase();
-        this.emit(eventType, {
-          instanceId: instance.id,
-          data: event.data.data
-        });
-      }
-    };
-    
-    instance.worker.addEventListener('message', eventHandler);
   }
   
   /**
@@ -1108,44 +1012,28 @@ export class VectorDBManager extends EventEmitter {
       })
     );
     
-    // Send to worker
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Add documents timeout"));
-      }, 60000);
+    // Get the worker proxy
+    const workerProxy = (instance as any).proxy as Comlink.Remote<IVectorDBWorkerAPI>;
+    
+    // Send to worker using Comlink proxy
+    const result = await workerProxy.addDocuments(processedDocuments);
+    
+    if (result.success) {
+      // Update document count
+      instance.documentCount += processedDocuments.length;
       
-      const handler = (event: MessageEvent) => {
-        if (event.data?.type === "ADD_DOCUMENTS_RESULT") {
-          instance.worker.removeEventListener('message', handler);
-          clearTimeout(timeout);
-          
-          if (event.data.success) {
-            // Update document count
-            instance.documentCount += processedDocuments.length;
-            
-            // Update embedding dimension if not set
-            if (!instance.embeddingDimension && processedDocuments[0]?.vector) {
-              instance.embeddingDimension = processedDocuments[0].vector.length;
-            }
-            
-            this.emit(VectorDBEvents.DOCUMENT_ADDED, {
-              instanceId,
-              data: { count: processedDocuments.length }
-            });
-            
-            resolve();
-          } else {
-            reject(new Error(event.data.error));
-          }
-        }
-      };
+      // Update embedding dimension if not set
+      if (!instance.embeddingDimension && processedDocuments[0]?.vector) {
+        instance.embeddingDimension = processedDocuments[0].vector.length;
+      }
       
-      instance.worker.addEventListener('message', handler);
-      instance.worker.postMessage({
-        type: "ADD_DOCUMENTS",
-        documents: processedDocuments
+      this.emit(VectorDBEvents.DOCUMENT_ADDED, {
+        instanceId,
+        data: { count: processedDocuments.length }
       });
-    });
+    } else {
+      throw new Error(result.error || "Failed to add documents");
+    }
   }
   
   /**
@@ -1168,12 +1056,13 @@ export class VectorDBManager extends EventEmitter {
     // Update activity
     this.updateInstanceActivity(instanceId);
     
-        // Get the embedding provider for this instance
+    // Get the embedding provider for this instance
     const embeddingProvider = instance.options.embeddingProvider;
     const embeddingProviderName = instance.options.embeddingProviderName;
     
     const providerName = embeddingProvider ? embeddingProvider.name : 'built-in';
     console.log(`Querying index ${instanceId} with embedding provider ${providerName}: ${query}`);
+    
     // Process query
     let queryVector: number[];
     if (typeof query === 'string') {
@@ -1182,40 +1071,25 @@ export class VectorDBManager extends EventEmitter {
       queryVector = query;
     }
     
-    // Send query to worker
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Query timeout"));
-      }, 30000);
-      
-      const handler = (event: MessageEvent) => {
-        if (event.data?.type === "QUERY_RESULT") {
-          instance.worker.removeEventListener('message', handler);
-          clearTimeout(timeout);
-          
-          if (event.data.success) {
-            this.emit(VectorDBEvents.QUERY_COMPLETED, {
-              instanceId,
-              data: { 
-                resultCount: event.data.results.length,
-                query: typeof query === 'string' ? query : '[vector]'
-              }
-            });
-            
-            resolve(event.data.results);
-          } else {
-            reject(new Error(event.data.error));
-          }
+    // Get the worker proxy
+    const workerProxy = (instance as any).proxy as Comlink.Remote<IVectorDBWorkerAPI>;
+    
+    // Send query to worker using Comlink proxy
+    const result = await workerProxy.queryIndex(queryVector, options);
+    
+    if (result.success) {
+      this.emit(VectorDBEvents.QUERY_COMPLETED, {
+        instanceId,
+        data: { 
+          resultCount: result.results!.length,
+          query: typeof query === 'string' ? query : '[vector]'
         }
-      };
-      
-      instance.worker.addEventListener('message', handler);
-      instance.worker.postMessage({
-        type: "QUERY",
-        vector: queryVector,
-        options
       });
-    });
+      
+      return result.results!;
+    } else {
+      throw new Error(result.error || "Query failed");
+    }
   }
   
   /**
@@ -1233,38 +1107,23 @@ export class VectorDBManager extends EventEmitter {
     // Update activity
     this.updateInstanceActivity(instanceId);
     
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Remove documents timeout"));
-      }, 30000);
+    // Get the worker proxy
+    const workerProxy = (instance as any).proxy as Comlink.Remote<IVectorDBWorkerAPI>;
+    
+    // Send to worker using Comlink proxy
+    const result = await workerProxy.removeDocuments(documentIds);
+    
+    if (result.success) {
+      // Update document count
+      instance.documentCount = Math.max(0, instance.documentCount - documentIds.length);
       
-      const handler = (event: MessageEvent) => {
-        if (event.data?.type === "REMOVE_DOCUMENTS_RESULT") {
-          instance.worker.removeEventListener('message', handler);
-          clearTimeout(timeout);
-          
-          if (event.data.success) {
-            // Update document count
-            instance.documentCount = Math.max(0, instance.documentCount - documentIds.length);
-            
-            this.emit(VectorDBEvents.DOCUMENT_REMOVED, {
-              instanceId,
-              data: { count: documentIds.length }
-            });
-            
-            resolve();
-          } else {
-            reject(new Error(event.data.error));
-          }
-        }
-      };
-      
-      instance.worker.addEventListener('message', handler);
-      instance.worker.postMessage({
-        type: "REMOVE_DOCUMENTS",
-        documentIds
+      this.emit(VectorDBEvents.DOCUMENT_REMOVED, {
+        instanceId,
+        data: { count: documentIds.length }
       });
-    });
+    } else {
+      throw new Error(result.error || "Failed to remove documents");
+    }
   }
   
   /**

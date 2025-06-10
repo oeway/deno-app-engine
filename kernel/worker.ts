@@ -1,310 +1,86 @@
 // Web Worker file for running the Kernel in a separate thread
 // Import necessary modules
-import * as Comlink from "comlink";
+// @ts-ignore Import Comlink from Deno
+import * as Comlink from "https://deno.land/x/comlink@4.4.1/mod.ts";
 // @ts-ignore Importing from npm
 import { EventEmitter } from 'node:events';
 import { Kernel, KernelEvents, IKernelOptions } from "./index.ts";
 
-
-// Create a new kernel instance
-const kernel = new Kernel();
-
-// Variable to store the event port
-let eventPort: MessagePort | null = null;
-
-// Store kernel initialization options
-let kernelOptions: IKernelOptions = {};
-
-// Track current event listeners for cleanup
-let currentEventListeners: Map<string, (data: any) => void> = new Map();
-
-// Interrupt handling for worker
-let interruptBuffer: Uint8Array | null = null;
-
-// Helper function to check if an error is a KeyboardInterrupt
-function isKeyboardInterrupt(error: any): boolean {
-  return error && 
-         typeof error === 'object' && 
-         (error.type === "KeyboardInterrupt" || 
-          (error.message && error.message.includes("KeyboardInterrupt")));
+// Interface for kernel worker API
+export interface IKernelWorkerAPI {
+  initialize(options: IKernelOptions, eventCallback: (event: { type: string; data: any }) => void): Promise<void>;
+  execute(code: string, parent?: any): Promise<{ success: boolean; result?: any; error?: Error }>;
+  isInitialized(): boolean;
+  inputReply(content: { value: string }): Promise<void>;
+  getStatus(): "active" | "busy" | "unknown";
+  interrupt(): Promise<boolean>;
+  setInterruptBuffer(buffer: Uint8Array): boolean;
 }
 
-// Helper function to create KeyboardInterrupt error result
-function createKeyboardInterruptResult() {
-  return {
-    success: false,
-    error: new Error("KeyboardInterrupt: Execution interrupted by user"),
-    result: {
-      payload: [],
-      status: "error",
-      ename: "KeyboardInterrupt",
-      evalue: "Execution interrupted by user",
-      traceback: ["KeyboardInterrupt: Execution interrupted by user"]
-    }
-  };
-}
+// Create kernel worker implementation
+class KernelWorker implements IKernelWorkerAPI {
+  private kernel = new Kernel();
+  private eventCallback: ((event: { type: string; data: any }) => void) | null = null;
+  private currentEventListeners: Map<string, (data: any) => void> = new Map();
+  private interruptBuffer: Uint8Array | null = null;
 
-// Global error handlers to prevent worker crashes
-self.addEventListener("error", (event) => {
-  console.error("[WORKER] Global error caught:", event.error);
-  event.preventDefault();
-});
-
-self.addEventListener("unhandledrejection", (event) => {
-  if (isKeyboardInterrupt(event.reason)) {
-    console.log("[WORKER] KeyboardInterrupt caught in unhandled rejection handler - this is expected during interrupts");
-    
-    // Send interrupt acknowledgment if we have an event port
-    if (eventPort) {
-      eventPort.postMessage({
-        type: KernelEvents.EXECUTE_ERROR,
-        data: {
-          ename: "KeyboardInterrupt",
-          evalue: "Execution interrupted by user",
-          traceback: ["KeyboardInterrupt: Execution interrupted by user"]
-        }
-      });
-    }
-  } else {
-    console.error("[WORKER] Unhandled promise rejection:", event.reason);
-  }
-  
-  event.preventDefault();
-});
-
-// Listen for messages to set up the event port and initialize kernel
-self.addEventListener("message", (event) => {
-  if (event.data?.type === "SET_EVENT_PORT" && event.data?.port) {
-    // Clean up old event listeners and port before setting up new ones
-    cleanupEventForwarding();
-    
-    // Set the new port
-    eventPort = event.data.port;
-    
-    // If the kernel is already initialized, set up event forwarding immediately
-    if (kernel.isInitialized()) {
-      setupEventForwarding();
-    }
-  } else if (event.data?.type === "INITIALIZE_KERNEL") {
-    // Save the options for kernel initialization
-    kernelOptions = event.data.options || {};
-    
-    // Initialize the kernel with the provided options
-    initializeKernel(kernelOptions).catch(error => {
-      console.error("[WORKER] Error initializing kernel in worker:", error);
-      if (eventPort) {
-        eventPort.postMessage({
-          type: KernelEvents.EXECUTE_ERROR,
-          data: {
-            ename: "WorkerInitError",
-            evalue: `Failed to initialize kernel: ${error.message}`,
-            traceback: [error.stack || ""]
-          }
-        });
-      }
-    });
-  } else if (event.data?.type === "SET_INTERRUPT_BUFFER") {
-    // Handle interrupt buffer setup
-    interruptBuffer = event.data.buffer;
-    
-    // Set the interrupt buffer in the kernel if it's initialized
-    if (kernel.isInitialized() && interruptBuffer && typeof kernel.setInterruptBuffer === 'function') {
-      kernel.setInterruptBuffer(interruptBuffer);
-      console.log("[WORKER] Interrupt buffer set in pyodide kernel");
-    } else if (interruptBuffer) {
-      console.log("[WORKER] Interrupt buffer stored, will be set when kernel initializes");
-    }
-    
-    const responseMessage = {
-      type: "INTERRUPT_BUFFER_SET",
-      data: { success: true }
-    };
-    
-    // Send response on both channels to ensure it's received
-    if (eventPort) {
-      eventPort.postMessage(responseMessage);
-    }
-    
-    // Also send on main worker channel in case eventPort isn't set up yet
-    self.postMessage(responseMessage);
-    
-  } else if (event.data?.type === "INTERRUPT_KERNEL") {
-    // Handle interrupt request
-    
-    if (interruptBuffer) {
-      // Set interrupt signal (2 = SIGINT)
-      interruptBuffer[0] = 2;
-      
-      const responseMessage = {
-        type: "INTERRUPT_TRIGGERED",
-        data: { success: true, method: "buffer" }
-      };
-      
-      // Send response on both channels
-      if (eventPort) {
-        eventPort.postMessage(responseMessage);
-      }
-      self.postMessage(responseMessage);
-      
-    } else {
-      console.log("[WORKER] No interrupt buffer available, trying kernel.interrupt()");
-      
-      // Fallback to kernel interrupt method
-      if (typeof kernel.interrupt === 'function') {
-        kernel.interrupt().then(success => {
-          const responseMessage = {
-            type: "INTERRUPT_TRIGGERED",
-            data: { success, method: "kernel" }
-          };
-          
-          if (eventPort) {
-            eventPort.postMessage(responseMessage);
-          }
-          self.postMessage(responseMessage);
-        }).catch(error => {
-          console.error("[WORKER] Error during kernel interrupt:", error);
-          const responseMessage = {
-            type: "INTERRUPT_TRIGGERED",
-            data: { success: false, error: error.message, method: "kernel" }
-          };
-          
-          if (eventPort) {
-            eventPort.postMessage(responseMessage);
-          }
-          self.postMessage(responseMessage);
-        });
-      } else {
-        console.warn("[WORKER] No interrupt method available");
-        const responseMessage = {
-          type: "INTERRUPT_TRIGGERED",
-          data: { success: false, error: "No interrupt method available", method: "none" }
-        };
-        
-        if (eventPort) {
-          eventPort.postMessage(responseMessage);
-        }
-        self.postMessage(responseMessage);
-      }
-    }
-  }
-});
-
-// Initialize the kernel with provided options
-async function initializeKernel(options: IKernelOptions): Promise<void> {
-  try {
-    await kernel.initialize(options);
-    
-    // Set up the interrupt buffer if it's available and the kernel supports it
-    if (interruptBuffer && typeof kernel.setInterruptBuffer === 'function') {
-      kernel.setInterruptBuffer(interruptBuffer);
-    }
-    
-    // Set up event forwarding AFTER kernel is initialized
-    setupEventForwarding();
-    
-    if (eventPort) {
-      eventPort.postMessage({
-        type: "KERNEL_INITIALIZED",
-        data: { success: true }
-      });
-    }
-  } catch (error) {
-    console.error("Kernel initialization failed:", error);
-    throw error;
-  }
-}
-
-// Clean up old event listeners and port
-function cleanupEventForwarding() {
-  if (currentEventListeners.size > 0) {
-    // Remove all current event listeners
-    for (const [eventType, listener] of currentEventListeners.entries()) {
-      (kernel as unknown as EventEmitter).off(eventType, listener);
-    }
-    
-    // Clear the listeners map
-    currentEventListeners.clear();
-  }
-  
-  // Close the old port if it exists
-  if (eventPort) {
-    eventPort.close();
-    eventPort = null;
-  }
-}
-
-// Set up event forwarding from kernel to main thread
-function setupEventForwarding() {
-  if (!eventPort) {
-    console.error("[WORKER] Cannot set up event forwarding: no event port available");
-    return;
+  // Helper function to check if an error is a KeyboardInterrupt
+  private isKeyboardInterrupt(error: any): boolean {
+    return error && 
+           typeof error === 'object' && 
+           (error.type === "KeyboardInterrupt" || 
+            (error.message && error.message.includes("KeyboardInterrupt")));
   }
 
-  // Forward all kernel events to the main thread
-  Object.values(KernelEvents).forEach((eventType) => {
-    // Create a listener function for this event type
-    const listener = (data: any) => {
-      if (eventPort) {
-        // Send just the event type and raw data
-        // This matches the structure used in main thread mode
-        eventPort.postMessage({
-          type: eventType,
-          data: data
-        });
+  // Helper function to create KeyboardInterrupt error result
+  private createKeyboardInterruptResult() {
+    return {
+      success: false,
+      error: new Error("KeyboardInterrupt: Execution interrupted by user"),
+      result: {
+        payload: [],
+        status: "error",
+        ename: "KeyboardInterrupt",
+        evalue: "Execution interrupted by user",
+        traceback: ["KeyboardInterrupt: Execution interrupted by user"]
       }
     };
-    
-    // Store the listener for later cleanup
-    currentEventListeners.set(eventType, listener);
-    
-    // Add the listener to the kernel
-    (kernel as unknown as EventEmitter).on(eventType, listener);
-  });
-}
-
-// Handle cleanup when worker is terminated
-self.addEventListener("beforeunload", async () => {
-  // Close any resources or connections
-  try {
-    // Send a final message before termination if needed
-    if (eventPort) {
-      eventPort.postMessage({
-        type: "WORKER_TERMINATING",
-        data: { message: "Worker is shutting down" }
-      });
-    }
-  } catch (error) {
-    console.error("Error during worker cleanup:", error);
   }
-});
 
-// Log available methods for debugging
-
-// Create a simplified proxy that only exposes the methods we need
-// We're not trying to implement the full EventEmitter interface
-const simpleProxy = {
-  // Required methods from IKernel interface
-  initialize: async (options?: IKernelOptions) => {
+  async initialize(options: IKernelOptions, eventCallback: (event: { type: string; data: any }) => void): Promise<void> {
     try {
-      await kernel.initialize(options);
-      return undefined;
+      // Store the event callback
+      this.eventCallback = eventCallback;
+      
+      // Initialize the kernel
+      await this.kernel.initialize(options);
+      
+      // Set up the interrupt buffer if it's available
+      if (this.interruptBuffer && typeof (this.kernel as any).setInterruptBuffer === 'function') {
+        (this.kernel as any).setInterruptBuffer(this.interruptBuffer);
+      }
+      
+      // Set up event forwarding
+      this.setupEventForwarding();
+      
+      console.log("[WORKER] Kernel initialized successfully");
     } catch (error) {
-      console.error("[WORKER] Initialize error:", error);
+      console.error("[WORKER] Kernel initialization failed:", error);
       throw error;
     }
-  },
-  
-  execute: async (code: string, parent?: any) => {
+  }
+
+  async execute(code: string, parent?: any): Promise<{ success: boolean; result?: any; error?: Error }> {
     try {
-      const result = await kernel.execute(code, parent);
+      const result = await this.kernel.execute(code, parent);
       return result;
     } catch (error) {
       console.error("[WORKER] Execute error:", error);
       
       // Check if this is a KeyboardInterrupt and handle it specially
-      if (isKeyboardInterrupt(error)) {
+      if (this.isKeyboardInterrupt(error)) {
         console.log("[WORKER] KeyboardInterrupt caught in execute method");
-        return createKeyboardInterruptResult();
+        return this.createKeyboardInterruptResult();
       }
       
       // Handle other errors normally
@@ -320,74 +96,99 @@ const simpleProxy = {
         }
       };
     }
-  },
-  
-  isInitialized: () => {
-    try {
-      const result = kernel.isInitialized();
-      return result;
-    } catch (error) {
-      console.error("[WORKER] IsInitialized error:", error);
-      return false;
+  }
+
+  isInitialized(): boolean {
+    return this.kernel.isInitialized();
+  }
+
+  async inputReply(content: { value: string }): Promise<void> {
+    await this.kernel.inputReply(content);
+  }
+
+  getStatus(): "active" | "busy" | "unknown" {
+    return (this.kernel as any).status || "unknown";
+  }
+
+  async interrupt(): Promise<boolean> {
+    if (this.interruptBuffer) {
+      // Set interrupt signal (2 = SIGINT)
+      this.interruptBuffer[0] = 2;
+      return true;
     }
-  },
-  
-  inputReply: async (content: { value: string }) => {
-    try {
-      await kernel.inputReply(content);
-    } catch (error) {
-      console.error("[WORKER] InputReply error:", error);
-      throw error;
+    
+    // Fallback to kernel interrupt method if available
+    if (typeof (this.kernel as any).interrupt === 'function') {
+      return await (this.kernel as any).interrupt();
     }
-  },
-  
-  // Instead of a getter, use a regular method for status
-  getStatus: () => {
-    try {
-      const status = kernel.status;
-      return status;
-    } catch (error) {
-      console.error("[WORKER] getStatus error:", error);
-      return "unknown";
+    
+    return false;
+  }
+
+  setInterruptBuffer(buffer: Uint8Array): boolean {
+    this.interruptBuffer = buffer;
+    
+    if (this.kernel.isInitialized() && typeof (this.kernel as any).setInterruptBuffer === 'function') {
+      (this.kernel as any).setInterruptBuffer(buffer);
+      return true;
     }
-  },
-  
-  // Interrupt functionality
-  interrupt: async () => {
-    try {
-      if (typeof kernel.interrupt === 'function') {
-        const result = await kernel.interrupt();
-        return result;
-      } else {
-        console.warn("[WORKER] Kernel does not support interrupt method");
-        return false;
+    
+    return false;
+  }
+
+  private setupEventForwarding(): void {
+    // Clean up old event listeners
+    this.cleanupEventForwarding();
+
+    // Forward all kernel events to the callback
+    Object.values(KernelEvents).forEach((eventType) => {
+      const listener = (data: any) => {
+        if (this.eventCallback) {
+          this.eventCallback({
+            type: eventType,
+            data: data
+          });
+        }
+      };
+      
+      // Store the listener for later cleanup
+      this.currentEventListeners.set(eventType, listener);
+      
+      // Add the listener to the kernel
+      (this.kernel as unknown as EventEmitter).on(eventType, listener);
+    });
+  }
+
+  private cleanupEventForwarding(): void {
+    if (this.currentEventListeners.size > 0) {
+      // Remove all current event listeners
+      for (const [eventType, listener] of this.currentEventListeners.entries()) {
+        (this.kernel as unknown as EventEmitter).off(eventType, listener);
       }
-    } catch (error) {
-      console.error("[WORKER] Interrupt error:", error);
-      // Don't let interrupt errors crash the worker
-      return false;
-    }
-  },
-  
-  setInterruptBuffer: (buffer: Uint8Array) => {
-    try {
-      if (typeof kernel.setInterruptBuffer === 'function') {
-        kernel.setInterruptBuffer(buffer);
-        return true;
-      } else {
-        console.warn("[WORKER] Kernel does not support setInterruptBuffer method");
-        return false;
-      }
-    } catch (error) {
-      console.error("[WORKER] setInterruptBuffer error:", error);
-      return false;
+      
+      // Clear the listeners map
+      this.currentEventListeners.clear();
     }
   }
-};
+}
 
-// Expose the proxy through Comlink
-try {
-  Comlink.expose(simpleProxy);
-} catch (error) {
-  console.error("Error exposing proxy:", error);
-} 
+// Create worker instance
+const worker = new KernelWorker();
+
+// Global error handlers to prevent worker crashes
+self.addEventListener("error", (event) => {
+  console.error("[WORKER] Global error caught:", event.error);
+  event.preventDefault();
+});
+
+self.addEventListener("unhandledrejection", (event) => {
+  if (worker['isKeyboardInterrupt'](event.reason)) {
+    console.log("[WORKER] KeyboardInterrupt caught in unhandled rejection handler - this is expected during interrupts");
+  } else {
+    console.error("[WORKER] Unhandled promise rejection:", event.reason);
+  }
+  event.preventDefault();
+});
+
+// Expose the worker API via Comlink
+Comlink.expose(worker); 

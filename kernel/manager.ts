@@ -1,11 +1,14 @@
 // Kernel Manager for Deno App Engine
 // This file manages kernel instances in either main thread or worker mode
 
-import * as Comlink from "comlink";
+// @ts-ignore Import Comlink from Deno
+import * as Comlink from "https://deno.land/x/comlink@4.4.1/mod.ts";
 // @ts-ignore Importing from npm
 import { EventEmitter } from 'node:events';
 // import EventEmitter from "https://deno.land/x/events@v1.0.0/mod.ts";
 import { Kernel, KernelEvents, IKernel, IKernelOptions, IFilesystemMountOptions, TypeScriptKernel } from "./index.ts";
+import type { IKernelWorkerAPI } from "./worker.ts";
+import type { ITypeScriptKernelWorkerAPI } from "./tsWorker.ts";
 
 // Execution mode enum
 export enum KernelMode {
@@ -684,43 +687,20 @@ export class KernelManager extends EventEmitter {
       // Reassign the pool kernel with the new ID and options
       const instance = this.reassignPoolKernel(poolKernel, id, options);
       
-      // For worker kernels, we need to recreate the event handler with the new ID
-      if (instance.mode === KernelMode.WORKER && instance.worker) {
-        // Get the worker and create new message channel
-        const worker = instance.worker;
+      // For worker kernels, we need to update the event callback with the new ID
+      if (instance.mode === KernelMode.WORKER) {
+        // Create new event callback that will forward events with the correct kernel ID
+        const eventCallback = Comlink.proxy((event: { type: string; data: any }) => {
+          super.emit(event.type, {
+            kernelId: id,
+            data: event.data
+          });
+        });
         
-        // Create a new message channel for the reassigned kernel
-        const { port1, port2 } = new MessageChannel();
-        
-        // Send the new event port to the worker
-        worker.postMessage({
-          type: "SET_EVENT_PORT",
-          port: port2
-        }, [port2]);
-        
-        // Create a new event handler with the correct kernel ID
-        const eventHandler = (event: MessageEvent) => {
-          if (event.data && event.data.type) {
-            // Emit the event from the manager with kernel ID
-            // This structure matches the setupEventForwarding method for main thread kernels
-            super.emit(event.data.type, {
-              kernelId: id,
-              data: event.data.data
-            });
-          }
-        };
-        
-        // Listen for events from the worker with the new handler
-        port1.addEventListener('message', eventHandler);
-        port1.start();
-        
-        // Update the destroy function to clean up the new event handler
-        const originalDestroy = instance.destroy;
-        instance.destroy = async () => {
-          port1.removeEventListener('message', eventHandler);
-          port1.close();
-          return originalDestroy();
-        };
+        // Re-initialize the kernel with the new event callback
+        // This is a no-op for the kernel state but updates the event forwarding
+        const kernelProxy = instance.kernel as any;
+        await kernelProxy.initialize(instance.options, eventCallback);
       }
       
       // Store the kernel instance
@@ -774,43 +754,22 @@ export class KernelManager extends EventEmitter {
     // Reassign the pool kernel with the new ID and options
     const instance = this.reassignPoolKernel(poolKernel, id, options);
     
-    // For worker kernels, we need to recreate the event handler with the new ID
-    if (instance.mode === KernelMode.WORKER && instance.worker) {
-      // Get the worker and create new message channel
-      const worker = instance.worker;
+    // For worker kernels, we need to update the event callback with the new ID
+    if (instance.mode === KernelMode.WORKER) {
+      // Create new event callback that will forward events with the correct kernel ID
+      const eventCallback = Comlink.proxy((event: { type: string; data: any }) => {
+        super.emit(event.type, {
+          kernelId: id,
+          data: event.data
+        });
+      });
       
-      // Create a new message channel for the reassigned kernel
-      const { port1, port2 } = new MessageChannel();
-      
-      // Send the new event port to the worker
-      worker.postMessage({
-        type: "SET_EVENT_PORT",
-        port: port2
-      }, [port2]);
-      
-      // Create a new event handler with the correct kernel ID
-      const eventHandler = (event: MessageEvent) => {
-        if (event.data && event.data.type) {
-          // Emit the event from the manager with kernel ID
-          // This structure matches the setupEventForwarding method for main thread kernels
-          super.emit(event.data.type, {
-            kernelId: id,
-            data: event.data.data
-          });
-        }
-      };
-      
-      // Listen for events from the worker with the new handler
-      port1.addEventListener('message', eventHandler);
-      port1.start();
-      
-      // Update the destroy function to clean up the new event handler
-      const originalDestroy = instance.destroy;
-      instance.destroy = async () => {
-        port1.removeEventListener('message', eventHandler);
-        port1.close();
-        return originalDestroy();
-      };
+      // Re-initialize the kernel with the new event callback
+      // This is a no-op for the kernel state but updates the event forwarding
+      const kernelProxy = instance.kernel as any;
+      kernelProxy.initialize(instance.options, eventCallback).catch((error: Error) => {
+        console.error(`Error re-initializing pool kernel ${id} event callback:`, error);
+      });
     }
     
     // Store the kernel instance
@@ -978,106 +937,68 @@ export class KernelManager extends EventEmitter {
       workerOptions
     );
     
-    // Create a message channel for events
-    const { port1, port2 } = new MessageChannel();
-    
-    // Create a promise that will resolve when the kernel is initialized
-    const initPromise = new Promise<void>((resolve, reject) => {
-      const initHandler = (event: MessageEvent) => {
-        if (event.data?.type === "KERNEL_INITIALIZED") {
-          if (event.data.data.success) {
-            port1.removeEventListener('message', initHandler);
-            resolve();
-          } else {
-            port1.removeEventListener('message', initHandler);
-            reject(new Error("Kernel initialization failed"));
-          }
-        }
-      };
-      port1.addEventListener('message', initHandler);
-    });
-    
-    // Send the port to the worker
-    worker.postMessage({ type: "SET_EVENT_PORT", port: port2 }, [port2]);
-    
     // Create a proxy to the worker using Comlink
-    const kernelProxy = Comlink.wrap<IKernel>(worker);
+    const kernelProxy = (language === KernelLanguage.TYPESCRIPT || language === KernelLanguage.JAVASCRIPT) ?
+      Comlink.wrap<ITypeScriptKernelWorkerAPI>(worker) :
+      Comlink.wrap<IKernelWorkerAPI>(worker);
     
-    // Add a local event handler to bridge the worker events
-    // This works around the limitation that Comlink doesn't proxy event emitters
-    const eventHandler = (event: MessageEvent) => {
-      if (event.data && event.data.type) {
-        // Emit the event from the manager with kernel ID
-        // This structure matches the setupEventForwarding method for main thread kernels
-        super.emit(event.data.type, {
-          kernelId: id,
-          data: event.data.data
-        });
-      }
-    };
-    
-    // Listen for events from the worker
-    port1.addEventListener('message', eventHandler);
-    port1.start();
-    
-    // Initialize the kernel with filesystem options
-    // We need to pass these options to the worker
-    worker.postMessage({
-      type: "INITIALIZE_KERNEL",
-      options: {
-        filesystem: options.filesystem,
-        env: options.env,
-        lang: language
-      }
+    // Create event callback that will forward events to the manager
+    const eventCallback = Comlink.proxy((event: { type: string; data: any }) => {
+      // Emit the event from the manager with kernel ID
+      super.emit(event.type, {
+        kernelId: id,
+        data: event.data
+      });
     });
     
-    // Wait for kernel initialization
-    await initPromise;
+    // Initialize the kernel with options and event callback
+    await kernelProxy.initialize({
+      filesystem: options.filesystem,
+      env: options.env,
+      lang: language
+    }, eventCallback);
     
-    // Set up interrupt buffer automatically for worker kernels
-    await this.setupWorkerInterruptBuffer(id, worker);
+    // Set up interrupt buffer for Python kernels
+    if (language === KernelLanguage.PYTHON) {
+      await this.setupWorkerInterruptBuffer(id, kernelProxy as Comlink.Remote<IKernelWorkerAPI>);
+    }
     
-    // Create the kernel instance
+    // Create the kernel instance with a thin wrapper
     const instance: IKernelInstance = {
       id,
       kernel: {
-        // Map methods from the Comlink proxy to the IKernel interface
-        initialize: async (options?: IKernelOptions) => {
-          return kernelProxy.initialize(options);
+        // Delegate all methods to the worker proxy
+        initialize: async (opts?: IKernelOptions) => {
+          // Kernel is already initialized, but we can re-initialize if needed
+          await kernelProxy.initialize(opts || {}, eventCallback);
         },
         execute: async (code: string, parent?: any) => {
           return kernelProxy.execute(code, parent);
         },
         isInitialized: () => {
-          return kernelProxy.isInitialized();
+          // Since this is async in the worker, we'll assume it's initialized
+          // after the initial setup succeeds
+          return true;
         },
         inputReply: async (content: { value: string }) => {
           return kernelProxy.inputReply(content);
         },
-        // Map getStatus method to status getter for compatibility with IKernel interface
+        // Status getter
         get status() {
-          try {
-            if (typeof kernelProxy.getStatus === 'function') {
-              return kernelProxy.getStatus();
-            } else {
-              return "unknown";
-            }
-          } catch (error) {
-            return "unknown";
-          }
+          // Status is async in the worker, so we can't use a getter directly
+          // Return a default value or manage state locally
+          return "active" as const;
         }
-      } as unknown as IKernel,
+      } as IKernel,
       mode: KernelMode.WORKER,
       language,
       worker,
       created: new Date(),
       options, // Store the options for reference
       destroy: async () => {
-        // Clean up the worker and event listeners
-        port1.removeEventListener('message', eventHandler);
-        port1.close();
+        // Clean up the worker
+        kernelProxy[Comlink.releaseProxy]();
         worker.terminate();
-        return Promise.resolve();
       }
     };
     
@@ -2470,83 +2391,42 @@ export class KernelManager extends EventEmitter {
    */
   private async interruptWorkerKernel(id: string, instance: IKernelInstance): Promise<boolean> {
     try {
-      const worker = instance.worker;
-      if (!worker) {
-        console.error(`Worker not found for kernel ${id}`);
-        return false;
-      }
-      
       // Check if we already have an interrupt buffer for this kernel
-      let interruptBuffer = this.interruptBuffers.get(id);
+      const interruptBuffer = this.interruptBuffers.get(id);
       
-      if (!interruptBuffer) {
-        // Create a new SharedArrayBuffer for interrupt control
-        try {
-          // Try to create SharedArrayBuffer (requires specific security headers)
-          const sharedBuffer = new SharedArrayBuffer(1);
-          interruptBuffer = new Uint8Array(sharedBuffer);
-          
-          // Initialize buffer to 0 (no interrupt signal)
-          interruptBuffer[0] = 0;
-          
-          // Store the buffer for future use
-          this.interruptBuffers.set(id, interruptBuffer);
-          
-          // Send the buffer to the worker to set up pyodide.setInterruptBuffer()
-          worker.postMessage({
-            type: "SET_INTERRUPT_BUFFER",
-            buffer: interruptBuffer
-          });
-          
-          // Wait for the worker to confirm buffer setup
-          await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              reject(new Error("Timeout waiting for interrupt buffer setup"));
-            }, 2000);
-            
-            const handler = (event: MessageEvent) => {
-              if (event.data?.type === "INTERRUPT_BUFFER_SET") {
-                worker.removeEventListener("message", handler);
-                clearTimeout(timeout);
-                resolve();
-              }
-            };
-            
-            worker.addEventListener("message", handler);
-          });
-          
-          console.log(`Interrupt buffer set up for kernel ${id}`);
-          
-        } catch (error) {
-          console.warn(`Failed to create SharedArrayBuffer for kernel ${id}, falling back to message-based interrupt:`, error);
-          
-          // Fallback: use message-based interrupt
-          return await this.interruptWorkerKernelFallback(id, worker);
+      if (interruptBuffer) {
+        // According to Pyodide docs: Set interrupt signal (2 = SIGINT)
+        console.log(`Setting interrupt signal for kernel ${id}...`);
+        interruptBuffer[0] = 2;
+        
+        // Wait for Pyodide to process the interrupt
+        // Pyodide will reset the buffer to 0 when it processes the interrupt
+        let attempts = 0;
+        const maxAttempts = 50; // Check for up to 5 seconds (50 * 100ms)
+        
+        while (attempts < maxAttempts && interruptBuffer[0] !== 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          attempts++;
+        }
+        
+        if (interruptBuffer[0] === 0) {
+          console.log(`Interrupt processed successfully for kernel ${id} after ${attempts * 100}ms`);
+          return true;
+        } else {
+          console.warn(`Interrupt signal not processed for kernel ${id} after ${maxAttempts * 100}ms`);
+          // Still return true as we set the signal - the interrupt may be processed later
+          return true;
         }
       }
       
-      // According to Pyodide docs: Set interrupt signal (2 = SIGINT)
-      console.log(`Setting interrupt signal for kernel ${id}...`);
-      interruptBuffer[0] = 2;
-      
-      // Wait for Pyodide to process the interrupt
-      // Pyodide will reset the buffer to 0 when it processes the interrupt
-      let attempts = 0;
-      const maxAttempts = 50; // Check for up to 5 seconds (50 * 100ms)
-      
-      while (attempts < maxAttempts && interruptBuffer[0] !== 0) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
+      // If no interrupt buffer, try using the kernel's interrupt method
+      const kernelProxy = instance.kernel as any;
+      if (kernelProxy.interrupt) {
+        return await kernelProxy.interrupt();
       }
       
-      if (interruptBuffer[0] === 0) {
-        console.log(`Interrupt processed successfully for kernel ${id} after ${attempts * 100}ms`);
-        return true;
-      } else {
-        console.warn(`Interrupt signal not processed for kernel ${id} after ${maxAttempts * 100}ms`);
-        // Still return true as we set the signal - the interrupt may be processed later
-        return true;
-      }
+      console.warn(`No interrupt method available for kernel ${id}`);
+      return false;
       
     } catch (error) {
       console.error(`Error interrupting worker kernel ${id}:`, error);
@@ -2554,41 +2434,6 @@ export class KernelManager extends EventEmitter {
     }
   }
   
-  /**
-   * Fallback interrupt method for worker kernels when SharedArrayBuffer is not available
-   * @param id Kernel ID
-   * @param worker Worker instance
-   * @returns Promise resolving to interrupt success
-   * @private
-   */
-  private async interruptWorkerKernelFallback(id: string, worker: Worker): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      // Set up a listener for the interrupt response
-      const responseHandler = (event: MessageEvent) => {
-        if (event.data?.type === "INTERRUPT_TRIGGERED") {
-          worker.removeEventListener("message", responseHandler);
-          const success = event.data.data?.success || false;
-          resolve(success);
-        }
-      };
-      
-      // Listen for the response
-      worker.addEventListener("message", responseHandler);
-      
-      // Send the interrupt message
-      worker.postMessage({
-        type: "INTERRUPT_KERNEL"
-      });
-      
-      // Set a timeout in case we don't get a response
-      setTimeout(() => {
-        worker.removeEventListener("message", responseHandler);
-        console.warn(`Timeout waiting for interrupt response from kernel ${id}`);
-        resolve(false);
-      }, 5000); // 5 second timeout
-    });
-  }
-
   /**
    * Handle a stuck execution with configurable strategies
    * @param kernelId Kernel ID
@@ -2832,10 +2677,10 @@ export class KernelManager extends EventEmitter {
   /**
    * Set up interrupt buffer for a worker kernel during creation
    * @param id Kernel ID
-   * @param worker Worker instance
+   * @param kernelProxy Worker kernel proxy
    * @private
    */
-  private async setupWorkerInterruptBuffer(id: string, worker: Worker): Promise<void> {
+  private async setupWorkerInterruptBuffer(id: string, kernelProxy: Comlink.Remote<IKernelWorkerAPI>): Promise<void> {
     try {
       // Get the kernel instance to check the language
       const instance = this.kernels.get(id);
@@ -2843,31 +2688,8 @@ export class KernelManager extends EventEmitter {
                                              instance?.language === KernelLanguage.JAVASCRIPT;
       
       if (isTypeScriptOrJavaScriptKernel) {
-        // TypeScript and JavaScript kernels don't support interrupt buffers like Python/Pyodide
-        // But we still send the message to get acknowledgment and avoid timeout
-        worker.postMessage({
-          type: "SET_INTERRUPT_BUFFER",
-          buffer: null // No actual buffer for TypeScript/JavaScript
-        });
-        
-        // Wait for acknowledgment
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error("Timeout waiting for interrupt buffer setup"));
-          }, 5000);
-          
-          const handler = (event: MessageEvent) => {
-            if (event.data?.type === "INTERRUPT_BUFFER_SET") {
-              worker.removeEventListener("message", handler);
-              clearTimeout(timeout);
-              resolve();
-            }
-          };
-          
-          worker.addEventListener("message", handler);
-        });
-        
-        return; // No actual buffer to store for TypeScript/JavaScript kernels
+        // TypeScript and JavaScript kernels don't support interrupt buffers
+        return;
       }
       
       // For Python kernels, create actual SharedArrayBuffer
@@ -2881,27 +2703,11 @@ export class KernelManager extends EventEmitter {
       this.interruptBuffers.set(id, interruptBuffer);
       
       // Send the buffer to the worker to set up pyodide.setInterruptBuffer()
-      worker.postMessage({
-        type: "SET_INTERRUPT_BUFFER",
-        buffer: interruptBuffer
-      });
+      const success = await kernelProxy.setInterruptBuffer(interruptBuffer);
       
-      // Wait for the worker to confirm buffer setup
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("Timeout waiting for interrupt buffer setup"));
-        }, 5000);
-        
-        const handler = (event: MessageEvent) => {
-          if (event.data?.type === "INTERRUPT_BUFFER_SET") {
-            worker.removeEventListener("message", handler);
-            clearTimeout(timeout);
-            resolve();
-          }
-        };
-        
-        worker.addEventListener("message", handler);
-      });
+      if (success) {
+        console.log(`Interrupt buffer set up for kernel ${id}`);
+      }
       
     } catch (error) {
       console.warn(`Failed to set up interrupt buffer for kernel ${id}:`, error);
