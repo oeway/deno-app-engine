@@ -25,7 +25,11 @@ RUN mkdir -p /app/agent_data
 RUN chmod +x scripts/start-hypha-service.sh
 
 # Pre-cache dependencies as root (nodeModulesDir: "none" means no node_modules created)
-RUN deno cache --lock=deno.lock scripts/hypha-service.ts
+# Use --frozen to prevent lock file updates during build
+RUN deno cache --lock=deno.lock --frozen scripts/hypha-service.ts
+
+# Also cache the main module
+RUN deno cache --lock=deno.lock --frozen mod.ts
 
 # Set ownership for deno user
 RUN chown -R deno:deno /app /home/deno/.cache
@@ -36,5 +40,5 @@ USER deno
 # Expose the Hypha service port
 EXPOSE 8000
 
-# Run the service
-CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "scripts/hypha-service.ts"] 
+# Run the service with frozen lock to prevent lock file updates at runtime
+CMD ["deno", "run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "--lock=deno.lock", "--frozen", "scripts/hypha-service.ts"] 
