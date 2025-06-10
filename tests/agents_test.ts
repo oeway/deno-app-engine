@@ -4,6 +4,8 @@
 import { assertEquals, assertExists, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { AgentManager, AgentEvents, KernelType, type IAgentInstance } from "../agents/mod.ts";
 import { KernelManager } from "../kernel/mod.ts";
+import { ensureDir, exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
+import { join } from "https://deno.land/std@0.208.0/path/mod.ts";
 
 // Configuration for Ollama
 const OLLAMA_CONFIG = {
@@ -15,6 +17,21 @@ const OLLAMA_CONFIG = {
 
 // Test data directory
 const TEST_DATA_DIR = "./test_agents_data";
+
+// Helper function to check if Ollama is available
+async function isOllamaAvailable(): Promise<boolean> {
+  try {
+    const response = await fetch(`${OLLAMA_CONFIG.baseURL}models`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 // Helper function to clean up test data
 async function cleanupTestData() {
@@ -95,6 +112,17 @@ Deno.test("Agents Module - Agent Creation", async () => {
 Deno.test("Agents Module - Real LLM Chat Completion", async () => {
   await cleanupTestData();
 
+  // Check if Ollama is available first
+  const ollamaAvailable = await isOllamaAvailable();
+  if (!ollamaAvailable) {
+    console.log("⚠️  Ollama not available at " + OLLAMA_CONFIG.baseURL + ", skipping LLM test");
+    console.log("   To run this test, please:");
+    console.log("   1. Install Ollama: https://ollama.ai/");
+    console.log("   2. Start Ollama: ollama serve");
+    console.log("   3. Pull the model: ollama pull " + OLLAMA_CONFIG.model);
+    return;
+  }
+
   const agentManager = new AgentManager({
     defaultModelSettings: OLLAMA_CONFIG,
     agentDataDirectory: TEST_DATA_DIR,
@@ -152,7 +180,12 @@ Deno.test("Agents Module - Real LLM Chat Completion", async () => {
   } catch (error: unknown) {
     console.error("❌ Chat completion failed:", error);
     // If Ollama is not available, skip this test
-    if (error instanceof Error && (error.message.includes("ECONNREFUSED") || error.message.includes("404"))) {
+    if (error instanceof Error && (
+      error.message.includes("Connection error") || 
+      error.message.includes("Connection refused") ||
+      error.message.includes("ECONNREFUSED") || 
+      error.message.includes("404")
+    )) {
       console.log("⚠️  Ollama not available, skipping LLM test");
       return;
     }
@@ -164,6 +197,13 @@ Deno.test("Agents Module - Real LLM Chat Completion", async () => {
 
 Deno.test("Agents Module - Agent with Kernel Integration", async () => {
   await cleanupTestData();
+
+  // Check if Ollama is available first
+  const ollamaAvailable = await isOllamaAvailable();
+  if (!ollamaAvailable) {
+    console.log("⚠️  Ollama not available, skipping kernel integration test");
+    return;
+  }
 
   const kernelManager = new KernelManager();
   const agentManager = new AgentManager({
@@ -236,7 +276,12 @@ Deno.test("Agents Module - Agent with Kernel Integration", async () => {
 
       } catch (error: unknown) {
         console.error("❌ Kernel test failed:", error);
-        if (error instanceof Error && (error.message.includes("ECONNREFUSED") || error.message.includes("404"))) {
+        if (error instanceof Error && (
+          error.message.includes("Connection error") || 
+          error.message.includes("Connection refused") ||
+          error.message.includes("ECONNREFUSED") || 
+          error.message.includes("404")
+        )) {
           console.log("⚠️  Ollama not available, skipping kernel test");
         } else {
           throw error;
@@ -268,6 +313,13 @@ Deno.test("Agents Module - Agent with Kernel Integration", async () => {
 
 Deno.test("Agents Module - Event System", async () => {
   await cleanupTestData();
+
+  // Check if Ollama is available first
+  const ollamaAvailable = await isOllamaAvailable();
+  if (!ollamaAvailable) {
+    console.log("⚠️  Ollama not available, skipping event system test");
+    return;
+  }
 
   const agentManager = new AgentManager({
     defaultModelSettings: OLLAMA_CONFIG,
@@ -328,7 +380,12 @@ Deno.test("Agents Module - Event System", async () => {
     assert(streamingEvents.length > 0 || messageEvents.length > 0, "Should have generated some events");
 
   } catch (error: unknown) {
-    if (error instanceof Error && (error.message.includes("ECONNREFUSED") || error.message.includes("404"))) {
+    if (error instanceof Error && (
+      error.message.includes("Connection error") || 
+      error.message.includes("Connection refused") ||
+      error.message.includes("ECONNREFUSED") || 
+      error.message.includes("404")
+    )) {
       console.log("⚠️  Ollama not available, skipping event test");
       return;
     }
@@ -480,6 +537,13 @@ Deno.test("Agents Module - Full Integration Test", async () => {
 
   console.log("🎯 Starting full integration test...");
 
+  // Check if Ollama is available first
+  const ollamaAvailable = await isOllamaAvailable();
+  if (!ollamaAvailable) {
+    console.log("⚠️  Ollama not available, skipping full integration test");
+    return;
+  }
+
   const kernelManager = new KernelManager();
   const agentManager = new AgentManager({
     defaultModelSettings: OLLAMA_CONFIG,
@@ -553,11 +617,29 @@ Deno.test("Agents Module - Full Integration Test", async () => {
     }
 
   } catch (error: unknown) {
-    if (error instanceof Error && (error.message.includes("ECONNREFUSED") || error.message.includes("404"))) {
+    if (error instanceof Error && (
+      error.message.includes("Connection error") || 
+      error.message.includes("Connection refused") ||
+      error.message.includes("ECONNREFUSED") || 
+      error.message.includes("404")
+    )) {
       console.log("⚠️  Ollama not available for integration test");
       return;
     }
     throw error;
+  } finally {
+    // Proper cleanup
+    try {
+      await agentManager.destroyAll();
+      await wait(200);
+      
+      if (kernelManager) {
+        await kernelManager.destroyAll();
+        await wait(200);
+      }
+    } catch (cleanupError) {
+      console.error("❌ Cleanup error:", cleanupError);
+    }
   }
 
   await cleanupTestData();

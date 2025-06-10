@@ -4,8 +4,8 @@
   "description": "A Deno-based app engine with Pyodide",
   "pypi-packages": {
     "packages": {
-      "py/pyodide-kernel": "0.5.2",
-      "py/piplite": "0.5.2",
+      "py/pyodide-kernel": "0.6.0a5",
+      "py/piplite": "0.6.0a5",
       "py/ipykernel": "6.9.2",
       "py/widgetsnbextension3/widgetsnbextension": "3.6.999",
       "py/widgetsnbextension4/widgetsnbextension": "4.0.999"

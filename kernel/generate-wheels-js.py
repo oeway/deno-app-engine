@@ -58,7 +58,7 @@ def build_wheels():
         print(f"[{pkg_name}] Building wheel...")
         
         # Ensure we have the build dependencies
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "hatch", "build", "wheel"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--break-system-packages", "hatch", "build", "wheel"])
         
         # Copy package to a temp dir for building
         temp_dir = KERNEL_DIR / "temp"
