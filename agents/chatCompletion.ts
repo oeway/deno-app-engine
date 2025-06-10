@@ -149,8 +149,11 @@ export async function* chatCompletion({
     const controller = abortController || new AbortController();
     const { signal } = controller;
 
+    // Ensure baseURL ends with "/"
+    const normalizedBaseURL = baseURL.endsWith('/') ? baseURL : baseURL + '/';
+
     const openai = new OpenAI({
-      baseURL,
+      baseURL: normalizedBaseURL,
       apiKey,
       dangerouslyAllowBrowser: true
     });
@@ -306,13 +309,13 @@ export async function* chatCompletion({
         if (error instanceof Error) {
           // Handle common API errors
           if (error.message.includes('404')) {
-            errorMessage = `Invalid model endpoint: ${baseURL} or model: ${model}`;
+            errorMessage = `Invalid model endpoint: ${normalizedBaseURL} or model: ${model}`;
           } else if (error.message.includes('401') || error.message.includes('403')) {
             errorMessage = `Authentication error: Invalid API key`;
           } else if (error.message.includes('429')) {
             errorMessage = `Rate limit exceeded. Please try again later.`;
           } else if (error.message.includes('timeout') || error.message.includes('ECONNREFUSED')) {
-            errorMessage = `Connection timeout. The model endpoint (${baseURL}) may be unavailable.`;
+            errorMessage = `Connection timeout. The model endpoint (${normalizedBaseURL}) may be unavailable.`;
           } else {
             errorMessage = `API error: ${error.message}`;
           }

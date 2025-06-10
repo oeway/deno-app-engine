@@ -1,4 +1,16 @@
 {
+  "ipykernel": {
+    "latest": {
+      "filename": "ipykernel-6.9.2-py3-none-any.whl",
+      "url": "./ipykernel-6.9.2-py3-none-any.whl"
+    }
+  },
+  "widgetsnbextension": {
+    "latest": {
+      "filename": "widgetsnbextension-3.6.999-py3-none-any.whl",
+      "url": "./widgetsnbextension-3.6.999-py3-none-any.whl"
+    }
+  },
   "pyodide-kernel": {
     "latest": {
       "filename": "pyodide_kernel-0.6.0a5-py3-none-any.whl",
@@ -9,18 +21,6 @@
     "latest": {
       "filename": "piplite-0.6.0a5-py3-none-any.whl",
       "url": "./piplite-0.6.0a5-py3-none-any.whl"
-    }
-  },
-  "ipykernel": {
-    "latest": {
-      "filename": "ipykernel-6.9.2-py3-none-any.whl",
-      "url": "./ipykernel-6.9.2-py3-none-any.whl"
-    }
-  },
-  "widgetsnbextension": {
-    "latest": {
-      "filename": "widgetsnbextension-4.0.999-py3-none-any.whl",
-      "url": "./widgetsnbextension-4.0.999-py3-none-any.whl"
     }
   }
 }
