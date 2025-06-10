@@ -1,11 +1,7 @@
 import { assertEquals, assertExists, assertGreater, assertThrows, assert } from "jsr:@std/assert";
 import { startHyphaService } from "../scripts/hypha-service.ts";
-import { KernelMode, KernelLanguage } from "../kernel/mod.ts";
+import { KernelMode } from "../kernel/mod.ts";
 import type { IDocument } from "../vectordb/mod.ts";
-
-// Test timeout settings
-const EXECUTION_TIMEOUT = 30000;
-const CONNECTION_TIMEOUT = 10000;
 
 // Helper function to wait for execution results with polling
 async function waitForExecutionResult(
