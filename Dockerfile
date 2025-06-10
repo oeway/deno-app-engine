@@ -18,6 +18,9 @@ COPY . .
 # Create directory for Pyodide cache
 RUN mkdir -p /home/deno/.cache/pyodide
 
+# Create directories for agent data and pyodide packages
+RUN mkdir -p /app/agent_data /app/pyodide_packages
+
 # Make start script executable
 RUN chmod +x scripts/start-hypha-service.sh
 
