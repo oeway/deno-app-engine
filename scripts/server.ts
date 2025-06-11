@@ -349,6 +349,49 @@ async function serveStaticFile(path: string): Promise<Response> {
   }
 }
 
+// Helper function to extract namespace from request
+function getNamespaceFromRequest(req: Request): string | undefined {
+  const url = new URL(req.url);
+  
+  // Try query parameter first
+  const namespaceParam = url.searchParams.get("namespace");
+  if (namespaceParam) {
+    return namespaceParam;
+  }
+  
+  // Try header
+  const namespaceHeader = req.headers.get("X-Namespace");
+  if (namespaceHeader) {
+    return namespaceHeader;
+  }
+  
+  // No namespace specified
+  return undefined;
+}
+
+// Helper function to validate agent access within namespace
+function validateAgentAccess(agentId: string, namespace?: string): string {
+  // If namespace is provided, ensure agent ID matches namespace or is accessible
+  if (namespace) {
+    // If the agent ID is namespaced and matches the expected namespace, allow access
+    if (agentId.includes(':')) {
+      const [agentNamespace] = agentId.split(':');
+      if (agentNamespace === namespace) {
+        return agentId;
+      } else {
+        throw new Error(`Access denied: Agent ${agentId} is not in namespace ${namespace}`);
+      }
+    }
+    
+    // For non-namespaced agents, allow access but warn
+    console.warn(`Accessing non-namespaced agent ${agentId} from namespace ${namespace}. This is deprecated.`);
+    return agentId;
+  }
+  
+  // No namespace specified, allow direct access
+  return agentId;
+}
+
 export async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
@@ -1675,7 +1718,8 @@ export async function handleRequest(req: Request): Promise<Response> {
       // List agents
       if (path === "/api/agents" && req.method === "GET") {
         try {
-          const agents = agentManager.listAgents();
+          const namespace = getNamespaceFromRequest(req);
+          const agents = agentManager.listAgents(namespace);
           return jsonResponse(agents);
         } catch (error) {
           console.error("Error listing agents:", error);
@@ -1704,6 +1748,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       if (path === "/api/agents" && req.method === "POST") {
         try {
           const body = await req.json();
+          const namespace = getNamespaceFromRequest(req) || body.namespace;
           
           // Convert kernelType string to enum value
           let kernelType: KernelType | undefined;
@@ -1727,17 +1772,34 @@ export async function handleRequest(req: Request): Promise<Response> {
             kernelType: kernelType,
             maxSteps: body.maxSteps,
             ModelSettings: body.ModelSettings,
-            autoAttachKernel: body.autoAttachKernel
+            autoAttachKernel: body.autoAttachKernel,
+            namespace: namespace
           };
           
           console.log(`🤖 Creating agent with config:`, {
             id: config.id,
             name: config.name,
             kernelType: config.kernelType,
-            autoAttachKernel: config.autoAttachKernel
+            autoAttachKernel: config.autoAttachKernel,
+            namespace: config.namespace
           });
           
-          const agentId = await agentManager.createAgent(config);
+          let agentId: string;
+          try {
+            agentId = await agentManager.createAgent(config);
+          } catch (error) {
+            // If we hit the namespace limit, try cleaning up old agents
+            if (error instanceof Error && error.message.includes('Maximum number of agents per namespace') && namespace) {
+              console.log(`🧹 Namespace limit reached for ${namespace}, cleaning up old agents...`);
+              const cleanedUp = await agentManager.cleanupOldAgentsInNamespace(namespace, 5);
+              console.log(`🧹 Cleaned up ${cleanedUp} old agents in namespace ${namespace}`);
+              
+              // Retry creating the agent
+              agentId = await agentManager.createAgent(config);
+            } else {
+              throw error;
+            }
+          }
           const agent = agentManager.getAgent(agentId);
           
           // If auto-attach kernel is requested and we have a kernelType, attach it
@@ -1763,8 +1825,15 @@ export async function handleRequest(req: Request): Promise<Response> {
             startupScript: updatedAgent?.startupScript,
             kernelType: updatedAgent?.kernelType,
             hasKernel: !!updatedAgent?.kernel,
+            hasStartupError: !!updatedAgent?.getStartupError(),
+            startupError: updatedAgent?.getStartupError() ? {
+              message: updatedAgent.getStartupError()!.message,
+              fullError: updatedAgent.getStartupError()!.fullError,
+              stackTrace: updatedAgent.getStartupError()!.stackTrace
+            } : undefined,
             created: updatedAgent?.created.toISOString(),
-            maxSteps: updatedAgent?.maxSteps
+            maxSteps: updatedAgent?.maxSteps,
+            namespace: namespace
           });
         } catch (error) {
           console.error("Error creating agent:", error);
@@ -1779,7 +1848,9 @@ export async function handleRequest(req: Request): Promise<Response> {
       if (path.match(/^\/api\/agents\/[^\/]+$/) && req.method === "GET") {
         try {
           const agentId = decodeURIComponent(path.split("/")[3]);
-          const agent = agentManager.getAgent(agentId);
+          const namespace = getNamespaceFromRequest(req);
+          const validAgentId = validateAgentAccess(agentId, namespace);
+          const agent = agentManager.getAgent(validAgentId);
           
           if (!agent) {
             return jsonResponse({ error: "Agent not found" }, Status.NotFound);
@@ -1793,6 +1864,12 @@ export async function handleRequest(req: Request): Promise<Response> {
             startupScript: agent.startupScript,
             kernelType: agent.kernelType,
             hasKernel: !!agent.kernel,
+            hasStartupError: !!agent.getStartupError(),
+            startupError: agent.getStartupError() ? {
+              message: agent.getStartupError()!.message,
+              fullError: agent.getStartupError()!.fullError,
+              stackTrace: agent.getStartupError()!.stackTrace
+            } : undefined,
             maxSteps: agent.maxSteps,
             created: agent.created.toISOString(),
             conversationLength: agent.conversationHistory.length,
@@ -1811,9 +1888,11 @@ export async function handleRequest(req: Request): Promise<Response> {
       if (path.match(/^\/api\/agents\/[^\/]+$/) && req.method === "PUT") {
         try {
           const agentId = decodeURIComponent(path.split("/")[3]);
+          const namespace = getNamespaceFromRequest(req);
+          const validAgentId = validateAgentAccess(agentId, namespace);
           const body = await req.json();
           
-          await agentManager.updateAgent(agentId, {
+          await agentManager.updateAgent(validAgentId, {
             name: body.name,
             description: body.description,
             instructions: body.instructions,
@@ -1823,7 +1902,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             ModelSettings: body.ModelSettings
           });
           
-          const agent = agentManager.getAgent(agentId);
+          const agent = agentManager.getAgent(validAgentId);
           return jsonResponse({
             success: true,
             message: "Agent updated successfully",
@@ -1850,8 +1929,10 @@ export async function handleRequest(req: Request): Promise<Response> {
       if (path.match(/^\/api\/agents\/[^\/]+$/) && req.method === "DELETE") {
         try {
           const agentId = decodeURIComponent(path.split("/")[3]);
+          const namespace = getNamespaceFromRequest(req);
+          const validAgentId = validateAgentAccess(agentId, namespace);
           
-          await agentManager.destroyAgent(agentId);
+          await agentManager.destroyAgent(validAgentId);
           
           return jsonResponse({
             success: true,
@@ -1866,78 +1947,67 @@ export async function handleRequest(req: Request): Promise<Response> {
         }
       }
 
-      // Chat with agent
-      if (path.match(/^\/api\/agents\/[^\/]+\/chat$/) && req.method === "POST") {
+      // Chat with agent (stateless - no history modification)
+      if (path.startsWith("/api/agents/") && req.method === "POST" && path.endsWith("/chat-stateless")) {
+        const agentId = path.split("/")[3];
+        const namespace = getNamespaceFromRequest(req);
+        
         try {
-          const agentId = decodeURIComponent(path.split("/")[3]);
+          const validAgentId = validateAgentAccess(agentId, namespace);
           const body = await req.json();
-          const message = body.message;
+          const { messages } = body;
           
-          if (!message) {
-            return jsonResponse({ error: "Message is required" }, Status.BadRequest);
+          if (!messages || !Array.isArray(messages) || messages.length === 0) {
+            return jsonResponse({ error: "Messages array is required and cannot be empty" }, Status.BadRequest);
           }
           
-          const agent = agentManager.getAgent(agentId);
+          const agent = agentManager.getAgent(validAgentId);
           if (!agent) {
             return jsonResponse({ error: "Agent not found" }, Status.NotFound);
           }
           
-          // Create messages for this chat completion - include conversation history and new message
-          const newUserMessage = { role: "user" as const, content: message };
-          
-          // Always include the new message in the context for the agent
-          const messages = [...agent.conversationHistory, newUserMessage];
-          
-          // Set up streaming response
+          // Return streaming response for stateless chat
           const stream = new ReadableStream({
             async start(controller) {
-              let isClosed = false;
-              
               try {
-                const sendEvent = (data: any) => {
-                  if (!isClosed) {
-                    try {
-                      const event = `data: ${JSON.stringify(data)}\n\n`;
-                      controller.enqueue(new TextEncoder().encode(event));
-                    } catch (error) {
-                      isClosed = true;
-                    }
-                  }
-                };
+                const encoder = new TextEncoder();
                 
-                // Add the user message to conversation history
-                agent.conversationHistory.push(newUserMessage);
+                // Send initial headers
+                const headers = "data: " + JSON.stringify({ type: "start", message: "Starting stateless chat..." }) + "\n\n";
+                controller.enqueue(encoder.encode(headers));
                 
-                // Start chat completion stream
-                for await (const chunk of agent.chatCompletion(messages)) {
-                  sendEvent(chunk);
+                let hasContent = false;
+                
+                for await (const chunk of agent.statelessChatCompletion(messages)) {
+                  hasContent = true;
+                  const data = "data: " + JSON.stringify(chunk) + "\n\n";
+                  controller.enqueue(encoder.encode(data));
                   
-                  // If there's an error, break the stream
                   if (chunk.type === 'error') {
                     break;
                   }
                 }
                 
-                // Note: The agent handles adding responses to conversation history internally
+                if (!hasContent) {
+                  const errorData = "data: " + JSON.stringify({ 
+                    type: "error", 
+                    error: "Agent completed without generating any response" 
+                  }) + "\n\n";
+                  controller.enqueue(encoder.encode(errorData));
+                }
                 
-                if (!isClosed) {
-                  controller.close();
-                  isClosed = true;
-                }
+                // Send completion signal
+                const endData = "data: " + JSON.stringify({ type: "complete" }) + "\n\n";
+                controller.enqueue(encoder.encode(endData));
               } catch (error) {
-                if (!isClosed) {
-                  try {
-                    const errorEvent = `data: ${JSON.stringify({
-                      type: "error",
-                      error: error instanceof Error ? error.message : String(error)
-                    })}\n\n`;
-                    controller.enqueue(new TextEncoder().encode(errorEvent));
-                    controller.close();
-                    isClosed = true;
-                  } catch (closeError) {
-                    isClosed = true;
-                  }
-                }
+                const encoder = new TextEncoder();
+                const errorData = "data: " + JSON.stringify({ 
+                  type: "error", 
+                  error: error instanceof Error ? error.message : String(error) 
+                }) + "\n\n";
+                controller.enqueue(encoder.encode(errorData));
+              } finally {
+                controller.close();
               }
             }
           });
@@ -1948,104 +2018,57 @@ export async function handleRequest(req: Request): Promise<Response> {
               "Cache-Control": "no-cache",
               "Connection": "keep-alive",
               "Access-Control-Allow-Origin": "*",
-              "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-              "Access-Control-Allow-Headers": "Content-Type",
-            },
+              "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Namespace"
+            }
           });
         } catch (error) {
-          console.error("Error in agent chat:", error);
-          return jsonResponse(
-            { error: error instanceof Error ? error.message : String(error) },
-            Status.InternalServerError
-          );
-        }
-      }
-
-      // Get agent conversation history
-      if (path.match(/^\/api\/agents\/[^\/]+\/conversation$/) && req.method === "GET") {
-        try {
-          const agentId = decodeURIComponent(path.split("/")[3]);
-          const agent = agentManager.getAgent(agentId);
-          
-          if (!agent) {
-            return jsonResponse({ error: "Agent not found" }, Status.NotFound);
-          }
-          
-          return jsonResponse({
-            conversation: agent.conversationHistory,
-            length: agent.conversationHistory.length
-          });
-        } catch (error) {
-          console.error("Error getting agent conversation:", error);
-          return jsonResponse(
-            { error: error instanceof Error ? error.message : String(error) },
-            Status.InternalServerError
-          );
+          return jsonResponse({ 
+            error: error instanceof Error ? error.message : "Unknown error occurred" 
+          }, Status.InternalServerError);
         }
       }
 
       // Clear agent conversation
-      if (path.match(/^\/api\/agents\/[^\/]+\/conversation$/) && req.method === "DELETE") {
+      if (path.startsWith("/api/agents/") && req.method === "POST" && path.endsWith("/clear-conversation")) {
+        const agentId = path.split("/")[3];
+        const namespace = getNamespaceFromRequest(req);
+        
         try {
-          const agentId = decodeURIComponent(path.split("/")[3]);
-          
-          await agentManager.clearConversation(agentId);
-          
-          return jsonResponse({
-            success: true,
-            message: "Conversation cleared successfully"
-          });
+          const validAgentId = validateAgentAccess(agentId, namespace);
+          await agentManager.clearConversation(validAgentId);
+          return jsonResponse({ success: true, message: "Conversation cleared successfully" });
         } catch (error) {
-          console.error("Error clearing agent conversation:", error);
-          return jsonResponse(
-            { error: error instanceof Error ? error.message : String(error) },
-            Status.InternalServerError
-          );
+          return jsonResponse({ 
+            error: error instanceof Error ? error.message : "Unknown error occurred" 
+          }, Status.InternalServerError);
         }
       }
 
-      // Attach kernel to agent
-      if (path.match(/^\/api\/agents\/[^\/]+\/kernel$/) && req.method === "POST") {
+      // Set agent conversation history
+      if (path.startsWith("/api/agents/") && req.method === "POST" && path.endsWith("/set-conversation")) {
+        const agentId = path.split("/")[3];
+        const namespace = getNamespaceFromRequest(req);
+        
         try {
-          const agentId = decodeURIComponent(path.split("/")[3]);
+          const validAgentId = validateAgentAccess(agentId, namespace);
           const body = await req.json();
-          const kernelType = body.kernelType ? KernelType[body.kernelType as keyof typeof KernelType] : KernelType.PYTHON;
+          const { messages } = body;
           
-          await agentManager.attachKernelToAgent(agentId, kernelType);
+          if (!messages || !Array.isArray(messages)) {
+            return jsonResponse({ error: "Messages must be an array" }, Status.BadRequest);
+          }
           
-          const agent = agentManager.getAgent(agentId);
-          return jsonResponse({
-            success: true,
-            message: "Kernel attached successfully",
-            hasKernel: !!agent?.kernel,
-            kernelType: agent?.kernelType
+          await agentManager.setConversationHistory(validAgentId, messages);
+          return jsonResponse({ 
+            success: true, 
+            message: `Conversation history set with ${messages.length} messages`,
+            messageCount: messages.length
           });
         } catch (error) {
-          console.error("Error attaching kernel to agent:", error);
-          return jsonResponse(
-            { error: error instanceof Error ? error.message : String(error) },
-            Status.InternalServerError
-          );
-        }
-      }
-
-      // Detach kernel from agent
-      if (path.match(/^\/api\/agents\/[^\/]+\/kernel$/) && req.method === "DELETE") {
-        try {
-          const agentId = decodeURIComponent(path.split("/")[3]);
-          
-          await agentManager.detachKernelFromAgent(agentId);
-          
-          return jsonResponse({
-            success: true,
-            message: "Kernel detached successfully"
-          });
-        } catch (error) {
-          console.error("Error detaching kernel from agent:", error);
-          return jsonResponse(
-            { error: error instanceof Error ? error.message : String(error) },
-            Status.InternalServerError
-          );
+          return jsonResponse({ 
+            error: error instanceof Error ? error.message : "Unknown error occurred" 
+          }, Status.InternalServerError);
         }
       }
 

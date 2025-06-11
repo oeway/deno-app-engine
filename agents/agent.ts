@@ -126,6 +126,13 @@ export class AgentObservationError extends AgentError {
   }
 }
 
+export class AgentStartupError extends AgentError {
+  constructor(message: string, public fullError: string, public stackTrace?: string) {
+    super(message, 'startup_script');
+    this.name = 'AgentStartupError';
+  }
+}
+
 // Memory management for agent interactions
 export class AgentMemory {
   public steps: (TaskStep | ActionStep | PlanningStep | SystemPromptStep)[] = [];
@@ -273,6 +280,7 @@ export interface IAgentConfig {
   enablePlanning?: boolean; // Enable planning capabilities
   planningInterval?: number; // Run planning every N steps (1 = every step, undefined = disabled)
   hyphaServices?: Record<string, any>; // Available Hypha services
+  namespace?: string; // Optional namespace prefix for the agent ID
 }
 
 // Interface for agent instance
@@ -294,10 +302,13 @@ export interface IAgentInstance {
   lastUsed?: Date;
   conversationHistory: ChatMessage[];
   chatCompletion(messages: ChatMessage[], options?: Partial<ChatCompletionOptions>): AsyncGenerator<any, void, unknown>;
+  statelessChatCompletion(messages: ChatMessage[], options?: Partial<ChatCompletionOptions>): AsyncGenerator<any, void, unknown>;
   attachKernel(kernel: IKernelInstance): Promise<void>;
   detachKernel(): void;
   updateConfig(config: Partial<IAgentConfig>): void;
   destroy(): void;
+  getStartupError(): AgentStartupError | undefined;
+  setConversationHistory(messages: ChatMessage[]): void;
 }
 
 // Code execution instructions for agents with kernels
@@ -313,6 +324,14 @@ You will be given a task and must methodically analyze, plan, and execute Python
 - If you need to explain something, demonstrate it with code examples
 - If you need to research something, write code to search or analyze data
 - Transform theoretical knowledge into practical, executable solutions
+
+**CRITICAL: ALWAYS USE PROPER TAGS**
+- You MUST use \`<py-script>\` tags when you want to execute Python code
+- You MUST use \`<returnToUser>\` tags when providing final results to the user
+- You MUST use \`<thoughts>\` tags when analyzing or planning your approach
+- Never write "let me execute Python code" or "now I'll run code" without immediately following with the actual \`<py-script>\` tags
+- Plain text responses without tags will end the conversation - only use them for brief acknowledgments
+- When in doubt, use tags to continue your work rather than stopping mid-process
 
 ## Core Execution Cycle
 
@@ -363,6 +382,7 @@ Use <returnToUser> tags when you have completed the task or need to return contr
 - Include a \`commit="id1,id2,id3"\` attribute to preserve important code blocks
 - Provide a clear summary of what was accomplished
 - Include relevant results or findings
+- **IMPORTANT**: Only responses wrapped in \`<returnToUser>\` tags will be delivered to the user as final answers
 
 Example:
 <returnToUser commit="load_data,analysis,visualization">
@@ -459,6 +479,14 @@ You will be given a task and must methodically analyze, plan, and execute TypeSc
 - If you need to research something, write code to search or analyze data
 - Transform theoretical knowledge into practical, executable solutions
 
+**CRITICAL: ALWAYS USE PROPER TAGS**
+- You MUST use \`<t-script>\` tags when you want to execute TypeScript code
+- You MUST use \`<returnToUser>\` tags when providing final results to the user
+- You MUST use \`<thoughts>\` tags when analyzing or planning your approach
+- Never write "let me execute TypeScript code" or "now I'll run code" without immediately following with the actual \`<t-script>\` tags
+- Plain text responses without tags will end the conversation - only use them for brief acknowledgments
+- When in doubt, use tags to continue your work rather than stopping mid-process
+
 ## Core Execution Cycle
 
 Follow this structured approach for every task:
@@ -521,6 +549,7 @@ Use <returnToUser> tags when you have completed the task:
 - Include a \`commit="id1,id2,id3"\` attribute to preserve important code blocks
 - Provide a clear summary of what was accomplished
 - Include relevant results or findings
+- **IMPORTANT**: Only responses wrapped in \`<returnToUser>\` tags will be delivered to the user as final answers
 
 ## Advanced Capabilities
 
@@ -589,6 +618,14 @@ You will be given a task and must methodically analyze, plan, and execute JavaSc
 - If you need to research something, write code to search or analyze data
 - Transform theoretical knowledge into practical, executable solutions
 
+**CRITICAL: ALWAYS USE PROPER TAGS**
+- You MUST use \`<t-script>\` tags when you want to execute JavaScript code
+- You MUST use \`<returnToUser>\` tags when providing final results to the user
+- You MUST use \`<thoughts>\` tags when analyzing or planning your approach
+- Never write "let me execute JavaScript code" or "now I'll run code" without immediately following with the actual \`<t-script>\` tags
+- Plain text responses without tags will end the conversation - only use them for brief acknowledgments
+- When in doubt, use tags to continue your work rather than stopping mid-process
+
 ## Core Execution Cycle
 
 Follow this structured approach for every task:
@@ -656,6 +693,7 @@ Use <returnToUser> tags when you have completed the task:
 - Include a \`commit="id1,id2,id3"\` attribute to preserve important code blocks
 - Provide a clear summary of what was accomplished
 - Include relevant results or findings
+- **IMPORTANT**: Only responses wrapped in \`<returnToUser>\` tags will be delivered to the user as final answers
 
 ## Advanced Capabilities
 
@@ -820,7 +858,7 @@ export class Agent implements IAgentInstance {
   private stepNumber: number = 1;
   private hyphaServices: Record<string, any>;
   private startupOutput?: string; // Captured output from startup script
-
+  private startupError?: AgentStartupError; // Captured error from startup script execution
   private manager: any; // AgentManager reference
 
   constructor(config: IAgentConfig, manager: any) {
@@ -1042,6 +1080,12 @@ export class Agent implements IAgentInstance {
     options: Partial<ChatCompletionOptions> = {}
   ): AsyncGenerator<any, void, unknown> {
     this.lastUsed = new Date();
+    
+    // Check if startup script failed - if so, always throw that error instead of proceeding
+    if (this.startupError) {
+      console.error(`🚫 [Agent ${this.id}] Cannot proceed with chat - startup script failed`);
+      throw this.startupError;
+    }
     
     // Initialize memory for this completion session
     this.memory.reset();
@@ -1301,22 +1345,30 @@ export class Agent implements IAgentInstance {
     
     try {
       let output = '';
+      let errorOutput = '';
       let hasOutput = false;
+      let hasError = false;
       
       // Set up event listeners to capture stdout/stderr
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
         if (this.kernel && event.kernelId === this.kernel.id) {
-          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
+          if (event.data.name === 'stdout') {
             output += event.data.text;
+            hasOutput = true;
+          } else if (event.data.name === 'stderr') {
+            errorOutput += event.data.text;
             hasOutput = true;
           } else if (event.data.data && event.data.data['text/plain']) {
             output += event.data.data['text/plain'] + '\n';
             hasOutput = true;
           } else if (event.data.ename && event.data.evalue) {
-            output += `${event.data.ename}: ${event.data.evalue}\n`;
+            // This is an execution error
+            hasError = true;
+            let errorMessage = `${event.data.ename}: ${event.data.evalue}\n`;
             if (event.data.traceback && Array.isArray(event.data.traceback)) {
-              output += event.data.traceback.join('\n') + '\n';
+              errorMessage += event.data.traceback.join('\n') + '\n';
             }
+            errorOutput += errorMessage;
             hasOutput = true;
           }
         }
@@ -1337,13 +1389,36 @@ export class Agent implements IAgentInstance {
         // Give a moment for any remaining events to be processed
         await new Promise(resolve => setTimeout(resolve, 100));
         
-        // Store the captured output
-        this.startupOutput = hasOutput ? output.trim() : 'Startup script executed successfully (no output)';
-        
-        if (!result.success) {
+        // Check if execution was successful
+        if (!result.success || hasError || errorOutput.trim()) {
+          // Create a detailed error message
           const errorMsg = result.error?.message || 'Startup script execution failed';
-          this.startupOutput += `\nError: ${errorMsg}`;
+          const fullErrorOutput = [
+            `Startup script execution failed for agent: ${this.id}`,
+            `Error: ${errorMsg}`,
+            errorOutput.trim() ? `Error Output:\n${errorOutput.trim()}` : '',
+            output.trim() ? `Standard Output:\n${output.trim()}` : '',
+            `Startup Script:\n${this.startupScript}`
+          ].filter(Boolean).join('\n\n');
+          
+          // Create and store the startup error
+          this.startupError = new AgentStartupError(
+            `Startup script failed: ${errorMsg}`,
+            fullErrorOutput,
+            errorOutput.trim() || errorMsg
+          );
+          
+          console.error(`❌ Startup script failed for agent ${this.id}:`, this.startupError.fullError);
+          
+          // Clear startup output since we have an error
+          this.startupOutput = undefined;
+          
+          return; // Don't mark as successful
         }
+        
+        // Success case - store the captured output and clear any previous error
+        this.startupOutput = hasOutput ? output.trim() : 'Startup script executed successfully (no output)';
+        this.startupError = undefined; // Clear any previous error
         
         console.log(`✅ Startup script completed for agent: ${this.id}`);
         console.log(`📝 Captured startup output: ${this.startupOutput}`);
@@ -1357,9 +1432,23 @@ export class Agent implements IAgentInstance {
         }
       }
     } catch (error) {
+      // Handle unexpected errors during startup script execution
       const errorMsg = `Startup script execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      this.startupOutput = errorMsg;
-      console.error(`❌ Startup script failed for agent ${this.id}:`, error);
+      const fullErrorOutput = [
+        `Startup script execution failed for agent: ${this.id}`,
+        `Unexpected Error: ${errorMsg}`,
+        error instanceof Error && error.stack ? `Stack Trace:\n${error.stack}` : '',
+        `Startup Script:\n${this.startupScript}`
+      ].filter(Boolean).join('\n\n');
+      
+      this.startupError = new AgentStartupError(
+        errorMsg,
+        fullErrorOutput,
+        error instanceof Error ? error.stack : undefined
+      );
+      
+      this.startupOutput = undefined;
+      console.error(`❌ Startup script failed for agent ${this.id}:`, this.startupError.fullError);
     }
   }
 
@@ -1482,6 +1571,16 @@ export class Agent implements IAgentInstance {
     if (this.startupScript) {
       try {
         await this.executeStartupScript();
+        
+        // If startup script failed, emit error but don't throw here
+        // The error will be thrown when user tries to chat with the agent
+        if (this.startupError) {
+          this.manager.emit(AgentEvents.AGENT_ERROR, {
+            agentId: this.id,
+            error: this.startupError,
+            context: 'startup_script_execution'
+          });
+        }
       } catch (error) {
         console.error(`Failed to execute startup script for agent ${this.id}:`, error);
         this.manager.emit(AgentEvents.AGENT_ERROR, {
@@ -1550,5 +1649,207 @@ export class Agent implements IAgentInstance {
     this.manager.emit(AgentEvents.AGENT_DESTROYED, {
       agentId: this.id
     });
+  }
+
+  getStartupError(): AgentStartupError | undefined {
+    return this.startupError;
+  }
+
+  /**
+   * Set/overwrite the conversation history for this agent
+   * @param messages Array of messages to set as the conversation history
+   */
+  setConversationHistory(messages: ChatMessage[]): void {
+    this.conversationHistory = [...messages]; // Create a copy to avoid reference issues
+    this.lastUsed = new Date();
+    
+    console.log(`📝 [Agent ${this.id}] Conversation history set to ${messages.length} messages`);
+    
+    // Emit event for conversation update
+    this.manager.emit(AgentEvents.AGENT_UPDATED, {
+      agentId: this.id,
+      context: 'conversation_history_set',
+      messageCount: messages.length
+    });
+  }
+
+  /**
+   * Stateless chat completion method that doesn't modify conversation history or memory
+   * Acts like a pure function - takes messages, processes them, returns response without side effects
+   */
+  async *statelessChatCompletion(
+    messages: ChatMessage[], 
+    options: Partial<ChatCompletionOptions> = {}
+  ): AsyncGenerator<any, void, unknown> {
+    // Check if startup script failed - if so, always throw that error instead of proceeding
+    if (this.startupError) {
+      console.error(`🚫 [Agent ${this.id}] Cannot proceed with stateless chat - startup script failed`);
+      throw this.startupError;
+    }
+    
+    console.log(`🚀 [Agent ${this.id}] Starting stateless chat completion (no history/memory modification)`);
+    
+    // Generate system prompt without modifying agent state
+    const systemPrompt = this.generateSystemPrompt(options.systemPrompt);
+    
+    console.log(`📋 [Agent ${this.id}] System prompt for stateless chat:`, systemPrompt);
+
+    // Create completion options for stateless execution
+    const completionOptions: ChatCompletionOptions = {
+      messages: messages, // Use provided messages as-is
+      systemPrompt,
+      model: options.model || this.ModelSettings.model,
+      temperature: options.temperature || this.ModelSettings.temperature,
+      baseURL: options.baseURL || this.ModelSettings.baseURL,
+      apiKey: options.apiKey || this.ModelSettings.apiKey,
+      maxSteps: Math.min(options.maxSteps || this.maxSteps, this.manager.getMaxStepsCap()),
+      stream: options.stream !== undefined ? options.stream : true,
+      abortController: options.abortController,
+      onExecuteCode: this.kernel ? 
+        (async (completionId: string, code: string): Promise<string> => {
+          console.log(`🚀 [Agent ${this.id}] Stateless execution: Executing code`);
+          console.log(`📋 Code (${code.length} chars):`, code.substring(0, 200) + (code.length > 200 ? '...' : ''));  
+          return await this.executeCodeStateless(completionId, code);
+        }) : 
+        options.onExecuteCode,
+      onMessage: (completionId: string, message: string, commitIds?: string[]) => {
+        console.log(`📤 [Agent ${this.id}] Stateless completion finished with message`);
+        
+        this.manager.emit(AgentEvents.AGENT_MESSAGE, {
+          agentId: this.id,
+          completionId,
+          message,
+          commitIds,
+          stateless: true
+        });
+        
+        if (options.onMessage) {
+          options.onMessage(completionId, message, commitIds);
+        }
+      },
+      onStreaming: (completionId: string, chunk: string) => {
+        this.manager.emit(AgentEvents.AGENT_STREAMING, {
+          agentId: this.id,
+          completionId,
+          chunk,
+          stateless: true
+        });
+        
+        if (options.onStreaming) {
+          options.onStreaming(completionId, chunk);
+        }
+      }
+    };
+
+    try {
+      // Execute the stateless completion
+      for await (const chunk of chatCompletion(completionOptions)) {
+        if (chunk.type === 'text_chunk' && chunk.content) {
+          // Validate agent output before processing
+          this.validateAgentOutput(chunk.content);
+        } else if (chunk.type === 'text' && chunk.content) {
+          // Final accumulated text - validate
+          this.validateAgentOutput(chunk.content);
+        }
+        yield chunk;
+      }
+      
+      console.log(`✅ [Agent ${this.id}] Stateless chat completion finished successfully`);
+      
+    } catch (error) {
+      console.error(`❌ [Agent ${this.id}] Stateless chat completion failed:`, error);
+      
+      this.manager.emit(AgentEvents.AGENT_ERROR, {
+        agentId: this.id,
+        error: error instanceof AgentError ? error : 
+          new AgentExecutionError(`Stateless completion failed: ${error instanceof Error ? error.message : 'Unknown error'}`),
+        context: 'stateless_execution',
+        stateless: true
+      });
+      
+      throw error;
+    }
+  }
+
+  /**
+   * Execute code for stateless completion without modifying agent state
+   */
+  private async executeCodeStateless(completionId: string, code: string): Promise<string> {
+    if (!this.kernel) {
+      throw new Error('No kernel attached to agent');
+    }
+
+    console.log(`🚀 [Agent ${this.id}] Stateless code execution`);
+    console.log(`📋 Code (${code.length} chars):`, code.substring(0, 200) + (code.length > 200 ? '...' : ''));
+
+    this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
+      agentId: this.id,
+      code,
+      completionId,
+      stateless: true
+    });
+    
+    try {
+      let output = '';
+      let hasOutput = false;
+      
+      // Set up event listeners to capture stdout/stderr
+      const handleManagerEvent = (event: { kernelId: string; data: any }) => {
+        if (this.kernel && event.kernelId === this.kernel.id) {
+          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
+            output += event.data.text;
+            hasOutput = true;
+          } else if (event.data.data && event.data.data['text/plain']) {
+            output += event.data.data['text/plain'] + '\n';
+            hasOutput = true;
+          } else if (event.data.ename && event.data.evalue) {
+            output += `${event.data.ename}: ${event.data.evalue}\n`;
+            if (event.data.traceback && Array.isArray(event.data.traceback)) {
+              output += event.data.traceback.join('\n') + '\n';
+            }
+            hasOutput = true;
+          }
+        }
+      };
+      
+      // Listen for kernel events through the manager
+      if (this.manager.kernelManager) {
+        this.manager.kernelManager.on('stream', handleManagerEvent);
+        this.manager.kernelManager.on('execute_result', handleManagerEvent);
+        this.manager.kernelManager.on('execute_error', handleManagerEvent);
+      }
+      
+      try {
+        const result = this.manager.kernelManager 
+          ? await this.manager.kernelManager.execute(this.kernel.id, code)
+          : await this.kernel.kernel.execute(code);
+        
+        // Give a moment for any remaining events to be processed
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        if (result.success) {
+          console.log(`✅ [Agent ${this.id}] Stateless code execution completed successfully`);
+          if (hasOutput) {
+            console.log(`📤 Output (${output.trim().length} chars):`, output.trim().substring(0, 200) + (output.trim().length > 200 ? '...' : ''));
+          }
+          return hasOutput ? output.trim() : 'Code executed successfully';
+        } else {
+          const errorMsg = result.error?.message || 'Code execution failed';
+          console.log(`❌ [Agent ${this.id}] Stateless code execution failed - ${errorMsg}`);
+          return hasOutput ? `${output.trim()}\n${errorMsg}` : errorMsg;
+        }
+      } finally {
+        // Clean up listeners
+        if (this.manager.kernelManager) {
+          this.manager.kernelManager.off('stream', handleManagerEvent);
+          this.manager.kernelManager.off('execute_result', handleManagerEvent);
+          this.manager.kernelManager.off('execute_error', handleManagerEvent);
+        }
+      }
+    } catch (error) {
+      const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      console.log(`💥 [Agent ${this.id}] Stateless kernel execution exception - ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
   }
 } 

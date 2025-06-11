@@ -175,27 +175,22 @@ arr.sum()
           outputCount: outputs.length
         });
         
-        // Only test streaming if the method exists on the service object
-        // We're testing for the property before even attempting to execute
-        if ('streamExecution' in service) {
-          console.log("  Testing streaming execution...");
-          try {
-            const outputs2 = [];
-            const streamCode = `print("Streaming test ${i+1}")\n2 + 2`;
-            
-            for await (const output of await service.streamExecution({
-              kernelId: kernel.id,
-              code: streamCode
-            })) {
-              outputs2.push(output);
-            }
-            
-            console.log(`  Streaming execution complete, received ${outputs2.length} outputs`);
-          } catch (error) {
-            console.error(`  Streaming execution failed:`, error);
+        // Test streaming execution
+        console.log("  Testing streaming execution...");
+        try {
+          const outputs2 = [];
+          const streamCode = `print("Streaming test ${i+1}")\n2 + 2`;
+          
+          for await (const output of await service.streamExecution({
+            kernelId: kernel.id,
+            code: streamCode
+          })) {
+            outputs2.push(output);
           }
-        } else {
-          console.log("  Skipping streaming execution test - method not available");
+          
+          console.log(`  Streaming execution complete, received ${outputs2.length} outputs`);
+        } catch (error) {
+          console.error(`  Streaming execution failed:`, error);
         }
       } catch (error) {
         console.error(`  Execution ${i+1} failed:`, error);
@@ -231,6 +226,98 @@ arr.sum()
     }
   }
   
+  // Test Agent functionality
+  console.log("\n========== TESTING AGENTS ==========");
+  const testAgents = [];
+  
+  console.log("Testing agent functionality...");
+  
+  try {
+    // Create a test agent
+    const agentConfig = {
+      id: `test-agent-${Date.now()}`,
+      name: "Test Agent",
+      instructions: "You are a helpful test agent. Answer questions concisely."
+    };
+    
+    const agent = await service.createAgent(agentConfig);
+    console.log(`Created test agent: ${agent.id}`);
+    testAgents.push(agent);
+      
+      // Test conversation history functionality
+      console.log("Testing conversation history setting...");
+      
+      const testHistory = [
+        { role: "user", content: "What is 2+2?" },
+        { role: "assistant", content: "2+2 equals 4." },
+        { role: "user", content: "What about 3+3?" },
+        { role: "assistant", content: "3+3 equals 6." }
+      ];
+      
+      const setResult = await service.setAgentConversationHistory({
+        agentId: agent.id,
+        messages: testHistory
+      });
+      
+      console.log(`✅ Set conversation history: ${setResult.messageCount} messages`);
+      
+      // Verify the conversation was set
+      const conversation = await service.getAgentConversation({
+        agentId: agent.id
+      });
+      
+      console.log(`✅ Retrieved conversation: ${conversation.length} messages`);
+      
+      if (conversation.length === testHistory.length) {
+        console.log(`✅ Conversation history length correct`);
+      } else {
+        console.log(`⚠️ Conversation length mismatch: expected ${testHistory.length}, got ${conversation.length}`);
+      }
+      
+      // Test chat functionality
+      console.log("Testing agent chat...");
+      
+      try {
+        let responseText = '';
+        for await (const chunk of await service.chatWithAgent({
+          agentId: agent.id,
+          message: "Hello! Can you help me with math?"
+        })) {
+          if (chunk.type === 'text' && chunk.content) {
+            responseText = chunk.content;
+          } else if (chunk.type === 'text_chunk' && chunk.content) {
+            responseText += chunk.content;
+          }
+        }
+        
+        if (responseText) {
+          console.log(`✅ Agent responded: ${responseText.substring(0, 60)}...`);
+        } else {
+          console.log(`⚠️ Agent did not respond`);
+        }
+      } catch (error) {
+        console.error(`❌ Agent chat failed:`, error);
+      }
+      
+    } catch (error) {
+      console.error("Failed to test agent functionality:", error);
+    }
+  
+  // Cleanup - destroy test agents
+  if (testAgents.length > 0) {
+    console.log("Cleaning up - destroying test agents...");
+    for (const agent of testAgents) {
+      try {
+        await service.destroyAgent({
+          agentId: agent.id
+        });
+        console.log(`  Destroyed agent ${agent.id}`);
+      } catch (error) {
+        console.error(`  Failed to destroy agent ${agent.id}:`, error);
+      }
+    }
+  }
+  
   // Final verification
   console.log("Verifying all kernels were destroyed...");
   try {
@@ -249,6 +336,7 @@ arr.sum()
   // Summary
   console.log("\n========== STRESS TEST SUMMARY ==========");
   console.log(`Total kernels created: ${kernels.length}/${numKernels}`);
+  console.log(`Total agents created: ${testAgents.length}`);
   console.log(`Total executions attempted: ${numKernels * numExecutions}`);
   
   const successfulExecutions = results.filter(r => r.success).length;
@@ -259,6 +347,7 @@ arr.sum()
   return {
     server,
     kernels,
+    testAgents,
     results
   };
 }

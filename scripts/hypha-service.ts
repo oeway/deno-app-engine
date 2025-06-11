@@ -46,6 +46,7 @@ import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
 import { VectorDBManager, VectorDBEvents, type IVectorDBManagerOptions, type IDocument, type IQueryOptions, createOllamaEmbeddingProvider } from "../vectordb/mod.ts";
 import { AgentManager, AgentEvents, KernelType, type IAgentConfig } from "../agents/mod.ts";
+import type { ChatMessage } from "../agents/chatCompletion.ts";
 
 // Add type declaration for global variable
 declare global {
@@ -167,6 +168,22 @@ function ensureKernelId(id: string, namespace: string) {
         }
     }
     return namespace + ":" + id;
+}
+
+function ensureAgentAccess(agentId: string, namespace: string): string {
+  // If the agent ID is namespaced and matches the expected namespace, allow access
+  if (agentId.includes(':')) {
+    const [agentNamespace] = agentId.split(':');
+    if (agentNamespace === namespace) {
+      return agentId;
+    } else {
+      throw new Error(`Access denied: Agent ${agentId} is not in workspace ${namespace}`);
+    }
+  }
+  
+  // For non-namespaced agents (legacy), try to access directly but warn
+  console.warn(`Accessing non-namespaced agent ${agentId} from workspace ${namespace}. This is deprecated.`);
+  return agentId;
 }
 
 // Configure kernel manager options from environment variables
@@ -1387,7 +1404,7 @@ async function startHyphaService(options: {
     listAgents(context: {user: any, ws: string}) {
       console.log(`Listing agents for workspace: ${context.ws}`);
       try {
-        const agents = agentManager.listAgents();
+        const agents = agentManager.listAgents(context.ws);
         return agents.map(agent => ({
           id: agent.id,
           name: agent.name,
@@ -1395,7 +1412,8 @@ async function startHyphaService(options: {
           kernelType: agent.kernel_type,
           hasKernel: agent.hasKernel,
           created: agent.created.toISOString(),
-          conversationLength: agent.conversationLength
+          conversationLength: agent.conversationLength,
+          namespace: agent.namespace
         }));
       } catch (error) {
         console.error("Error listing agents:", error);
@@ -1451,17 +1469,34 @@ async function startHyphaService(options: {
           kernelEnvirons: options.kernelEnvirons,
           maxSteps: options.maxSteps,
           ModelSettings: options.ModelSettings,
-          autoAttachKernel: options.autoAttachKernel
+          autoAttachKernel: options.autoAttachKernel,
+          namespace: context.ws
         };
         
         console.log(`🤖 Creating agent with config:`, {
           id: config.id,
           name: config.name,
           kernelType: config.kernelType,
-          autoAttachKernel: config.autoAttachKernel
+          autoAttachKernel: config.autoAttachKernel,
+          namespace: config.namespace
         });
         
-        const agentId = await agentManager.createAgent(config);
+        let agentId: string;
+        try {
+          agentId = await agentManager.createAgent(config);
+        } catch (error) {
+          // If we hit the namespace limit, try cleaning up old agents
+          if (error instanceof Error && error.message.includes('Maximum number of agents per namespace')) {
+            console.log(`🧹 Namespace limit reached for ${context.ws}, cleaning up old agents...`);
+            const cleanedUp = await agentManager.cleanupOldAgentsInNamespace(context.ws, 5);
+            console.log(`🧹 Cleaned up ${cleanedUp} old agents in namespace ${context.ws}`);
+            
+            // Retry creating the agent
+            agentId = await agentManager.createAgent(config);
+          } else {
+            throw error;
+          }
+        }
         const agent = agentManager.getAgent(agentId);
         
         // If auto-attach kernel is requested and we have a kernelType, attach it
@@ -1487,6 +1522,12 @@ async function startHyphaService(options: {
           startupScript: updatedAgent?.startupScript,
           kernelType: updatedAgent?.kernelType,
           hasKernel: !!updatedAgent?.kernel,
+          hasStartupError: !!updatedAgent?.getStartupError(),
+          startupError: updatedAgent?.getStartupError() ? {
+            message: updatedAgent.getStartupError()!.message,
+            fullError: updatedAgent.getStartupError()!.fullError,
+            stackTrace: updatedAgent.getStartupError()!.stackTrace
+          } : undefined,
           created: updatedAgent?.created.toISOString(),
           maxSteps: updatedAgent?.maxSteps
         };
@@ -1499,11 +1540,12 @@ async function startHyphaService(options: {
     getAgentInfo({agentId}: {agentId: string}, context: {user: any, ws: string}) {
       console.log(`Getting agent info: ${agentId} for workspace: ${context.ws}`);
       try {
-                 const agent = agentManager.getAgent(agentId);
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        const agent = agentManager.getAgent(validAgentId);
          
-         if (!agent) {
-           throw new Error("Agent not found");
-         }
+        if (!agent) {
+          throw new Error("Agent not found");
+        }
          
          return {
            id: agent.id,
@@ -1513,6 +1555,12 @@ async function startHyphaService(options: {
            startupScript: agent.startupScript,
            kernelType: agent.kernelType,
            hasKernel: !!agent.kernel,
+           hasStartupError: !!agent.getStartupError(),
+           startupError: agent.getStartupError() ? {
+             message: agent.getStartupError()!.message,
+             fullError: agent.getStartupError()!.fullError,
+             stackTrace: agent.getStartupError()!.stackTrace
+           } : undefined,
            maxSteps: agent.maxSteps,
            created: agent.created.toISOString(),
            conversationLength: agent.conversationHistory.length,
@@ -1537,13 +1585,15 @@ async function startHyphaService(options: {
       try {
         console.log(`Updating agent: ${agentId} for workspace: ${context.ws}`);
         
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        
         // Convert kernelType string to enum value if provided
         let kernelTypeEnum: KernelType | undefined;
         if (kernelType) {
           kernelTypeEnum = KernelType[kernelType as keyof typeof KernelType];
         }
         
-        await agentManager.updateAgent(agentId, {
+        await agentManager.updateAgent(validAgentId, {
           name,
           description,
           instructions,
@@ -1553,7 +1603,7 @@ async function startHyphaService(options: {
           ModelSettings
         });
         
-        const agent = agentManager.getAgent(agentId);
+        const agent = agentManager.getAgent(validAgentId);
         return {
           success: true,
           message: "Agent updated successfully",
@@ -1564,7 +1614,13 @@ async function startHyphaService(options: {
             instructions: agent?.instructions,
             startupScript: agent?.startupScript,
             kernelType: agent?.kernelType,
-            hasKernel: !!agent?.kernel
+            hasKernel: !!agent?.kernel,
+            hasStartupError: !!agent?.getStartupError(),
+            startupError: agent?.getStartupError() ? {
+              message: agent.getStartupError()!.message,
+              fullError: agent.getStartupError()!.fullError,
+              stackTrace: agent.getStartupError()!.stackTrace
+            } : undefined
           }
         };
       } catch (error) {
@@ -1577,7 +1633,8 @@ async function startHyphaService(options: {
       try {
         console.log(`Destroying agent: ${agentId} for workspace: ${context.ws}`);
         
-        await agentManager.destroyAgent(agentId);
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        await agentManager.destroyAgent(validAgentId);
         
         return {
           success: true,
@@ -1597,7 +1654,8 @@ async function startHyphaService(options: {
           throw new Error("Message is required");
         }
         
-        const agent = agentManager.getAgent(agentId);
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        const agent = agentManager.getAgent(validAgentId);
         if (!agent) {
           throw new Error("Agent not found");
         }
@@ -1650,7 +1708,8 @@ async function startHyphaService(options: {
     getAgentConversation({agentId}: {agentId: string}, context: {user: any, ws: string}) {
       console.log(`Getting conversation for agent: ${agentId} for workspace: ${context.ws}`);
       try {
-        const agent = agentManager.getAgent(agentId);
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        const agent = agentManager.getAgent(validAgentId);
         
         if (!agent) {
           throw new Error("Agent not found");
@@ -1670,7 +1729,8 @@ async function startHyphaService(options: {
       try {
         console.log(`Clearing conversation for agent: ${agentId} for workspace: ${context.ws}`);
         
-        await agentManager.clearConversation(agentId);
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        await agentManager.clearConversation(validAgentId);
         
         return {
           success: true,
@@ -1682,15 +1742,38 @@ async function startHyphaService(options: {
       }
     },
 
+    async setAgentConversationHistory({agentId, messages}: {agentId: string, messages: ChatMessage[]}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Setting conversation history for agent: ${agentId} for workspace: ${context.ws}`);
+        
+        if (!messages || !Array.isArray(messages)) {
+          throw new Error("Messages must be an array");
+        }
+        
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        await agentManager.setConversationHistory(validAgentId, messages);
+        
+        return {
+          success: true,
+          message: `Conversation history set with ${messages.length} messages`,
+          messageCount: messages.length
+        };
+      } catch (error) {
+        console.error("Error setting agent conversation history:", error);
+        throw error;
+      }
+    },
+
     async attachKernelToAgent({agentId, kernelType}: {agentId: string, kernelType?: string}, context: {user: any, ws: string}) {
       try {
         console.log(`Attaching kernel to agent: ${agentId} for workspace: ${context.ws}`);
         
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
         const kernelTypeEnum = kernelType ? KernelType[kernelType as keyof typeof KernelType] : KernelType.PYTHON;
         
-        await agentManager.attachKernelToAgent(agentId, kernelTypeEnum);
+        await agentManager.attachKernelToAgent(validAgentId, kernelTypeEnum);
         
-        const agent = agentManager.getAgent(agentId);
+        const agent = agentManager.getAgent(validAgentId);
         return {
           success: true,
           message: "Kernel attached successfully",
@@ -1707,7 +1790,8 @@ async function startHyphaService(options: {
       try {
         console.log(`Detaching kernel from agent: ${agentId} for workspace: ${context.ws}`);
         
-        await agentManager.detachKernelFromAgent(agentId);
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        await agentManager.detachKernelFromAgent(validAgentId);
         
         return {
           success: true,
@@ -1772,6 +1856,60 @@ async function startHyphaService(options: {
       } catch (error) {
         console.error("Error generating random documents:", error);
         throw error;
+      }
+    },
+
+    async *chatWithAgentStateless({agentId, messages}: {agentId: string, messages: ChatMessage[]}, context: {user: any, ws: string}) {
+      try {
+        console.log(`Starting stateless chat with agent: ${agentId} for workspace: ${context.ws}`);
+        
+        if (!messages || messages.length === 0) {
+          throw new Error("Messages array is required and cannot be empty");
+        }
+        
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        const agent = agentManager.getAgent(validAgentId);
+        if (!agent) {
+          throw new Error("Agent not found");
+        }
+        
+        console.log(`📤 [Stateless] Processing ${messages.length} messages without modifying agent history`);
+        
+        try {
+          let hasYieldedResponse = false;
+          
+          // Start stateless chat completion stream
+          for await (const chunk of agent.statelessChatCompletion(messages)) {
+            hasYieldedResponse = true;
+            yield chunk;
+            
+            // If there's an error, break the stream
+            if (chunk.type === 'error') {
+              break;
+            }
+          }
+          
+          // If no response was yielded, it means the agent completed without any output
+          if (!hasYieldedResponse) {
+            yield {
+              type: "error",
+              error: "Agent completed without generating any response"
+            };
+          }
+          
+        } catch (error) {
+          console.error(`Error in agent stateless chat completion:`, error);
+          yield {
+            type: "error",
+            error: error instanceof Error ? error.message : String(error)
+          };
+        }
+      } catch (error) {
+        console.error(`Error in chatWithAgentStateless:`, error);
+        yield {
+          type: "error", 
+          error: error instanceof Error ? error.message : String(error)
+        };
       }
     }
   });

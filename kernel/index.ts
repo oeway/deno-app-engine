@@ -318,7 +318,8 @@ await micropip.install(ipykernel_url)
       'pyodide_kernel',
       'jedi',
       'ipython',
-      'nbformat'
+      'nbformat',
+      'hypha-rpc',
     ];
 
     // First, load packages that are available in Pyodide distribution

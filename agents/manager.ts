@@ -44,6 +44,7 @@ export interface IModelRegistryConfig {
 // Interface for agent manager options
 export interface IAgentManagerOptions {
   maxAgents?: number;
+  maxAgentsPerNamespace?: number; // Maximum agents per namespace/workspace
   defaultModelSettings?: ModelSettings;
   defaultModelId?: string; // Name of default model from registry
   defaultMaxSteps?: number;
@@ -70,6 +71,7 @@ interface IConversationData {
 export class AgentManager extends EventEmitter {
   private agents: Map<string, IAgentInstance> = new Map();
   private maxAgents: number;
+  private maxAgentsPerNamespace: number;
   private defaultModelSettings: ModelSettings;
   private defaultModelId?: string;
   private defaultMaxSteps: number;
@@ -89,6 +91,7 @@ export class AgentManager extends EventEmitter {
     super.setMaxListeners(100);
     
     this.maxAgents = options.maxAgents || 50;
+    this.maxAgentsPerNamespace = options.maxAgentsPerNamespace || 10;
     this.defaultModelSettings = options.defaultModelSettings || { ...DefaultModelSettings };
     this.defaultModelId = options.defaultModelId;
     this.defaultMaxSteps = options.defaultMaxSteps || 10;
@@ -206,6 +209,17 @@ export class AgentManager extends EventEmitter {
     return this.maxStepsCap;
   }
 
+  // Helper method to count agents in a specific namespace
+  private getAgentCountInNamespace(namespace: string): number {
+    let count = 0;
+    for (const id of this.agents.keys()) {
+      if (id.startsWith(`${namespace}:`)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   // Create a new agent
   async createAgent(config: IAgentConfig): Promise<string> {
     // Validate input
@@ -213,12 +227,29 @@ export class AgentManager extends EventEmitter {
       throw new Error("Agent ID and name are required");
     }
 
-    if (this.agents.has(config.id)) {
-      throw new Error(`Agent with ID "${config.id}" already exists`);
+    // make sure the config.id does not contain colons because it will be used as a namespace prefix
+    if (config.id.includes(':')) {
+      throw new Error('Agent ID cannot contain colons');
+    }
+
+    const baseId = config.id;
+    // Apply namespace prefix if provided
+    const id = config.namespace ? `${config.namespace}:${baseId}` : baseId;
+
+    if (this.agents.has(id)) {
+      throw new Error(`Agent with ID "${id}" already exists`);
     }
 
     if (this.agents.size >= this.maxAgents) {
       throw new Error(`Maximum number of agents (${this.maxAgents}) reached`);
+    }
+
+    // Check per-namespace limit if namespace is provided
+    if (config.namespace) {
+      const namespaceAgentCount = this.getAgentCountInNamespace(config.namespace);
+      if (namespaceAgentCount >= this.maxAgentsPerNamespace) {
+        throw new Error(`Maximum number of agents per namespace (${this.maxAgentsPerNamespace}) reached for namespace "${config.namespace}"`);
+      }
     }
 
     // Resolve model settings
@@ -227,40 +258,41 @@ export class AgentManager extends EventEmitter {
     // Create agent with defaults
     const agentConfig: IAgentConfig = {
       ...config,
+      id: baseId, // Use base ID for agent config
       ModelSettings: resolvedModelSettings,
       maxSteps: config.maxSteps || this.defaultMaxSteps,
       kernelType: config.kernelType || this.defaultKernelType
     };
 
     const agent = new Agent(agentConfig, this);
-    this.agents.set(config.id, agent);
+    this.agents.set(id, agent);
 
     this.emit(AgentEvents.AGENT_CREATED, {
-      agentId: config.id,
+      agentId: id,
       config: agentConfig
     });
 
-    console.log(`✅ Created agent: ${config.id} (${config.name}) with kernelType: ${config.kernelType}`);
+    console.log(`✅ Created agent: ${id} (${config.name}) with kernelType: ${config.kernelType}`);
 
     // Auto-attach kernel if requested and conditions are met
     if (config.autoAttachKernel && config.kernelType && this.kernelManager_) {
       try {
-        console.log(`🔧 Auto-attaching ${config.kernelType} kernel to agent: ${config.id}`);
-        await this.attachKernelToAgent(config.id, config.kernelType);
-        console.log(`✅ Successfully auto-attached kernel to agent: ${config.id}`);
+        console.log(`🔧 Auto-attaching ${config.kernelType} kernel to agent: ${id}`);
+        await this.attachKernelToAgent(id, config.kernelType);
+        console.log(`✅ Successfully auto-attached kernel to agent: ${id}`);
       } catch (error) {
-        console.error(`❌ Failed to auto-attach kernel to agent ${config.id}:`, error);
+        console.error(`❌ Failed to auto-attach kernel to agent ${id}:`, error);
         // Emit an error event but don't fail agent creation
         this.emit(AgentEvents.AGENT_ERROR, {
-          agentId: config.id,
+          agentId: id,
           error: new Error(`Failed to auto-attach kernel: ${error instanceof Error ? error.message : String(error)}`)
         });
       }
     } else if (config.autoAttachKernel && !this.kernelManager_) {
-      console.warn(`⚠️ Auto-attach kernel requested for agent ${config.id} but no kernel manager is set`);
+      console.warn(`⚠️ Auto-attach kernel requested for agent ${id} but no kernel manager is set`);
     }
 
-    return config.id;
+    return id;
   }
 
   // Get an agent by ID
@@ -274,28 +306,43 @@ export class AgentManager extends EventEmitter {
   }
 
   // List all agents with their info
-  listAgents(): Array<{
+  listAgents(namespace?: string): Array<{
     id: string;
     name: string;
     description?: string;
     kernel_type?: KernelType;
     hasKernel: boolean;
     hasStartupScript: boolean;
+    hasStartupError: boolean;
     created: Date;
     lastUsed?: Date;
     conversationLength: number;
+    namespace?: string;
   }> {
-    return Array.from(this.agents.values()).map(agent => ({
-      id: agent.id,
-      name: agent.name,
-      description: agent.description,
-      kernel_type: agent.kernelType,
-      hasKernel: !!agent.kernel,
-      hasStartupScript: !!agent.startupScript,
-      created: agent.created,
-      lastUsed: agent.lastUsed,
-      conversationLength: agent.conversationHistory.length
-    }));
+    return Array.from(this.agents.entries())
+      .filter(([id]) => {
+        if (!namespace) return true;
+        return id.startsWith(`${namespace}:`);
+      })
+      .map(([id, agent]) => {
+        // Extract namespace from id if present
+        const namespaceMatch = id.match(/^([^:]+):/);
+        const extractedNamespace = namespaceMatch ? namespaceMatch[1] : undefined;
+        
+        return {
+          id,
+          name: agent.name,
+          description: agent.description,
+          kernel_type: agent.kernelType,
+          hasKernel: !!agent.kernel,
+          hasStartupScript: !!agent.startupScript,
+          hasStartupError: !!agent.getStartupError(),
+          created: agent.created,
+          lastUsed: agent.lastUsed,
+          conversationLength: agent.conversationHistory.length,
+          namespace: extractedNamespace
+        };
+      });
   }
 
   // Update an agent's configuration
@@ -320,14 +367,22 @@ export class AgentManager extends EventEmitter {
     if (!agent) {
       throw new Error(`Agent with ID "${id}" not found`);
     }
-
+    // destroy the agent's kernel if it has one
+    const kernelId = agent.kernel?.id;
     agent.destroy();
+    if (kernelId) {
+      await this.kernelManager.destroyKernel(kernelId);
+    }
     this.agents.delete(id);
   }
 
   // Destroy all agents
-  async destroyAll(): Promise<void> {
-    const agentIds = this.getAgentIds();
+  async destroyAll(namespace?: string): Promise<void> {
+    const agentIds = Array.from(this.agents.keys())
+      .filter(id => {
+        if (!namespace) return true;
+        return id.startsWith(`${namespace}:`);
+      });
     await Promise.all(agentIds.map(id => this.destroyAgent(id)));
   }
 
@@ -464,6 +519,16 @@ export class AgentManager extends EventEmitter {
     agent.conversationHistory = [];
   }
 
+  // Set agent's conversation history
+  async setConversationHistory(agentId: string, messages: ChatMessage[]): Promise<void> {
+    const agent = this.agents.get(agentId);
+    if (!agent) {
+      throw new Error(`Agent with ID "${agentId}" not found`);
+    }
+
+    agent.setConversationHistory(messages);
+  }
+
   // Get agent statistics
   getStats(): {
     totalAgents: number;
@@ -529,6 +594,38 @@ export class AgentManager extends EventEmitter {
   // Set auto-save conversations
   setAutoSaveConversations(enabled: boolean): void {
     this.autoSaveConversations = enabled;
+  }
+
+  // Clean up old agents in a namespace to make room for new ones
+  async cleanupOldAgentsInNamespace(namespace: string, keepCount: number = 5): Promise<number> {
+    const namespaceAgents = Array.from(this.agents.entries())
+      .filter(([id]) => id.startsWith(`${namespace}:`))
+      .map(([id, agent]) => ({ id, agent }));
+
+    if (namespaceAgents.length <= keepCount) {
+      return 0; // No cleanup needed
+    }
+
+    // Sort by last used time (oldest first), then by creation time
+    namespaceAgents.sort((a, b) => {
+      const aTime = a.agent.lastUsed?.getTime() || a.agent.created.getTime();
+      const bTime = b.agent.lastUsed?.getTime() || b.agent.created.getTime();
+      return aTime - bTime;
+    });
+
+    // Remove oldest agents to get down to keepCount
+    const agentsToRemove = namespaceAgents.slice(0, namespaceAgents.length - keepCount);
+    
+    for (const { id } of agentsToRemove) {
+      try {
+        await this.destroyAgent(id);
+        console.log(`🧹 Cleaned up old agent: ${id}`);
+      } catch (error) {
+        console.error(`❌ Failed to cleanup agent ${id}:`, error);
+      }
+    }
+
+    return agentsToRemove.length;
   }
 
   // ===== MODEL REGISTRY METHODS =====

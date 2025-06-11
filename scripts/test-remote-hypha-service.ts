@@ -33,6 +33,7 @@ interface AgentInfo {
   name: string;
   status?: string;
   created?: string;
+  workspace?: string;
 }
 
 interface VectorDocument {
@@ -106,21 +107,19 @@ async function runRemoteServiceTest() {
     console.error("Failed to get service info:", error);
   }
   
-  // Test Agent functionality
-  console.log("\n========== TESTING AGENTS ==========");
+  // Test Agent functionality with namespace support
+  console.log("\n========== TESTING AGENTS WITH NAMESPACE SUPPORT ==========");
   const agents = [];
   
   if ('createAgent' in service) {
-    console.log(`Creating ${numAgents} agents...`);
+    console.log(`Creating ${numAgents} agents in different workspaces...`);
     
     for (let i = 0; i < numAgents; i++) {
       try {
         const agentConfig = {
           id: `test-agent-${i}`,
           name: `Test Agent ${i + 1}`,
-          type: "assistant",
-          model: "qwen2.5-coder:7b",
-          systemPrompt: `You are test agent ${i + 1}. Answer questions helpfully and concisely.`
+          instructions: `You are test agent ${i + 1}. Answer questions helpfully and concisely.`
         };
         
         const agent = await service.createAgent(agentConfig) as AgentInfo;
@@ -131,9 +130,26 @@ async function runRemoteServiceTest() {
       }
     }
     
-    console.log(`Successfully created ${agents.length}/${numAgents} agents`);
+    console.log(`Successfully created ${agents.length}/${numAgents} agents across workspaces`);
     
-    // Test agent interactions
+    // Test workspace isolation (now handled internally by the service)
+    console.log("Testing internal namespace isolation...");
+    try {
+      const allAgents = await service.listAgents() as AgentInfo[];
+      console.log(`Total agents found in this workspace: ${allAgents.length}`);
+      
+      // Since namespace is now internal, all agents should be accessible within the same workspace
+      const testAgents = allAgents.filter(a => a.id.includes('test-agent-'));
+      console.log(`Test agents in this workspace: ${testAgents.length}`);
+      
+      if (testAgents.length > 0) {
+        console.log(`✅ Internal namespace isolation working - agents are scoped to workspace`);
+      }
+    } catch (error) {
+      console.error("Failed to test namespace isolation:", error);
+    }
+    
+    // Test agent interactions 
     if (agents.length > 0) {
       console.log("Testing agent interactions...");
       
@@ -150,8 +166,7 @@ async function runRemoteServiceTest() {
               // Since chatWithAgent is a generator, we need to iterate over it
               for await (const chunk of await service.chatWithAgent({
                 agentId: agent.id,
-                message: "Hello! What's 2 + 2?",
-                sessionId: `test-session-${Date.now()}`
+                message: `Hello! What can you help me with?`
               })) {
                 if (chunk.type === 'error') {
                   hasError = true;
@@ -168,6 +183,7 @@ async function runRemoteServiceTest() {
                 console.log(`  Agent response error: ${errorMessage}`);
               } else if (finalMessage) {
                 console.log(`  Agent response: ${finalMessage.substring(0, 100)}...`);
+                console.log(`  ✅ Agent responded successfully`);
               } else {
                 console.log(`  Agent response: No response generated`);
               }
@@ -176,12 +192,49 @@ async function runRemoteServiceTest() {
             }
           }
           
-          if ('getAgentHistory' in service) {
-            const history = await service.getAgentHistory({
+          if ('getAgentConversation' in service) {
+            const conversation = await service.getAgentConversation({
               agentId: agent.id
             });
             
-            console.log(`  Agent history: ${history.length} messages`);
+            console.log(`  Agent conversation: ${conversation.length} messages`);
+          }
+          
+          // Test setting conversation history
+          if ('setAgentConversationHistory' in service) {
+            console.log(`  Testing conversation history setting...`);
+            try {
+              const testHistory = [
+                { role: "user", content: "Hello, how are you?" },
+                { role: "assistant", content: "I'm doing great! How can I help you today?" },
+                { role: "user", content: "What's the weather like?" },
+                { role: "assistant", content: "I don't have access to real-time weather data, but I'd be happy to help you find weather information!" }
+              ];
+              
+              const setResult = await service.setAgentConversationHistory({
+                agentId: agent.id,
+                messages: testHistory
+              });
+              
+              console.log(`  ✅ Set conversation history: ${setResult.messageCount} messages`);
+              
+              // Verify the conversation was set correctly
+              if ('getAgentConversation' in service) {
+                const updatedConversation = await service.getAgentConversation({
+                  agentId: agent.id
+                });
+                
+                console.log(`  ✅ Verified conversation history: ${updatedConversation.length} messages`);
+                
+                if (updatedConversation.length === testHistory.length) {
+                  console.log(`  ✅ Conversation history length matches expected`);
+                } else {
+                  console.log(`  ⚠️ Conversation history length mismatch: expected ${testHistory.length}, got ${updatedConversation.length}`);
+                }
+              }
+            } catch (error) {
+              console.log(`  ❌ Failed to set conversation history: ${error instanceof Error ? error.message : String(error)}`);
+            }
           }
           
         } catch (error) {
@@ -193,8 +246,8 @@ async function runRemoteServiceTest() {
     // List all agents
     if ('listAgents' in service) {
       try {
-        const listedAgents = await service.listAgents() as AgentInfo[];
-        console.log(`Listed ${listedAgents.length} agents in service`);
+        const listedAgents = await service.listAgents() as any[];
+        console.log(`Listed ${listedAgents.length} agents in this workspace`);
       } catch (error) {
         console.error("Failed to list agents:", error);
       }

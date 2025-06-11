@@ -39,6 +39,8 @@ cd deno-app-engine
 
 - **Intelligent Agent System**
   - Advanced agent management with configurable environment variables
+  - Namespace support for workspace isolation and multi-tenancy
+  - Per-namespace resource limits and automatic cleanup (configurable, default: 10 agents per namespace)
   - Automatic kernel attachment and lifecycle management
   - Conversation history and memory management
   - Event-driven architecture with comprehensive monitoring
@@ -232,6 +234,158 @@ The kernel type format is `mode-language` where:
 - `worker-typescript`: TypeScript kernel in Web Worker
 
 ## Usage
+
+### Agent Namespace Support
+
+The agent system now supports namespaces to provide workspace isolation and prevent agent conflicts between different users or projects. Namespaces ensure that agents are properly isolated and resources are managed per workspace.
+
+#### Key Features
+
+- **Workspace Isolation**: Agents in different namespaces cannot access each other
+- **Per-Namespace Limits**: Maximum number of agents per namespace (default: 10)
+- **Automatic Cleanup**: Old agents are automatically removed when namespace limits are reached
+- **Access Control**: Ensures agents can only be accessed within their designated namespace
+- **Resource Management**: Prevents resource exhaustion across workspaces
+
+#### Creating Agents with Namespaces
+
+```typescript
+// Import agent modules
+import { AgentManager, KernelType } from "./agents/mod.ts";
+
+// Create agent manager with namespace support
+const agentManager = new AgentManager({
+  maxAgentsPerNamespace: 10, // Maximum agents per namespace
+  defaultModelSettings: {
+    model: "qwen2.5-coder:7b"
+  }
+});
+
+// Create an agent in a specific namespace
+const agentId = await agentManager.createAgent({
+  id: "data-analyst",
+  name: "Data Analysis Agent",
+  instructions: "You are a data analysis assistant.",
+  namespace: "workspace-123", // Specify namespace
+  kernelType: KernelType.PYTHON
+});
+
+// The actual agent ID will be prefixed with namespace: "workspace-123:data-analyst"
+console.log("Created agent:", agentId); // "workspace-123:data-analyst"
+```
+
+#### Listing Agents by Namespace
+
+```typescript
+// List all agents in a specific namespace
+const workspaceAgents = agentManager.listAgents("workspace-123");
+console.log("Agents in workspace-123:", workspaceAgents);
+
+// List all agents (all namespaces)
+const allAgents = agentManager.listAgents();
+console.log("All agents:", allAgents);
+
+// Each agent object includes namespace information
+workspaceAgents.forEach(agent => {
+  console.log(`Agent ${agent.id} in namespace ${agent.namespace}`);
+});
+```
+
+#### Automatic Cleanup and Limits
+
+```typescript
+// When namespace limit is reached, oldest agents are automatically removed
+for (let i = 0; i < 12; i++) {
+  try {
+    const agentId = await agentManager.createAgent({
+      id: `agent-${i}`,
+      name: `Agent ${i}`,
+      namespace: "workspace-123",
+      instructions: "Test agent"
+    });
+    console.log(`Created agent ${i}: ${agentId}`);
+  } catch (error) {
+    console.log(`Failed to create agent ${i}: ${error.message}`);
+  }
+}
+
+// Manual cleanup of old agents in a namespace
+const cleanedUp = await agentManager.cleanupOldAgentsInNamespace("workspace-123", 5);
+console.log(`Cleaned up ${cleanedUp} old agents`);
+```
+
+#### HTTP API with Namespace Support
+
+The HTTP server now supports namespace parameters via query parameters or headers:
+
+```bash
+# Create agent in namespace via query parameter
+curl -X POST "http://localhost:8000/api/agents?namespace=workspace-123" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "my-agent",
+    "name": "My Agent",
+    "instructions": "You are a helpful assistant."
+  }'
+
+# Or use X-Namespace header
+curl -X POST "http://localhost:8000/api/agents" \
+  -H "Content-Type: application/json" \
+  -H "X-Namespace: workspace-123" \
+  -d '{
+    "id": "my-agent",
+    "name": "My Agent",
+    "instructions": "You are a helpful assistant."
+  }'
+
+# List agents in namespace
+curl "http://localhost:8000/api/agents?namespace=workspace-123"
+
+# Access specific agent (namespace validation)
+curl "http://localhost:8000/api/agents/workspace-123:my-agent?namespace=workspace-123"
+```
+
+#### Hypha Service Integration
+
+The Hypha service automatically uses the workspace context (`context.ws`) as the namespace:
+
+```typescript
+// In Hypha service, namespace is automatically set to context.ws
+// No manual namespace specification needed
+
+// Create agent - namespace is set automatically
+const agent = await hyphaService.createAgent({
+  id: "analysis-agent",
+  name: "Analysis Agent",
+  type: "assistant",
+  model: "qwen2.5-coder:7b"
+});
+// Agent ID will be: "{context.ws}:analysis-agent"
+
+// List agents - automatically filtered by workspace
+const agents = await hyphaService.listAgents();
+// Only returns agents in current workspace
+```
+
+#### Migration from Non-Namespaced Agents
+
+Existing agents without namespaces continue to work but receive deprecation warnings. To migrate:
+
+```typescript
+// Old way (still works but deprecated)
+const oldAgent = await agentManager.createAgent({
+  id: "legacy-agent",
+  name: "Legacy Agent"
+  // No namespace specified
+});
+
+// New way (recommended)
+const newAgent = await agentManager.createAgent({
+  id: "modern-agent", 
+  name: "Modern Agent",
+  namespace: "my-workspace" // Explicit namespace
+});
+```
 
 ### Agent Management with Environment Variables
 
@@ -901,4 +1055,141 @@ deno run --allow-net --allow-read --allow-write --allow-env hypha-service.ts
 ```bash
 docker build --platform linux/amd64 -t oeway/deno-app-engine:0.1.0 . && docker push oeway/deno-app-engine:0.1.0
 ```
+
+#### Startup Script Error Handling
+
+The agent system includes robust error handling for startup scripts to ensure reliable operation:
+
+**Error Capture & Prevention**
+- If a startup script fails during execution, the error is captured with full stack trace
+- Agents with failed startup scripts cannot proceed with normal chat operations
+- Any attempt to chat with a failed agent immediately returns the startup error
+- This prevents inconsistent agent states and ensures fast failure detection
+
+**Error Information**
+- `hasStartupError`: Boolean flag indicating if startup script failed
+- `startupError`: Detailed error object containing:
+  - `message`: Brief error description
+  - `fullError`: Complete error details including script content
+  - `stackTrace`: Full Python stack trace for debugging
+
+**Example Error Response**
+```json
+{
+  "hasStartupError": true,
+  "startupError": {
+    "message": "Startup script failed: NameError: name 'undefined_function' is not defined",
+    "fullError": "Startup script execution failed for agent: my-agent\n\nError: NameError: name 'undefined_function' is not defined\n\nError Output:\nNameError: name 'undefined_function' is not defined\n...",
+    "stackTrace": "Traceback (most recent call last):\n  File \"<stdin>\", line 2, in <module>\nNameError: name 'undefined_function' is not defined"
+  }
+}
+```
+
+**Best Practices**
+- Test startup scripts thoroughly before deploying agents
+- Use try-catch blocks in startup scripts for graceful error handling
+- Keep startup scripts simple and focused on essential initialization
+- Monitor agent creation logs for startup script failures
+
+#### Stateless Chat Completion
+
+For functional programming approaches or cases where you need to perform chat without leaving any server-side traces, the agent system supports stateless chat completion:
+
+**Key Features**
+- No modification of conversation history or memory
+- Acts like a pure function: input messages → response
+- Useful for one-off queries, testing, or privacy-sensitive operations
+- Still benefits from agent's system prompt, kernel capabilities, and error handling
+
+**Usage Example**
+```typescript
+// Regular chat (modifies history)
+const messages = [{ role: "user", content: "Hello!" }];
+for await (const chunk of agent.chatCompletion(messages)) {
+  // Agent history is updated
+}
+
+// Stateless chat (no history modification)
+const testMessages = [
+  { role: "user", content: "What is 2 + 2?" },
+  { role: "assistant", content: "2 + 2 = 4" },
+  { role: "user", content: "What is 3 + 3?" }
+];
+
+for await (const chunk of agent.statelessChatCompletion(testMessages)) {
+  // Agent history remains unchanged
+  // Memory is not modified
+}
+```
+
+**HTTP API Endpoint**
+```bash
+# Stateless chat (no history modification)
+curl -X POST http://localhost:8000/api/agents/{agentId}/chat-stateless \\
+  -H "Content-Type: application/json" \\
+  -H "X-Namespace: your-workspace" \\
+  -d '{
+    "messages": [
+      {"role": "user", "content": "What is 2 + 2?"},
+      {"role": "assistant", "content": "2 + 2 = 4"},
+      {"role": "user", "content": "What is 3 + 3?"}
+    ]
+  }'
+```
+
+**Hypha Service Method**
+```javascript
+// Stateless chat via Hypha service
+await service.chatWithAgentStateless({
+  agentId: "my-agent",
+  messages: [
+    { role: "user", content: "Hello!" },
+    { role: "assistant", content: "Hi there!" },
+    { role: "user", content: "How are you?" }
+  ]
+});
+```
+
+**When to Use Stateless Chat**
+- Testing and development scenarios
+- One-off queries that shouldn't affect conversation flow
+- Privacy-sensitive operations
+- Functional programming patterns
+- Batch processing where conversation state should be preserved
+
+#### Conversation History Management
+
+The agent system provides flexible conversation history management capabilities:
+
+**Setting Conversation History**
+- Set custom conversation history to initialize agents with prior context
+- Useful for continuing previous conversations or setting up specific scenarios
+- History can be set via agent manager, Hypha service, or HTTP API
+
+**Usage Examples**
+```typescript
+// Set conversation history via agent manager
+const history = [
+  { role: "user", content: "Hello, how are you?" },
+  { role: "assistant", content: "I'm doing great! How can I help you today?" }
+];
+
+await agentManager.setConversationHistory(agentId, history);
+
+// Set conversation history directly on agent instance
+const agent = agentManager.getAgent(agentId);
+agent.setConversationHistory(history);
+```
+
+**HTTP API Endpoints**
+- `POST /api/agents/{agentId}/set-conversation`: Set conversation history
+- `POST /api/agents/{agentId}/clear-conversation`: Clear conversation history
+- `GET /api/agents/{agentId}/conversation`: Get current conversation history
+
+**Hypha Service Methods**
+- `setAgentConversationHistory({agentId, messages})`: Set conversation history
+- `clearAgentConversation({agentId})`: Clear conversation
+- `getAgentConversation({agentId})`: Get conversation history
+
+#### Stateless Chat Completion
 
