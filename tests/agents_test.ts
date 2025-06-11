@@ -1218,12 +1218,33 @@ Deno.test("Agents Module - Namespace Agent Auto-save Fix", async () => {
         errorMessage.includes("ECONNREFUSED") ||
         errorMessage.includes("404")) {
       console.log("⚠️  External dependency not available, but no agent ID mismatch - test passes");
+      
+      // Still need to cleanup even on early return
+      try {
+        await agentManager.destroyAll();
+        await kernelManager.destroyAll();
+      } catch (cleanupError) {
+        console.warn("Cleanup warning:", cleanupError);
+      }
+      
+      await cleanupTestData();
       return;
     }
     
     throw error;
   }
 
+  // Proper cleanup to avoid resource leaks
+  try {
+    // Destroy all agents (this handles kernel cleanup)
+    await agentManager.destroyAll();
+    
+    // Shutdown kernel manager  
+    await kernelManager.destroyAll();
+  } catch (error) {
+    console.warn("Cleanup warning:", error);
+  }
+  
   await cleanupTestData();
 });
 
