@@ -181,9 +181,10 @@ function ensureAgentAccess(agentId: string, namespace: string): string {
     }
   }
   
-  // For non-namespaced agents (legacy), try to access directly but warn
-  console.warn(`Accessing non-namespaced agent ${agentId} from workspace ${namespace}. This is deprecated.`);
-  return agentId;
+  // For non-namespaced agents, construct the full namespaced ID
+  const fullAgentId = `${namespace}:${agentId}`;
+  console.log(`Converting non-namespaced agent ID ${agentId} to namespaced ID ${fullAgentId} for workspace ${namespace}`);
+  return fullAgentId;
 }
 
 // Configure kernel manager options from environment variables
@@ -1548,7 +1549,7 @@ async function startHyphaService(options: {
         }
          
          return {
-           id: agent.id,
+           id: validAgentId, // Return the full namespaced ID, not agent.id
            name: agent.name,
            description: agent.description,
            instructions: agent.instructions,
