@@ -51,7 +51,7 @@ spec:
             sizeLimit: "2Gi"
       containers:
         - name: deno-app-engine-container
-          image: ghcr.io/oeway/deno-app-engine:0.1.22
+          image: ghcr.io/oeway/deno-app-engine:0.1.23
           imagePullPolicy: Always
           command: ["deno"]
           args: ["run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "scripts/hypha-service.ts"]
