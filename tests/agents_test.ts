@@ -904,9 +904,17 @@ print("This should never be reached")
 Deno.test("Agents Module - Stateless Chat Completion", async () => {
   const testDir = "./test_agents_stateless_data";
   
+  // Check if Ollama is available first
+  const ollamaAvailable = await isOllamaAvailable();
+  if (!ollamaAvailable) {
+    console.log("⚠️  Ollama not available, skipping stateless chat completion test");
+    return;
+  }
+  
   const manager = new AgentManager({
     maxAgents: 5,
-    agentDataDirectory: testDir
+    agentDataDirectory: testDir,
+    defaultModelSettings: OLLAMA_CONFIG
   });
   
   try {
