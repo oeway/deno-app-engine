@@ -468,7 +468,9 @@ export class AgentManager extends EventEmitter {
       }
     };
 
-    const fileName = filename || `conversation_${agentId}_${Date.now()}.json`;
+    // Replace colons with underscores in filename to avoid filesystem issues with namespaced agent IDs
+    const safeAgentId = agentId.replace(/:/g, '_');
+    const fileName = filename || `conversation_${safeAgentId}_${Date.now()}.json`;
     const filePath = join(this.agentDataDirectory, fileName);
 
     await Deno.writeTextFile(filePath, JSON.stringify(saveData, null, 2));
@@ -480,8 +482,10 @@ export class AgentManager extends EventEmitter {
       // If no filename provided, try to find the most recent conversation file for this agent
       const files = [];
       try {
+        // Replace colons with underscores to match saved filenames
+        const safeAgentId = agentId.replace(/:/g, '_');
         for await (const entry of Deno.readDir(this.agentDataDirectory)) {
-          if (entry.isFile && entry.name.includes(`conversation_${agentId}_`)) {
+          if (entry.isFile && entry.name.includes(`conversation_${safeAgentId}_`)) {
             files.push(entry.name);
           }
         }
