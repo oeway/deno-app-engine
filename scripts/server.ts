@@ -1947,6 +1947,88 @@ export async function handleRequest(req: Request): Promise<Response> {
         }
       }
 
+      // Chat with agent (regular - modifies history)
+      if (path.startsWith("/api/agents/") && req.method === "POST" && path.endsWith("/chat")) {
+        const agentId = path.split("/")[3];
+        const namespace = getNamespaceFromRequest(req);
+        
+        try {
+          const validAgentId = validateAgentAccess(agentId, namespace);
+          const body = await req.json();
+          const { message } = body;
+          
+          if (!message || typeof message !== 'string') {
+            return jsonResponse({ error: "Message is required and must be a string" }, Status.BadRequest);
+          }
+          
+          const agent = agentManager.getAgent(validAgentId);
+          if (!agent) {
+            return jsonResponse({ error: "Agent not found" }, Status.NotFound);
+          }
+          
+          // Return streaming response for regular chat
+          const stream = new ReadableStream({
+            async start(controller) {
+              try {
+                const encoder = new TextEncoder();
+                
+                // Send initial headers
+                const headers = "data: " + JSON.stringify({ type: "start", message: "Starting chat..." }) + "\n\n";
+                controller.enqueue(encoder.encode(headers));
+                
+                let hasContent = false;
+                
+                for await (const chunk of agent.chatCompletion([{ role: 'user', content: message }])) {
+                  hasContent = true;
+                  const data = "data: " + JSON.stringify(chunk) + "\n\n";
+                  controller.enqueue(encoder.encode(data));
+                  
+                  if (chunk.type === 'error') {
+                    break;
+                  }
+                }
+                
+                if (!hasContent) {
+                  const errorData = "data: " + JSON.stringify({ 
+                    type: "error", 
+                    error: "Agent completed without generating any response" 
+                  }) + "\n\n";
+                  controller.enqueue(encoder.encode(errorData));
+                }
+                
+                // Send completion signal
+                const endData = "data: " + JSON.stringify({ type: "complete" }) + "\n\n";
+                controller.enqueue(encoder.encode(endData));
+              } catch (error) {
+                const encoder = new TextEncoder();
+                const errorData = "data: " + JSON.stringify({ 
+                  type: "error", 
+                  error: error instanceof Error ? error.message : String(error) 
+                }) + "\n\n";
+                controller.enqueue(encoder.encode(errorData));
+              } finally {
+                controller.close();
+              }
+            }
+          });
+          
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Namespace"
+            }
+          });
+        } catch (error) {
+          return jsonResponse({ 
+            error: error instanceof Error ? error.message : "Unknown error occurred" 
+          }, Status.InternalServerError);
+        }
+      }
+
       // Chat with agent (stateless - no history modification)
       if (path.startsWith("/api/agents/") && req.method === "POST" && path.endsWith("/chat-stateless")) {
         const agentId = path.split("/")[3];
@@ -2029,8 +2111,96 @@ export async function handleRequest(req: Request): Promise<Response> {
         }
       }
 
+      // Get agent conversation history
+      if (path.startsWith("/api/agents/") && req.method === "GET" && path.endsWith("/conversation")) {
+        const agentId = path.split("/")[3];
+        const namespace = getNamespaceFromRequest(req);
+        
+        try {
+          const validAgentId = validateAgentAccess(agentId, namespace);
+          const agent = agentManager.getAgent(validAgentId);
+          
+          if (!agent) {
+            return jsonResponse({ error: "Agent not found" }, Status.NotFound);
+          }
+          
+          return jsonResponse({
+            agentId: validAgentId,
+            conversation: agent.conversationHistory,
+            messages: agent.conversationHistory,
+            messageCount: agent.conversationHistory.length,
+            length: agent.conversationHistory.length
+          });
+        } catch (error) {
+          return jsonResponse({ 
+            error: error instanceof Error ? error.message : "Unknown error occurred" 
+          }, Status.InternalServerError);
+        }
+      }
+
+      // Attach kernel to agent
+      if (path.startsWith("/api/agents/") && req.method === "POST" && path.endsWith("/kernel")) {
+        const agentId = path.split("/")[3];
+        const namespace = getNamespaceFromRequest(req);
+        
+        try {
+          const validAgentId = validateAgentAccess(agentId, namespace);
+          const body = await req.json();
+          const { kernelType } = body;
+          
+          if (!kernelType || typeof kernelType !== 'string') {
+            return jsonResponse({ error: "kernelType is required and must be a string" }, Status.BadRequest);
+          }
+          
+          // Convert kernelType string to enum value
+          const kernelTypeKey = kernelType.toUpperCase() as keyof typeof KernelType;
+          if (!(kernelTypeKey in KernelType)) {
+            return jsonResponse({ error: `Invalid kernelType: ${kernelType}` }, Status.BadRequest);
+          }
+          
+          const kernelTypeEnum = KernelType[kernelTypeKey];
+          await agentManager.attachKernelToAgent(validAgentId, kernelTypeEnum);
+          
+          const agent = agentManager.getAgent(validAgentId);
+          return jsonResponse({
+            success: true,
+            message: "Kernel attached successfully",
+            agentId: validAgentId,
+            kernelType: kernelTypeEnum,
+            hasKernel: !!agent?.kernel,
+            kernelId: agent?.kernel?.id
+          });
+        } catch (error) {
+          return jsonResponse({ 
+            error: error instanceof Error ? error.message : "Unknown error occurred" 
+          }, Status.InternalServerError);
+        }
+      }
+
+      // Detach kernel from agent
+      if (path.startsWith("/api/agents/") && req.method === "DELETE" && path.endsWith("/kernel")) {
+        const agentId = path.split("/")[3];
+        const namespace = getNamespaceFromRequest(req);
+        
+        try {
+          const validAgentId = validateAgentAccess(agentId, namespace);
+          await agentManager.detachKernelFromAgent(validAgentId);
+          
+          return jsonResponse({
+            success: true,
+            message: "Kernel detached successfully",
+            agentId: validAgentId,
+            hasKernel: false
+          });
+        } catch (error) {
+          return jsonResponse({ 
+            error: error instanceof Error ? error.message : "Unknown error occurred" 
+          }, Status.InternalServerError);
+        }
+      }
+
       // Clear agent conversation
-      if (path.startsWith("/api/agents/") && req.method === "POST" && path.endsWith("/clear-conversation")) {
+      if (path.startsWith("/api/agents/") && req.method === "DELETE" && path.endsWith("/conversation")) {
         const agentId = path.split("/")[3];
         const namespace = getNamespaceFromRequest(req);
         

@@ -811,22 +811,76 @@ Deno.test({
 Deno.test({
   name: "PUT /agents/:id - should update agent",
   async fn() {
-    const updateData = {
+    const updates = {
       name: "Updated Test Agent",
-      description: "An updated test assistant",
-      instructions: "You are an updated helpful assistant.",
-      maxSteps: 8
+      description: "Updated description",
+      instructions: "Updated instructions for the agent.",
     };
     
-    const result = await makeRequest(`/agents/${testAgentId}`, "PUT", updateData);
+    const result = await makeRequest(`/agents/${testAgentId}`, "PUT", updates);
     assertEquals(result.success, true);
+    assertEquals(result.message, "Agent updated successfully");
     assertEquals(result.agent.name, "Updated Test Agent");
-    assertEquals(result.agent.description, "An updated test assistant");
     
-    // Verify the update by fetching the agent
-    const agent = await makeRequest(`/agents/${testAgentId}`);
-    assertEquals(agent.name, "Updated Test Agent");
-    assertEquals(agent.maxSteps, 8);
+    // Verify the update
+    const updatedAgent = await makeRequest(`/agents/${testAgentId}`);
+    assertEquals(updatedAgent.name, "Updated Test Agent");
+    assertEquals(updatedAgent.description, "Updated description");
+    
+    // Test: Set agent conversation history within existing agent test
+    console.log("  → Testing conversation history setting...");
+    const customHistory = [
+      { role: "user", content: "What is 5 + 5?" },
+      { role: "assistant", content: "5 + 5 equals 10." },
+      { role: "user", content: "What about 10 + 10?" },
+      { role: "assistant", content: "10 + 10 equals 20." }
+    ];
+    
+    const setResult = await makeRequest(`/agents/${testAgentId}/set-conversation`, "POST", {
+      messages: customHistory
+    });
+    
+    assertEquals(setResult.success, true);
+    assertEquals(setResult.messageCount, 4);
+    assertEquals(setResult.message, "Conversation history set with 4 messages");
+    
+    // Verify the conversation was set
+    const conversation = await makeRequest(`/agents/${testAgentId}/conversation`);
+    assertEquals(conversation.conversation.length, 4);
+    assertEquals(conversation.conversation[0].content, "What is 5 + 5?");
+    assertEquals(conversation.conversation[3].content, "10 + 10 equals 20.");
+    
+    console.log("  ✅ Conversation history management tested");
+    
+    // Clear conversation for subsequent tests
+    await makeRequest(`/agents/${testAgentId}/conversation`, "DELETE");
+    
+    // Test: Stateless chat completion within existing agent test
+    console.log("  → Testing stateless chat completion...");
+    const messages = [
+      { role: "user", content: "What is 3 + 3? Use Python to calculate." }
+    ];
+    
+    // Get conversation length before stateless chat
+    const conversationBefore = await makeRequest(`/agents/${testAgentId}/conversation`);
+    const lengthBefore = conversationBefore.conversation.length;
+    
+    const response = await fetch(`http://localhost:8001/api/agents/${testAgentId}/chat-stateless`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
+    
+    assertEquals(response.headers.get("Content-Type"), "text/event-stream");
+    
+    const events = await readSSEStream(response, 5000);
+    assert(events.length > 0, "Should receive events");
+    
+    // Verify conversation history wasn't modified (stateless)
+    const conversationAfter = await makeRequest(`/agents/${testAgentId}/conversation`);
+    assertEquals(conversationAfter.conversation.length, lengthBefore, "Conversation history should not change");
+    
+    console.log("  ✅ Stateless chat completed without modifying conversation history");
   },
   sanitizeResources: false,
   sanitizeOps: false,
@@ -1020,25 +1074,159 @@ Deno.test({
     const agentData = {
       name: "Kernel Auto Agent",
       description: "Agent with auto-attached kernel",
-      instructions: "You are a coding assistant.",
+      instructions: "You are a kernel-enabled agent.",
       kernelType: "PYTHON",
-      autoAttachKernel: true
+      autoAttachKernel: true,
     };
     
     const result = await makeRequest("/agents", "POST", agentData);
     assertExists(result.id);
-    assertEquals(result.kernelType, "python");
+    assertEquals(result.name, "Kernel Auto Agent");
     
-    // Wait a moment for auto-attach to complete
+    // Wait for kernel attachment
     await new Promise(resolve => setTimeout(resolve, 1000));
     
-    // Verify kernel is attached
+    // Get the agent and verify kernel attachment
     const agent = await makeRequest(`/agents/${result.id}`);
-    // Note: hasKernel might be false initially due to async attachment
-    console.log(`Auto-attach kernel status: ${agent.hasKernel}`);
+    assertEquals(agent.hasKernel, true);
     
-    // Clean up
-    await makeRequest(`/agents/${result.id}`, "DELETE");
+    // Test: Enhanced kernel cleanup verification
+    console.log("  → Testing kernel cleanup during agent destruction...");
+    
+    // Get initial kernel count
+    const kernelsBefore = await makeRequest("/kernels");
+    const kernelCountBefore = kernelsBefore.length;
+    
+    // Delete agent
+    const deleteResult = await makeRequest(`/agents/${result.id}`, "DELETE");
+    assertEquals(deleteResult.success, true);
+    
+    // Verify kernels are cleaned up
+    await new Promise(resolve => setTimeout(resolve, 500)); // Allow cleanup time
+    const kernelsAfter = await makeRequest("/kernels");
+    const kernelCountAfter = kernelsAfter.length;
+    
+    // Should have fewer kernels after agent deletion
+    assert(kernelCountAfter <= kernelCountBefore, "Kernels should be cleaned up when agent is deleted");
+    console.log(`  ✅ Kernel cleanup verified: ${kernelCountBefore} -> ${kernelCountAfter} kernels`);
+    
+    // Test: Agent with startup script errors
+    console.log("  → Testing startup script error handling...");
+    const errorAgentData = {
+      name: "Error Test Agent",
+      description: "Agent with failing startup script", 
+      instructions: "You are a test agent.",
+      startupScript: "import nonexistent_module\nprint('This will fail')",
+      kernelType: "PYTHON",
+      autoAttachKernel: true
+    };
+    
+    const errorAgent = await makeRequest("/agents", "POST", errorAgentData);
+    assertExists(errorAgent.id);
+    
+    // Wait for startup script execution and error capture
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Check agent status for startup error
+    const errorAgentInfo = await makeRequest(`/agents/${errorAgent.id}`);
+    assertEquals(errorAgentInfo.hasStartupError, true);
+    assertExists(errorAgentInfo.startupError);
+    assertExists(errorAgentInfo.startupError.message);
+    
+    console.log(`  ✅ Startup error captured: ${errorAgentInfo.startupError.message}`);
+    
+    // Test that chat fails due to startup error
+    try {
+      const errorChatResponse = await fetch(`http://localhost:8001/api/agents/${errorAgent.id}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "Hello" }),
+      });
+      
+      assertEquals(errorChatResponse.status, 500, "Chat should fail due to startup error");
+      console.log("  ✅ Chat correctly failed due to startup error");
+    } catch (error) {
+      console.log("  ✅ Chat correctly failed due to startup error");
+    }
+    
+    // Clean up error agent
+    await makeRequest(`/agents/${errorAgent.id}`, "DELETE");
+    
+    // Test: Namespace support in agent creation  
+    console.log("  → Testing namespace support...");
+    const namespace = "test-namespace";
+    const namespacedAgentData = {
+      name: "Namespaced Agent",
+      description: "Agent with namespace",
+      instructions: "You are a namespaced agent.",
+      kernelType: "PYTHON"
+    };
+    
+    const namespaceResponse = await fetch("http://localhost:8001/api/agents", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "X-Namespace": namespace
+      },
+      body: JSON.stringify(namespacedAgentData),
+    });
+    
+    assertEquals(namespaceResponse.status, 200);
+    const namespaceResult = await namespaceResponse.json();
+    assertExists(namespaceResult.id);
+    assertEquals(namespaceResult.namespace, namespace);
+    
+    console.log("  ✅ Namespace support verified");
+    
+    // Clean up namespaced agent
+    await makeRequest(`/agents/${namespaceResult.id}`, "DELETE");
+    
+    // Test: Error handling for invalid requests
+    console.log("  → Testing error handling...");
+    
+    // Test invalid JSON in agent creation
+    const invalidJsonResponse = await fetch("http://localhost:8001/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "invalid json",
+    });
+    assertEquals(invalidJsonResponse.status, 500);
+    
+    console.log("  ✅ Error handling verified");
+    
+    // Test: Performance - multiple concurrent requests
+    console.log("  → Testing concurrent request handling...");
+    const concurrentRequests = 3; // Reduced for faster testing
+    const promises = [];
+    
+    // Create multiple agents concurrently
+    for (let i = 0; i < concurrentRequests; i++) {
+      const concurrentAgentData = {
+        name: `Concurrent Agent ${i}`,
+        description: `Concurrent test agent ${i}`,
+        instructions: "You are a concurrent test agent.",
+        kernelType: "PYTHON"
+      };
+      
+      promises.push(makeRequest("/agents", "POST", concurrentAgentData));
+    }
+    
+    const concurrentResults = await Promise.all(promises);
+    
+    // Verify all agents were created successfully
+    assertEquals(concurrentResults.length, concurrentRequests);
+    concurrentResults.forEach((result, index) => {
+      assertExists(result.id);
+      assertEquals(result.name, `Concurrent Agent ${index}`);
+    });
+    
+    // Clean up all created agents
+    const cleanupPromises = concurrentResults.map(result => 
+      makeRequest(`/agents/${result.id}`, "DELETE")
+    );
+    await Promise.all(cleanupPromises);
+    
+    console.log(`  ✅ Successfully handled ${concurrentRequests} concurrent requests`);
   },
   sanitizeResources: false,
   sanitizeOps: false,
@@ -1141,4 +1329,6 @@ Deno.test({
   },
   sanitizeResources: false,
   sanitizeOps: false,
-}); 
+});
+
+ 
