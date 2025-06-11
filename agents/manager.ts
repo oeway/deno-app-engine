@@ -258,7 +258,7 @@ export class AgentManager extends EventEmitter {
     // Create agent with defaults
     const agentConfig: IAgentConfig = {
       ...config,
-      id: baseId, // Use base ID for agent config
+      id: id, // Use full namespaced ID for agent config so agent.id matches the map key
       ModelSettings: resolvedModelSettings,
       maxSteps: config.maxSteps || this.defaultMaxSteps,
       kernelType: config.kernelType || this.defaultKernelType
