@@ -1,0 +1,238 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deno-app-engine
+  labels:
+    app: deno-app-engine
+    app.kubernetes.io/managed-by: "Helm"
+  annotations:
+    app.kubernetes.io/name: "deno-app-engine"
+    app.kubernetes.io/instance: "deno-app-engine"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deno-app-engine
+  template:
+    metadata:
+      labels:
+        app: deno-app-engine
+      annotations:
+        app.kubernetes.io/name: "deno-app-engine"
+        app.kubernetes.io/instance: "deno-app-engine"
+    spec:
+      securityContext:
+        runAsUser: 1000  # This is the UID of the deno user in the container
+        fsGroup: 1000    # This is the GID of the deno user in the container
+        runAsNonRoot: true
+        fsGroupChangePolicy: "Always"
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: cache
+          emptyDir:
+            medium: ""
+            sizeLimit: "4Gi"
+        - name: deno-dir
+          emptyDir:
+            medium: ""
+            sizeLimit: "4Gi"
+        - name: vectordb-offload
+          emptyDir:
+            medium: ""
+            sizeLimit: "2Gi"
+        - name: agent-data
+          emptyDir:
+            medium: ""
+            sizeLimit: "1Gi"
+        - name: pyodide-packages
+          emptyDir:
+            medium: ""
+            sizeLimit: "2Gi"
+      containers:
+        - name: deno-app-engine-container
+          image: ghcr.io/oeway/deno-app-engine:0.1.21
+          imagePullPolicy: Always
+          command: ["deno"]
+          args: ["run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "scripts/hypha-service.ts"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: cache
+              mountPath: /home/deno/.cache
+            - name: deno-dir
+              mountPath: /deno-dir
+            - name: vectordb-offload
+              mountPath: /app/vectordb_offload
+            - name: agent-data
+              mountPath: /app/agent_data
+            - name: pyodide-packages
+              mountPath: /app/pyodide_packages
+          env:
+            - name: DENO_DIR
+              value: "/deno-dir"
+            - name: HOME
+              value: "/home/deno"
+            - name: PYODIDE_PACKAGES_PATH
+              value: "/app/pyodide_packages"
+            - name: HYPHA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hypha-secrets
+                  key: HYPHA_AGENTS_TOKEN
+            - name: HYPHA_SERVER_URL
+              value: "http://hypha-server.hypha.svc.cluster.local:9520"
+            - name: HYPHA_WORKSPACE
+              value: "hypha-agents"
+            - name: KERNEL_POOL_ENABLED
+              value: "true"
+            - name: KERNEL_POOL_SIZE
+              value: "2"
+            - name: KERNEL_POOL_PRELOAD_CONFIGS
+              value: "worker-python,worker-typescript"
+            - name: HYPHA_CLIENT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AGENT_DATA_DIRECTORY
+              value: "/app/agent_data"
+            - name: OLLAMA_HOST
+              value: "http://ollama.hypha.svc.cluster.local:11434"
+            - name: AGENT_MODEL_BASE_URL
+              value: "https://api.openai.com/v1/"
+            - name: AGENT_MODEL_NAME
+              value: "gpt-4o"
+            - name: AGENT_MODEL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-lens-secrets
+                  key: OPENAI_API_KEY
+            # - name: AGENT_MODEL_BASE_URL
+            #   value: "http://ollama.hypha.svc.cluster.local:11434/v1/"
+            # - name: AGENT_MODEL_API_KEY
+            #   value: "ollama"
+            # - name: AGENT_MODEL_NAME
+            #   value: "llama3.1:8b"
+            - name: AGENT_MODEL_TEMPERATURE
+              value: "0.5"
+            - name: MAX_AGENTS
+              value: "1000"
+          livenessProbe:
+            exec:
+              command:
+                - deno
+                - eval
+                - |
+                  try {
+                    const clientId = Deno.env.get('HYPHA_CLIENT_ID');
+                    if (!clientId) {
+                      console.log('HYPHA_CLIENT_ID not set, skipping URL check');
+                      Deno.exit(0);
+                    }
+                    const url = `https://hypha.aicell.io/hypha-agents/services/${clientId}:deno-app-engine/getStatus`;
+                    const response = await fetch(url);
+                    if (response.ok) {
+                      console.log('Liveness check passed');
+                      Deno.exit(0);
+                    } else {
+                      console.error('Liveness check failed:', response.status);
+                      Deno.exit(1);
+                    }
+                  } catch (e) {
+                    console.error('Liveness check error:', e.message);
+                    Deno.exit(1);
+                  }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - deno
+                - eval
+                - |
+                  try {
+                    const clientId = Deno.env.get('HYPHA_CLIENT_ID');
+                    if (!clientId) {
+                      console.log('HYPHA_CLIENT_ID not set, skipping URL check');
+                      Deno.exit(0);
+                    }
+                    const url = `https://hypha.aicell.io/hypha-agents/services/${clientId}:deno-app-engine/getStatus`;
+                    const response = await fetch(url);
+                    if (response.ok) {
+                      console.log('Readiness check passed');
+                      Deno.exit(0);
+                    } else {
+                      console.error('Readiness check failed:', response.status);
+                      Deno.exit(1);
+                    }
+                  } catch (e) {
+                    console.error('Readiness check error:', e.message);
+                    Deno.exit(1);
+                  }
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "8"
+              memory: "16G"
+            requests:
+              cpu: "4"
+              memory: "14G"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: deno-app-engine-hpa
+  labels:
+    app: deno-app-engine
+    app.kubernetes.io/managed-by: "Helm"
+  annotations:
+    app.kubernetes.io/name: "deno-app-engine"
+    app.kubernetes.io/instance: "deno-app-engine"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: deno-app-engine
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    # Memory-based scaling (primary metric)
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 85  # Increased to account for Pyodide initialization memory overhead
+    # CPU-based scaling (secondary metric)
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60  # Increased from 50% to be less sensitive
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 120   # Slower response to avoid premature scaling
+      policies:
+      - type: Percent
+        value: 50     # More conservative scaling up (50% instead of 100%)
+        periodSeconds: 60
+      - type: Pods
+        value: 2      # Add up to 2 pods at once instead of 3
+        periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 120  # Reduced from 5 minutes to 2 minutes
+      policies:
+      - type: Percent
+        value: 50     # Scale down faster (50% instead of 25%)
+        periodSeconds: 60
+      selectPolicy: Min 
