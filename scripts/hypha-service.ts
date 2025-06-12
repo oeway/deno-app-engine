@@ -1465,6 +1465,18 @@ async function startHyphaService(options: {
       }
     },
 
+    agentExists({agentId}: {agentId: string}, context: {user: any, ws: string}) {
+      console.log(`Checking if agent exists: ${agentId} for workspace: ${context.ws}`);
+      try {
+        const validAgentId = ensureAgentAccess(agentId, context.ws);
+        const exists = agentManager.agentExists(validAgentId);
+        return { exists };
+      } catch (error) {
+        console.error("Error checking agent existence:", error);
+        throw error;
+      }
+    },
+
     getAgentStats(context: {user: any, ws: string}) {
       console.log(`Getting agent statistics for workspace: ${context.ws}`);
       try {

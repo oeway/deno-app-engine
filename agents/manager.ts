@@ -305,6 +305,11 @@ export class AgentManager extends EventEmitter {
     return Array.from(this.agents.keys());
   }
 
+  // Check if an agent exists
+  agentExists(id: string): boolean {
+    return this.agents.has(id);
+  }
+
   // List all agents with their info
   listAgents(namespace?: string): Array<{
     id: string;
@@ -468,8 +473,8 @@ export class AgentManager extends EventEmitter {
       }
     };
 
-    // Replace colons with underscores in filename to avoid filesystem issues with namespaced agent IDs
-    const safeAgentId = agentId.replace(/:/g, '_');
+    // Sanitize agent ID for safe filename by replacing problematic characters
+    const safeAgentId = agentId.replace(/[:|@/\\<>*?"]/g, '_');
     const fileName = filename || `conversation_${safeAgentId}_${Date.now()}.json`;
     const filePath = join(this.agentDataDirectory, fileName);
 
@@ -482,8 +487,8 @@ export class AgentManager extends EventEmitter {
       // If no filename provided, try to find the most recent conversation file for this agent
       const files = [];
       try {
-        // Replace colons with underscores to match saved filenames
-        const safeAgentId = agentId.replace(/:/g, '_');
+        // Sanitize agent ID to match saved filenames
+        const safeAgentId = agentId.replace(/[:|@/\\<>*?"]/g, '_');
         for await (const entry of Deno.readDir(this.agentDataDirectory)) {
           if (entry.isFile && entry.name.includes(`conversation_${safeAgentId}_`)) {
             files.push(entry.name);

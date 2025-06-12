@@ -398,6 +398,23 @@ len(results)
       assert(basicAgent.hasKernel, "Agent should have kernel attached");
       console.log(`   ✅ Created basic agent: ${basicAgent.id}`);
       
+      // Test 4.1.1: Test agentExists functionality
+      console.log("   → Testing agentExists functionality...");
+      
+      // Test with existing agent
+      const existsResult = await service.agentExists({
+        agentId: basicAgent.id
+      });
+      assertEquals(existsResult.exists, true, "Agent should exist");
+      console.log(`   ✅ agentExists returned true for existing agent: ${basicAgent.id}`);
+      
+      // Test with non-existing agent
+      const nonExistentResult = await service.agentExists({
+        agentId: "non-existent-agent-id"
+      });
+      assertEquals(nonExistentResult.exists, false, "Non-existent agent should not exist");
+      console.log(`   ✅ agentExists returned false for non-existent agent`);
+      
       // Test 4.2: Test conversation history management without chat
       console.log("   → Testing conversation history management...");
       
@@ -462,6 +479,23 @@ Be concise but thorough in your responses.`,
       assertExists(researchAgent.id, "Research agent should be created");
       assert(researchAgent.hasKernel, "Agent should have kernel attached");
       console.log(`   ✅ Created research assistant: ${researchAgent.id}`);
+
+      // Test 4.1.1: Test agentExists functionality
+      console.log("   → Testing agentExists functionality...");
+      
+      // Test with existing agent
+      const existsResult = await service.agentExists({
+        agentId: researchAgent.id
+      });
+      assertEquals(existsResult.exists, true, "Agent should exist");
+      console.log(`   ✅ agentExists returned true for existing agent: ${researchAgent.id}`);
+      
+      // Test with non-existing agent
+      const nonExistentResult = await service.agentExists({
+        agentId: "non-existent-agent-id"
+      });
+      assertEquals(nonExistentResult.exists, false, "Non-existent agent should not exist");
+      console.log(`   ✅ agentExists returned false for non-existent agent`);
 
       // Test 4.2: Simple conversation workflow
       console.log("   → Testing basic conversation...");
