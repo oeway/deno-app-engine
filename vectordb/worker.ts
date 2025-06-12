@@ -304,5 +304,24 @@ self.addEventListener('message', (event: MessageEvent) => {
   }
 });
 
+// Add global error handlers to prevent unhandled errors
+self.addEventListener('error', (event) => {
+  console.error('Worker error:', event.error);
+  self.postMessage({
+    type: "WORKER_ERROR",
+    error: event.error?.message || String(event.error)
+  });
+});
+
+self.addEventListener('unhandledrejection', (event) => {
+  console.error('Unhandled promise rejection in worker:', event.reason);
+  self.postMessage({
+    type: "WORKER_ERROR", 
+    error: event.reason?.message || String(event.reason)
+  });
+  // Prevent the default behavior that would log the error
+  event.preventDefault();
+});
+
 // Send initial ready signal
 console.log("Vector database worker loaded"); 

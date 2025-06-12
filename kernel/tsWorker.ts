@@ -721,6 +721,17 @@ class TypeScriptKernel {
   }
 }
 
+// Add global error handlers to prevent unhandled errors
+self.addEventListener('error', (event) => {
+  console.error('[TS_WORKER] Global error caught:', event.error);
+  event.preventDefault();
+});
+
+self.addEventListener('unhandledrejection', (event) => {
+  console.error('[TS_WORKER] Unhandled promise rejection:', event.reason);
+  event.preventDefault();
+});
+
 // Global kernel instance
 const kernel = new TypeScriptKernel();
 
