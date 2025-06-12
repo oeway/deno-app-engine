@@ -4,6 +4,7 @@
 export {
   VectorDBManager,
   VectorDBEvents,
+  VectorDBPermission,
   type IVectorDBInstance,
   type IVectorDBOptions,
   type IDocument,

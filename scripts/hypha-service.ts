@@ -44,7 +44,7 @@
 import { hyphaWebsocketClient } from "npm:hypha-rpc";
 import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 import type { IKernelManagerOptions } from "../kernel/manager.ts";
-import { VectorDBManager, VectorDBEvents, type IVectorDBManagerOptions, type IDocument, type IQueryOptions, createOllamaEmbeddingProvider } from "../vectordb/mod.ts";
+import { VectorDBManager, VectorDBEvents, VectorDBPermission, type IVectorDBManagerOptions, type IDocument, type IQueryOptions, createOllamaEmbeddingProvider } from "../vectordb/mod.ts";
 import { AgentManager, AgentEvents, KernelType, type IAgentConfig } from "../agents/mod.ts";
 import type { ChatMessage } from "../agents/chatCompletion.ts";
 
@@ -168,6 +168,45 @@ function ensureKernelId(id: string, namespace: string) {
         }
     }
     return namespace + ":" + id;
+}
+
+// Helper function to handle vector index access across workspaces
+async function ensureVectorIndexAccess(indexId: string, requestingNamespace: string, vectorDBManager: VectorDBManager, operation: "read" | "add" | "remove"): Promise<string> {
+  // If indexId contains namespace, check if it's accessible
+  if (indexId.includes(':')) {
+    const fullIndexId = indexId;
+    let instance = vectorDBManager.getInstance(fullIndexId);
+    
+    // If not in memory, try to auto-load from disk
+    if (!instance) {
+      try {
+        instance = await vectorDBManager.autoLoadInstance(fullIndexId);
+      } catch (error) {
+        console.warn(`Failed to auto-load index ${fullIndexId}:`, error);
+      }
+    }
+    
+    if (!instance) {
+      throw new Error("Vector index not found");
+    }
+    
+    // Check permission for cross-workspace access
+    if (!vectorDBManager.checkPermission(fullIndexId, requestingNamespace, operation)) {
+      const instanceNamespace = fullIndexId.split(':')[0];
+      const permission = instance.options.permission || VectorDBPermission.PRIVATE;
+      
+      throw new Error(
+        `Access denied: Cannot ${operation} on vector index ${fullIndexId}. ` +
+        `Index is in workspace '${instanceNamespace}' with permission '${permission}', ` +
+        `but request is from workspace '${requestingNamespace}'.`
+      );
+    }
+    
+    return fullIndexId;
+  } else {
+    // If no namespace in ID, assume it's in the requesting namespace
+    return ensureKernelId(indexId, requestingNamespace);
+  }
 }
 
 function ensureAgentAccess(agentId: string, namespace: string): string {
@@ -823,7 +862,8 @@ async function startHyphaService(options: {
       maxDocuments?: number,
       inactivityTimeout?: number,
       enableActivityMonitoring?: boolean,
-      resume?: boolean
+      resume?: boolean,
+      permission?: VectorDBPermission
     }, context: {user: any, ws: string}) {
       try {
         console.log(`Creating vector index with namespace: ${context.ws}, requested ID: ${options.id || "auto-generated"}, resume: ${options.resume || false}`);
@@ -836,7 +876,8 @@ async function startHyphaService(options: {
           maxDocuments: options.maxDocuments,
           inactivityTimeout: options.inactivityTimeout,
           enableActivityMonitoring: options.enableActivityMonitoring,
-          resume: options.resume
+          resume: options.resume,
+          permission: options.permission || VectorDBPermission.PRIVATE
         });
         
         console.log(`Vector index created with ID: ${indexId}`);
@@ -931,13 +972,7 @@ async function startHyphaService(options: {
     },
 
     async addDocuments({indexId, documents}: {indexId: string, documents: IDocument[]}, context: {user: any, ws: string}) {
-      const fullIndexId = ensureKernelId(indexId, context.ws);
-      
-      // Verify index belongs to user's namespace
-      const index = vectorDBManager.getInstance(fullIndexId);
-      if (!index) {
-        throw new Error("Vector index not found or access denied");
-      }
+      const fullIndexId = await ensureVectorIndexAccess(indexId, context.ws, vectorDBManager, "add");
       
       if (!documents || documents.length === 0) {
         throw new Error("No documents provided");
@@ -953,7 +988,7 @@ async function startHyphaService(options: {
         }
       }
       
-      await vectorDBManager.addDocuments(fullIndexId, documents);
+      await vectorDBManager.addDocuments(fullIndexId, documents, context.ws);
       
       console.log(`Added ${documents.length} documents to vector index ${fullIndexId}`);
       return { 
@@ -964,13 +999,7 @@ async function startHyphaService(options: {
     },
 
     async queryVectorIndex({indexId, query, options}: {indexId: string, query: string | number[], options?: IQueryOptions}, context: {user: any, ws: string}) {
-      const fullIndexId = ensureKernelId(indexId, context.ws);
-      
-      // Verify index belongs to user's namespace
-      const index = vectorDBManager.getInstance(fullIndexId);
-      if (!index) {
-        throw new Error("Vector index not found or access denied");
-      }
+      const fullIndexId = await ensureVectorIndexAccess(indexId, context.ws, vectorDBManager, "read");
       
       if (!query) {
         throw new Error("No query provided");
@@ -983,7 +1012,7 @@ async function startHyphaService(options: {
         ...options
       };
       
-      const results = await vectorDBManager.queryIndex(fullIndexId, query, queryOptions);
+      const results = await vectorDBManager.queryIndex(fullIndexId, query, queryOptions, context.ws);
       
       // Add to query history
       const queryId = crypto.randomUUID();
@@ -1006,19 +1035,13 @@ async function startHyphaService(options: {
     },
 
     async removeDocuments({indexId, documentIds}: {indexId: string, documentIds: string[]}, context: {user: any, ws: string}) {
-      const fullIndexId = ensureKernelId(indexId, context.ws);
-      
-      // Verify index belongs to user's namespace
-      const index = vectorDBManager.getInstance(fullIndexId);
-      if (!index) {
-        throw new Error("Vector index not found or access denied");
-      }
+      const fullIndexId = await ensureVectorIndexAccess(indexId, context.ws, vectorDBManager, "remove");
       
       if (!documentIds || documentIds.length === 0) {
         throw new Error("No document IDs provided");
       }
       
-      await vectorDBManager.removeDocuments(fullIndexId, documentIds);
+      await vectorDBManager.removeDocuments(fullIndexId, documentIds, context.ws);
       
       console.log(`Removed ${documentIds.length} documents from vector index ${fullIndexId}`);
       return { 
@@ -1124,6 +1147,26 @@ async function startHyphaService(options: {
       return { 
         success: true, 
         message: "Vector index offloaded successfully",
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async saveVectorIndex({indexId}: {indexId: string}, context: {user: any, ws: string}) {
+      const fullIndexId = ensureKernelId(indexId, context.ws);
+      
+      // Verify index belongs to user's namespace
+      const index = vectorDBManager.getInstance(fullIndexId);
+      if (!index) {
+        throw new Error("Vector index not found or access denied");
+      }
+      
+      // Save the index to disk (keeping it in memory)
+      await vectorDBManager.saveIndex(fullIndexId);
+      
+      console.log(`Vector index ${fullIndexId} saved by user in workspace ${context.ws}`);
+      return { 
+        success: true, 
+        message: "Vector index saved successfully",
         timestamp: new Date().toISOString()
       };
     },

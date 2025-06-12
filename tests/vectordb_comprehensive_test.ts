@@ -81,6 +81,11 @@ async function cleanupTestDirectory() {
   }
 }
 
+// Helper function to sanitize filename (matches VectorDBManager.sanitizeFilename)
+function sanitizeFilename(filename: string): string {
+  return filename.replace(/:/g, '_').replace(/[<>:"/\\|?*]/g, '_');
+}
+
 Deno.test("VectorDB - Basic Functionality", async (t) => {
   const manager = new VectorDBManager({
     defaultEmbeddingModel: TEST_CONFIG.embeddingModel,
@@ -326,8 +331,9 @@ Deno.test("VectorDB - Activity Monitoring", async (t) => {
     const instance = manager.getInstance(indexId);
     assertEquals(instance, undefined);
     
-    // Should have offloaded files
-    const metadataPath = join(TEST_CONFIG.offloadDirectory, `${indexId}.metadata.json`);
+    // Should have offloaded files (using sanitized filename)
+    const sanitizedId = sanitizeFilename(indexId);
+    const metadataPath = join(TEST_CONFIG.offloadDirectory, `${sanitizedId}.metadata.json`);
     const metadataExists = await exists(metadataPath);
     assertEquals(metadataExists, true);
   });
@@ -391,10 +397,11 @@ Deno.test("VectorDB - Binary Format Storage", async (t) => {
     const instance = manager.getInstance(indexId);
     assertEquals(instance, undefined);
     
-    // Check binary format files exist
-    const metadataPath = join(TEST_CONFIG.offloadDirectory, `${indexId}.metadata.json`);
-    const documentsPath = join(TEST_CONFIG.offloadDirectory, `${indexId}.documents.json`);
-    const vectorsPath = join(TEST_CONFIG.offloadDirectory, `${indexId}.vectors.bin`);
+    // Check binary format files exist (using sanitized filename)
+    const sanitizedId = sanitizeFilename(indexId);
+    const metadataPath = join(TEST_CONFIG.offloadDirectory, `${sanitizedId}.metadata.json`);
+    const documentsPath = join(TEST_CONFIG.offloadDirectory, `${sanitizedId}.documents.json`);
+    const vectorsPath = join(TEST_CONFIG.offloadDirectory, `${sanitizedId}.vectors.bin`);
     
     assertEquals(await exists(metadataPath), true);
     assertEquals(await exists(documentsPath), true);
@@ -409,9 +416,10 @@ Deno.test("VectorDB - Binary Format Storage", async (t) => {
   });
 
   await t.step("should verify binary format efficiency", async () => {
-    const metadataPath = join(TEST_CONFIG.offloadDirectory, `${indexId}.metadata.json`);
-    const documentsPath = join(TEST_CONFIG.offloadDirectory, `${indexId}.documents.json`);
-    const vectorsPath = join(TEST_CONFIG.offloadDirectory, `${indexId}.vectors.bin`);
+    const sanitizedId = sanitizeFilename(indexId);
+    const metadataPath = join(TEST_CONFIG.offloadDirectory, `${sanitizedId}.metadata.json`);
+    const documentsPath = join(TEST_CONFIG.offloadDirectory, `${sanitizedId}.documents.json`);
+    const vectorsPath = join(TEST_CONFIG.offloadDirectory, `${sanitizedId}.vectors.bin`);
     
     const metadataSize = await getFileSize(metadataPath);
     const documentsSize = await getFileSize(documentsPath);

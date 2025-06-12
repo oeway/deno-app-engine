@@ -622,6 +622,206 @@ Please analyze correlation, create a linear model, and provide predictions.`
       console.log(`   📊 Agent stats: ${agentStats.totalAgents} agents created for testing (Ollama not available for chat)`);
     }
 
+    // Phase 6: Vector Database Permission System Tests
+    console.log("\n🔐 Phase 6: Vector Database Permission System Tests");
+    
+    const permissionTestIndices: string[] = [];
+    
+    try {
+      // Test different permission levels
+      console.log("Testing permission level configurations...");
+      
+      const permissionTypes = [
+        { name: "private", permission: "private", description: "Owner only access" },
+        { name: "public_read", permission: "public_read", description: "Cross-workspace read access" },
+        { name: "public_read_add", permission: "public_read_add", description: "Cross-workspace read and add access" },
+        { name: "public_read_write", permission: "public_read_write", description: "Full cross-workspace access" }
+      ];
+      
+      // Create indices with different permissions
+      for (const permType of permissionTypes) {
+        console.log(`  Creating ${permType.description} index...`);
+        const index = await service.createVectorIndex({
+          id: `perm-test-${permType.name}`,
+          permission: permType.permission,
+          embeddingModel: "mock-model",
+          inactivityTimeout: 300000, // 5 minutes
+          enableActivityMonitoring: true
+        });
+        
+        permissionTestIndices.push(index.id);
+        assertExists(index.id, `Index should be created for ${permType.name} permission`);
+        console.log(`  ✅ Created ${permType.name} index: ${index.id}`);
+      }
+      
+      // Add test documents to all indices
+      console.log("Adding test documents to permission test indices...");
+      const permissionTestDocs: IDocument[] = [
+        {
+          id: "perm-doc-1",
+          text: "This document tests cross-workspace permissions for vector database access control",
+          metadata: { type: "permission_test", level: "basic" }
+        },
+        {
+          id: "perm-doc-2", 
+          text: "Advanced permission testing with metadata filtering and security validation",
+          metadata: { type: "permission_test", level: "advanced", sensitive: true }
+        },
+        {
+          id: "perm-doc-3",
+          text: "Public access document that should be readable across workspaces with appropriate permissions",
+          metadata: { type: "permission_test", level: "public", classification: "open" }
+        }
+      ];
+      
+      for (const indexId of permissionTestIndices) {
+        await service.addDocuments({
+          indexId: indexId,
+          documents: permissionTestDocs
+        });
+        console.log(`  ✅ Added ${permissionTestDocs.length} documents to: ${indexId}`);
+      }
+      
+      // Test querying with different permission levels
+      console.log("Testing cross-workspace query permissions...");
+      for (const indexId of permissionTestIndices) {
+        const queryResult = await service.queryVectorIndex({
+          indexId: indexId,
+          query: "permission testing cross workspace access",
+          options: { k: 3, threshold: 0.0, includeMetadata: true }
+        });
+        
+        assertExists(queryResult.results, "Query results should exist");
+        assertGreater(queryResult.results.length, 0, "Should find relevant documents");
+        console.log(`  ✅ Query successful on ${indexId}: ${queryResult.results.length} results`);
+        
+        // Verify metadata is included
+        const firstResult = queryResult.results[0];
+        assertExists(firstResult.metadata, "Result metadata should be included");
+        assertEquals(firstResult.metadata.type, "permission_test", "Metadata should be preserved");
+      }
+      
+      // Test document removal permissions
+      console.log("Testing document removal permissions...");
+      for (const indexId of permissionTestIndices) {
+        await service.removeDocuments({
+          indexId: indexId,
+          documentIds: ["perm-doc-1"]
+        });
+        console.log(`  ✅ Removed document from: ${indexId}`);
+        
+        // Verify document was removed by querying
+        const verifyQuery = await service.queryVectorIndex({
+          indexId: indexId,
+          query: "This document tests cross-workspace permissions",
+          options: { k: 5 }
+        });
+        
+        // Should have fewer results now (or results with lower scores)
+        const hasRemovedDoc = verifyQuery.results.some((r: any) => r.id === "perm-doc-1");
+        assert(!hasRemovedDoc, "Removed document should not appear in query results");
+        console.log(`  ✅ Verified document removal from: ${indexId}`);
+      }
+      
+      // Test permission validation through index info
+      console.log("Validating permission settings in index info...");
+      for (let i = 0; i < permissionTestIndices.length; i++) {
+        const indexId = permissionTestIndices[i];
+        const permType = permissionTypes[i];
+        
+        const indexInfo = await service.getVectorIndexInfo({
+          indexId: indexId
+        });
+        
+        assertExists(indexInfo, "Index info should be retrievable");
+        assertEquals(indexInfo.id, indexId, "Index ID should match");
+        console.log(`  ✅ Retrieved info for ${permType.name} index: ${indexInfo.documentCount} documents`);
+      }
+      
+      // Test bulk operations with permissions
+      console.log("Testing bulk operations with permission validation...");
+      const bulkTestDocs: IDocument[] = Array.from({ length: 10 }, (_, i) => ({
+        id: `bulk-perm-doc-${i}`,
+        text: `Bulk permission test document ${i} for testing large-scale operations with access control`,
+        metadata: { 
+          type: "bulk_permission_test", 
+          index: i, 
+          batch: "permission_validation",
+          timestamp: new Date().toISOString()
+        }
+      }));
+      
+      // Add bulk documents to first permission test index
+      const bulkTestIndex = permissionTestIndices[0];
+      await service.addDocuments({
+        indexId: bulkTestIndex,
+        documents: bulkTestDocs
+      });
+      console.log(`  ✅ Added ${bulkTestDocs.length} bulk documents to: ${bulkTestIndex}`);
+      
+      // Test bulk query
+      const bulkQueryResult = await service.queryVectorIndex({
+        indexId: bulkTestIndex,
+        query: "bulk permission test large-scale operations",
+        options: { k: 5, includeMetadata: true }
+      });
+      
+      assertGreater(bulkQueryResult.results.length, 0, "Bulk query should return results");
+      console.log(`  ✅ Bulk query successful: ${bulkQueryResult.results.length} results`);
+      
+      // Test bulk removal
+      const bulkRemovalIds = bulkTestDocs.slice(0, 5).map(doc => doc.id);
+      await service.removeDocuments({
+        indexId: bulkTestIndex,
+        documentIds: bulkRemovalIds
+      });
+      console.log(`  ✅ Bulk removed ${bulkRemovalIds.length} documents from: ${bulkTestIndex}`);
+      
+      // Test save and auto-loading functionality
+      console.log("Testing save and auto-loading functionality...");
+      
+      // Save the index to disk (keeping it in memory)
+      const saveResult = await service.saveVectorIndex({
+        indexId: bulkTestIndex
+      });
+      
+      assertExists(saveResult.success, "Save operation should succeed");
+      assertEquals(saveResult.success, true, "Save result should indicate success");
+      console.log(`  ✅ Saved index: ${saveResult.message}`);
+      
+      // Verify index is still accessible after save
+      const postSaveQuery = await service.queryVectorIndex({
+        indexId: bulkTestIndex,
+        query: "bulk permission test",
+        options: { k: 3 }
+      });
+      
+      assertGreater(postSaveQuery.results.length, 0, "Should still be able to query saved index");
+      console.log(`  ✅ Index still accessible after save: ${postSaveQuery.results.length} results`);
+      
+      // Test manual offload to verify auto-loading
+      await service.manualOffloadVectorIndex({
+        indexId: bulkTestIndex
+      });
+      console.log(`  ✅ Index offloaded successfully`);
+      
+      // Query should auto-load the index
+      const autoLoadQuery = await service.queryVectorIndex({
+        indexId: bulkTestIndex,
+        query: "auto loading test",
+        options: { k: 2 }
+      });
+      
+      assertExists(autoLoadQuery.results, "Auto-loaded query should return results");
+      console.log(`  ✅ Index auto-loaded on query: ${autoLoadQuery.results.length} results`);
+      
+      console.log("✅ Vector Database Permission System Tests completed successfully!");
+      
+    } catch (error) {
+      console.error("❌ Permission system tests failed:", error);
+      throw error;
+    }
+
     // Phase 7: Cleanup and Verification
     console.log("\n🧹 Phase 7: Cleanup and Verification");
 
@@ -673,9 +873,19 @@ Please analyze correlation, create a linear model, and provide predictions.`
     assertEquals(postCleanupAgentStats.totalAgents, 0, "All agents should be cleaned up");
     console.log(`   ✅ Agents cleaned up successfully (${agentsToCleanup.length} agents destroyed)`);
 
-    // Test 7.3: Clean up vector indices
+    // Test 7.3: Clean up vector indices (including permission test indices)
     console.log("   → Cleaning up vector indices...");
     await service.destroyVectorIndex({ indexId: researchIndex.id });
+    
+    // Clean up permission test indices
+    for (const indexId of permissionTestIndices) {
+      try {
+        await service.destroyVectorIndex({ indexId: indexId });
+        console.log(`   ✅ Cleaned up permission test index: ${indexId}`);
+      } catch (error) {
+        console.warn(`   ⚠️ Failed to clean up permission test index ${indexId}:`, error);
+      }
+    }
     
     const postCleanupVectorStats = await service.getVectorDBStats();
     assertEquals(postCleanupVectorStats.namespace.totalIndices, 0, "All vector indices should be cleaned up");

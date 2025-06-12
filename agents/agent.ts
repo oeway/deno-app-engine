@@ -1390,7 +1390,9 @@ export class Agent implements IAgentInstance {
         await new Promise(resolve => setTimeout(resolve, 100));
         
         // Check if execution was successful
-        if (!result.success || hasError || errorOutput.trim()) {
+        // Only treat as error if execution failed or there were actual exceptions
+        // Warnings and other stderr output should not be considered errors
+        if (!result.success || hasError) {
           // Create a detailed error message
           const errorMsg = result.error?.message || 'Startup script execution failed';
           const fullErrorOutput = [
@@ -1417,7 +1419,17 @@ export class Agent implements IAgentInstance {
         }
         
         // Success case - store the captured output and clear any previous error
-        this.startupOutput = hasOutput ? output.trim() : 'Startup script executed successfully (no output)';
+        // Include both stdout and stderr (warnings, etc.) in the startup output for the system prompt
+        let combinedOutput = '';
+        if (output.trim()) {
+          combinedOutput += output.trim();
+        }
+        if (errorOutput.trim()) {
+          if (combinedOutput) combinedOutput += '\n';
+          combinedOutput += errorOutput.trim();
+        }
+        
+        this.startupOutput = combinedOutput || 'Startup script executed successfully (no output)';
         this.startupError = undefined; // Clear any previous error
         
         console.log(`✅ Startup script completed for agent: ${this.id}`);

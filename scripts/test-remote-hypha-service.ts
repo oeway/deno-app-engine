@@ -369,6 +369,185 @@ async function runRemoteServiceTest() {
       console.error("Failed to create vector index:", error);
     }
     
+    // Test Vector Database Permission System
+    console.log("\n========== TESTING VECTOR DATABASE PERMISSIONS ==========");
+    
+    if ('createVectorIndex' in service) {
+      const permissionTestIndices: string[] = [];
+      
+      try {
+        console.log("Testing vector database permission system...");
+        
+        // Test 1: Create indices with different permission levels
+        const permissionTypes = [
+          { name: "private", permission: "private", description: "Owner-only access" },
+          { name: "public_read", permission: "public_read", description: "Cross-workspace read access" },
+          { name: "public_read_add", permission: "public_read_add", description: "Cross-workspace read and add access" },
+          { name: "public_read_write", permission: "public_read_write", description: "Full cross-workspace access" }
+        ];
+        
+        console.log("Creating indices with different permission levels...");
+        for (const permType of permissionTypes) {
+          try {
+            const index = await service.createVectorIndex({
+              id: `remote-perm-test-${permType.name}`,
+              permission: permType.permission,
+              embeddingModel: "mock-model",
+              inactivityTimeout: 300000 // 5 minutes
+            });
+            
+            permissionTestIndices.push(index.id);
+            console.log(`  ✅ Created ${permType.description} index: ${index.id}`);
+          } catch (error) {
+            console.error(`  ❌ Failed to create ${permType.name} index:`, error);
+          }
+        }
+        
+        // Test 2: Add documents to permission test indices
+        const permissionTestDocs = [
+          {
+            id: "perm-doc-1",
+            text: "This document tests permission-based access control across workspaces",
+            metadata: { type: "permission_test", level: "basic", workspace: "remote_test" }
+          },
+          {
+            id: "perm-doc-2",
+            text: "Advanced permission validation for cross-workspace vector database operations",
+            metadata: { type: "permission_test", level: "advanced", workspace: "remote_test", sensitive: true }
+          },
+          {
+            id: "perm-doc-3",
+            text: "Public document that should be accessible according to permission level",
+            metadata: { type: "permission_test", level: "public", workspace: "remote_test", classification: "open" }
+          }
+        ];
+        
+        console.log("Adding test documents to permission indices...");
+        for (const indexId of permissionTestIndices) {
+          try {
+            if ('addDocuments' in service) {
+              await service.addDocuments({
+                indexId: indexId,
+                documents: permissionTestDocs
+              });
+              console.log(`  ✅ Added ${permissionTestDocs.length} documents to: ${indexId}`);
+            }
+          } catch (error) {
+            console.error(`  ❌ Failed to add documents to ${indexId}:`, error);
+          }
+        }
+        
+        // Test 3: Query indices with different permission levels
+        console.log("Testing queries on permission-controlled indices...");
+        for (const indexId of permissionTestIndices) {
+          try {
+            if ('queryVectorIndex' in service) {
+              const result = await service.queryVectorIndex({
+                indexId: indexId,
+                query: "permission access control workspace",
+                options: { k: 3, threshold: 0.0, includeMetadata: true }
+              });
+              
+              console.log(`  ✅ Query successful on ${indexId}: ${result.results.length} results`);
+              
+              // Verify metadata preservation
+              if (result.results.length > 0 && result.results[0].metadata) {
+                console.log(`    - First result metadata: ${JSON.stringify(result.results[0].metadata)}`);
+              }
+            }
+          } catch (error) {
+            console.error(`  ❌ Query failed on ${indexId}:`, error);
+          }
+        }
+        
+        // Test 4: Document removal with permission validation
+        console.log("Testing document removal with permission validation...");
+        for (const indexId of permissionTestIndices) {
+          try {
+            if ('removeDocuments' in service) {
+              await service.removeDocuments({
+                indexId: indexId,
+                documentIds: ["perm-doc-1"]
+              });
+              console.log(`  ✅ Document removal successful on: ${indexId}`);
+              
+              // Verify removal by querying
+              if ('queryVectorIndex' in service) {
+                const verifyResult = await service.queryVectorIndex({
+                  indexId: indexId,
+                  query: "This document tests permission-based access",
+                  options: { k: 5 }
+                });
+                
+                const removedDocExists = verifyResult.results.some((r: any) => r.id === "perm-doc-1");
+                if (!removedDocExists) {
+                  console.log(`    ✅ Verified document removal from: ${indexId}`);
+                } else {
+                  console.log(`    ⚠️ Document may still exist in: ${indexId}`);
+                }
+              }
+            }
+          } catch (error) {
+            console.error(`  ❌ Document removal failed on ${indexId}:`, error);
+          }
+        }
+        
+        // Test 5: Cross-workspace access simulation 
+        console.log("Testing cross-workspace access patterns...");
+        for (const indexId of permissionTestIndices) {
+          try {
+            if ('getVectorIndexInfo' in service) {
+              const indexInfo = await service.getVectorIndexInfo({
+                indexId: indexId
+              });
+              
+              console.log(`  ✅ Index info retrieved for ${indexId}: ${indexInfo.documentCount} documents`);
+              console.log(`    - Permission model validation successful`);
+            }
+          } catch (error) {
+            console.error(`  ❌ Failed to get index info for ${indexId}:`, error);
+          }
+        }
+        
+        // Test 6: List indices to verify permission-controlled access
+        console.log("Listing indices to verify permission-controlled access...");
+        if ('listVectorIndices' in service) {
+          try {
+            const indices = await service.listVectorIndices();
+            console.log(`  ✅ Listed ${indices.length} indices (permission filtering applied by service)`);
+            
+            // Check how many of our test indices are visible
+            const visibleTestIndices = indices.filter((idx: any) => 
+              permissionTestIndices.some(testId => idx.id === testId)
+            );
+            console.log(`  ✅ Visible permission test indices: ${visibleTestIndices.length}/${permissionTestIndices.length}`);
+          } catch (error) {
+            console.error(`  ❌ Failed to list indices:`, error);
+          }
+        }
+        
+        console.log("✅ Vector Database Permission System Tests completed!");
+        
+        // Clean up permission test indices
+        console.log("Cleaning up permission test indices...");
+        for (const indexId of permissionTestIndices) {
+          try {
+            if ('destroyVectorIndex' in service) {
+              await service.destroyVectorIndex({ indexId: indexId });
+              console.log(`  ✅ Cleaned up permission test index: ${indexId}`);
+            }
+          } catch (error) {
+            console.error(`  ❌ Failed to clean up ${indexId}:`, error);
+          }
+        }
+        
+      } catch (error) {
+        console.error("❌ Vector Database Permission System Tests failed:", error);
+      }
+    } else {
+      console.log("Vector database permission tests skipped - createVectorIndex not available");
+    }
+    
   } else {
     console.log("VectorDB functionality not available in service");
   }

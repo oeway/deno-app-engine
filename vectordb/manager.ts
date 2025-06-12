@@ -22,6 +22,14 @@ export enum VectorDBEvents {
   PROVIDER_UPDATED = "provider_updated"
 }
 
+// Vector database permission levels
+export enum VectorDBPermission {
+  PRIVATE = "private",
+  PUBLIC_READ = "public_read",
+  PUBLIC_READ_ADD = "public_read_add",
+  PUBLIC_READ_WRITE = "public_read_write"
+}
+
 // Base interface for embedding providers
 export interface IEmbeddingProviderBase {
   embed(text: string): Promise<number[]>;
@@ -68,6 +76,7 @@ export interface IVectorDBOptions {
   inactivityTimeout?: number; // Time in milliseconds after which an inactive index will be offloaded
   enableActivityMonitoring?: boolean; // Whether to monitor activity and auto-offload
   resume?: boolean; // Whether to resume an existing index or create a new one
+  permission?: VectorDBPermission; // Permission level for cross-workspace access
 }
 
 // Interface for document to be added
@@ -462,8 +471,64 @@ export class VectorDBManager extends EventEmitter {
    * @private
    */
   private async hasOffloadedIndex(id: string): Promise<boolean> {
-    const metadataPath = join(this.offloadDirectory, `${id}.metadata.json`);
+    const sanitizedId = this.sanitizeFilename(id);
+    const metadataPath = join(this.offloadDirectory, `${sanitizedId}.metadata.json`);
     return await exists(metadataPath);
+  }
+
+  /**
+   * Auto-load an instance if it's not in memory but exists on disk
+   * @param id Instance ID
+   * @returns Promise resolving to the instance or undefined if not found
+   */
+  public async autoLoadInstance(id: string): Promise<IVectorDBInstance | undefined> {
+    // First check if instance is already in memory
+    let instance = this.getInstance(id);
+    if (instance) {
+      return instance;
+    }
+
+    // Check if there's a saved/offloaded version on disk
+    const hasOffloaded = await this.hasOffloadedIndex(id);
+    if (!hasOffloaded) {
+      return undefined;
+    }
+
+    // Check instance limit before auto-loading
+    if (this.instances.size >= this.maxInstances) {
+      throw new Error(`Cannot auto-load index ${id}: Maximum number of vector database instances (${this.maxInstances}) reached`);
+    }
+
+    try {
+      console.log(`🔄 Auto-loading instance ${id} from disk...`);
+      
+      // Resume from offload
+      instance = await this.resumeFromOffload(id, {});
+      
+      // Store the instance
+      this.instances.set(id, instance);
+      
+      // Set up event forwarding
+      this.setupEventForwarding(instance);
+      
+      // Initialize activity tracking
+      this.updateInstanceActivity(id);
+      
+      // Set up inactivity timeout if specified and activity monitoring is enabled
+      const activityMonitoringEnabled = instance.options.enableActivityMonitoring !== false && this.enableActivityMonitoring;
+      const timeout = instance.options.inactivityTimeout || this.defaultInactivityTimeout;
+      
+      if (activityMonitoringEnabled && timeout && timeout > 0) {
+        this.setupInactivityTimeout(id, timeout);
+      }
+      
+      console.log(`✅ Auto-loaded instance ${id} successfully`);
+      return instance;
+      
+    } catch (error) {
+      console.error(`❌ Failed to auto-load instance ${id}:`, error);
+      throw new Error(`Failed to auto-load instance: ${error}`);
+    }
   }
 
   /**
@@ -474,7 +539,8 @@ export class VectorDBManager extends EventEmitter {
    * @private
    */
   private async resumeFromOffload(id: string, options: IVectorDBOptions = {}): Promise<IVectorDBInstance> {
-    const metadataPath = join(this.offloadDirectory, `${id}.metadata.json`);
+    const sanitizedId = this.sanitizeFilename(id);
+    const metadataPath = join(this.offloadDirectory, `${sanitizedId}.metadata.json`);
     
     try {
       // Read metadata
@@ -612,6 +678,16 @@ export class VectorDBManager extends EventEmitter {
   }
 
   /**
+   * Sanitize file name by replacing problematic characters
+   * @param filename Original filename
+   * @returns Sanitized filename safe for filesystem
+   * @private
+   */
+  private sanitizeFilename(filename: string): string {
+    return filename.replace(/:/g, '_').replace(/[<>:"/\\|?*]/g, '_');
+  }
+
+  /**
    * Offload an instance to disk
    * @param id Instance ID
    * @returns Promise resolving when instance is offloaded
@@ -652,9 +728,10 @@ export class VectorDBManager extends EventEmitter {
         });
       });
       
-      // Create file paths
-      const documentsFile = join(this.offloadDirectory, `${id}.documents.json`);
-      const metadataFile = join(this.offloadDirectory, `${id}.metadata.json`);
+      // Create file paths with sanitized filename
+      const sanitizedId = this.sanitizeFilename(id);
+      const documentsFile = join(this.offloadDirectory, `${sanitizedId}.documents.json`);
+      const metadataFile = join(this.offloadDirectory, `${sanitizedId}.metadata.json`);
       
       // Create metadata
       const metadata: IOffloadedIndexMetadata = {
@@ -665,10 +742,13 @@ export class VectorDBManager extends EventEmitter {
         documentCount: instance.documentCount,
         embeddingDimension: instance.embeddingDimension,
         documentsFile,
-        vectorsFile: join(this.offloadDirectory, `${id}.vectors.bin`),
+        vectorsFile: join(this.offloadDirectory, `${sanitizedId}.vectors.bin`),
         indexFile: documentsFile, // For now, we store documents as the index
         format: "binary_v1"
       };
+      
+      // Ensure offload directory exists
+      await this.ensureOffloadDirectory();
       
       // Write documents to disk
       await this.writeDocumentsJson(documentsFile, documents);
@@ -1077,12 +1157,19 @@ export class VectorDBManager extends EventEmitter {
    * Add documents to a vector database
    * @param instanceId Instance ID
    * @param documents Documents to add
+   * @param requestingNamespace Optional namespace of the requesting user for permission checking
    * @returns Promise resolving when documents are added
    */
-  public async addDocuments(instanceId: string, documents: IDocument[]): Promise<void> {
-    const instance = this.getInstance(instanceId);
+  public async addDocuments(instanceId: string, documents: IDocument[], requestingNamespace?: string): Promise<void> {
+    // Try to get or auto-load the instance
+    let instance = await this.autoLoadInstance(instanceId);
     if (!instance) {
       throw new Error(`Vector database instance ${instanceId} not found`);
+    }
+    
+    // Check permissions if requesting namespace is provided
+    if (requestingNamespace) {
+      this.enforcePermission(instanceId, requestingNamespace, "add");
     }
     
     // Update activity
@@ -1153,16 +1240,24 @@ export class VectorDBManager extends EventEmitter {
    * @param instanceId Instance ID
    * @param query Query text or vector
    * @param options Query options
+   * @param requestingNamespace Optional namespace of the requesting user for permission checking
    * @returns Promise resolving to query results
    */
   public async queryIndex(
     instanceId: string, 
     query: string | number[], 
-    options: IQueryOptions = {}
+    options: IQueryOptions = {},
+    requestingNamespace?: string
   ): Promise<IQueryResult[]> {
-    const instance = this.getInstance(instanceId);
+    // Try to get or auto-load the instance
+    const instance = await this.autoLoadInstance(instanceId);
     if (!instance) {
       throw new Error(`Vector database instance ${instanceId} not found`);
+    }
+    
+    // Check permissions if requesting namespace is provided
+    if (requestingNamespace) {
+      this.enforcePermission(instanceId, requestingNamespace, "read");
     }
     
     // Update activity
@@ -1222,12 +1317,19 @@ export class VectorDBManager extends EventEmitter {
    * Remove documents from a vector database
    * @param instanceId Instance ID
    * @param documentIds Document IDs to remove
+   * @param requestingNamespace Optional namespace of the requesting user for permission checking
    * @returns Promise resolving when documents are removed
    */
-  public async removeDocuments(instanceId: string, documentIds: string[]): Promise<void> {
-    const instance = this.getInstance(instanceId);
+  public async removeDocuments(instanceId: string, documentIds: string[], requestingNamespace?: string): Promise<void> {
+    // Try to get or auto-load the instance
+    const instance = await this.autoLoadInstance(instanceId);
     if (!instance) {
       throw new Error(`Vector database instance ${instanceId} not found`);
+    }
+    
+    // Check permissions if requesting namespace is provided
+    if (requestingNamespace) {
+      this.enforcePermission(instanceId, requestingNamespace, "remove");
     }
     
     // Update activity
@@ -1441,6 +1543,87 @@ export class VectorDBManager extends EventEmitter {
   }
 
   /**
+   * Save an instance to disk without removing it from memory
+   * @param id Instance ID
+   * @returns Promise resolving when instance is saved
+   */
+  public async saveIndex(id: string): Promise<void> {
+    const instance = this.getInstance(id);
+    if (!instance) {
+      throw new Error(`Vector database instance ${id} not found`);
+    }
+    
+    try {
+      console.log(`💾 Saving instance ${id} to disk (keeping in memory)...`);
+      
+      // Get all documents from the worker
+      const documents = await new Promise<IDocument[]>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Get documents timeout during save"));
+        }, 30000);
+        
+        const handler = (event: MessageEvent) => {
+          if (event.data?.type === "GET_DOCUMENTS_RESULT") {
+            instance.worker.removeEventListener('message', handler);
+            clearTimeout(timeout);
+            
+            if (event.data.success) {
+              resolve(event.data.documents);
+            } else {
+              reject(new Error(event.data.error));
+            }
+          }
+        };
+        
+        instance.worker.addEventListener('message', handler);
+        instance.worker.postMessage({
+          type: "GET_DOCUMENTS"
+        });
+      });
+      
+      // Create file paths with sanitized filename
+      const sanitizedId = this.sanitizeFilename(id);
+      const documentsFile = join(this.offloadDirectory, `${sanitizedId}.documents.json`);
+      const metadataFile = join(this.offloadDirectory, `${sanitizedId}.metadata.json`);
+      
+      // Create metadata
+      const metadata: IOffloadedIndexMetadata = {
+        id,
+        created: instance.created,
+        offloadedAt: new Date(),
+        options: instance.options,
+        documentCount: instance.documentCount,
+        embeddingDimension: instance.embeddingDimension,
+        documentsFile,
+        vectorsFile: join(this.offloadDirectory, `${sanitizedId}.vectors.bin`),
+        indexFile: documentsFile, // For now, we store documents as the index
+        format: "binary_v1"
+      };
+      
+      // Ensure offload directory exists
+      await this.ensureOffloadDirectory();
+      
+      // Write documents to disk
+      await this.writeDocumentsJson(documentsFile, documents);
+      
+      // Write vectors to binary format for efficient storage
+      await this.writeVectorsBinary(metadata.vectorsFile, documents, instance.embeddingDimension || 0);
+      
+      // Write metadata to disk
+      await Deno.writeTextFile(metadataFile, JSON.stringify(metadata, null, 2));
+      
+      // Update activity (since this is an active operation)
+      this.updateInstanceActivity(id);
+      
+      console.log(`✅ Instance ${id} saved successfully with ${documents.length} documents (kept in memory)`);
+      
+    } catch (error) {
+      console.error(`❌ Failed to save instance ${id}:`, error);
+      throw new Error(`Failed to save instance: ${error}`);
+    }
+  }
+
+  /**
    * List all offloaded indices
    * @param namespace Optional namespace to filter by
    * @returns Promise resolving to array of offloaded index metadata
@@ -1471,8 +1654,11 @@ export class VectorDBManager extends EventEmitter {
             const metadataContent = await Deno.readTextFile(metadataPath);
             const metadata: IOffloadedIndexMetadata = JSON.parse(metadataContent);
             
-            // Extract namespace from ID if present
-            const namespaceMatch = metadata.id.match(/^([^:]+):/);
+            // Use the original ID from metadata (not the sanitized filename)
+            const originalId = metadata.id;
+            
+            // Extract namespace from original ID if present
+            const namespaceMatch = originalId.match(/^([^:]+):/);
             const extractedNamespace = namespaceMatch ? namespaceMatch[1] : undefined;
             
             // Filter by namespace if specified
@@ -1481,7 +1667,7 @@ export class VectorDBManager extends EventEmitter {
             }
             
             offloadedIndices.push({
-              id: metadata.id,
+              id: originalId,
               created: new Date(metadata.created),
               offloadedAt: new Date(metadata.offloadedAt),
               documentCount: metadata.documentCount,
@@ -1511,7 +1697,8 @@ export class VectorDBManager extends EventEmitter {
    */
   public async deleteOffloadedIndex(id: string): Promise<void> {
     try {
-      const metadataPath = join(this.offloadDirectory, `${id}.metadata.json`);
+      const sanitizedId = this.sanitizeFilename(id);
+      const metadataPath = join(this.offloadDirectory, `${sanitizedId}.metadata.json`);
       
       // Check if metadata file exists
       if (!(await exists(metadataPath))) {
@@ -1827,5 +2014,84 @@ export class VectorDBManager extends EventEmitter {
       providersInUse,
       providerUsage
     };
+  }
+
+  /**
+   * Extract namespace from instance ID
+   * @param id Instance ID in format "namespace:id" or just "id"
+   * @returns Namespace or undefined if not namespaced
+   * @private
+   */
+  private extractNamespace(id: string): string | undefined {
+    const namespaceMatch = id.match(/^([^:]+):/);
+    return namespaceMatch ? namespaceMatch[1] : undefined;
+  }
+
+  /**
+   * Check if an operation is allowed based on permissions
+   * @param instanceId Instance ID
+   * @param requestingNamespace Namespace of the requesting user
+   * @param operation Operation type: "read", "add", "remove"
+   * @returns True if operation is allowed
+   */
+  public checkPermission(instanceId: string, requestingNamespace: string, operation: "read" | "add" | "remove"): boolean {
+    const instance = this.getInstance(instanceId);
+    if (!instance) {
+      return false;
+    }
+
+    const instanceNamespace = this.extractNamespace(instanceId);
+    
+    // If instance has no namespace or requesting user has no namespace, default to private
+    if (!instanceNamespace || !requestingNamespace) {
+      return false;
+    }
+
+    // Owner always has access
+    if (instanceNamespace === requestingNamespace) {
+      return true;
+    }
+
+    // Check permissions for cross-workspace access
+    const permission = instance.options.permission || VectorDBPermission.PRIVATE;
+
+    switch (permission) {
+      case VectorDBPermission.PRIVATE:
+        return false;
+      
+      case VectorDBPermission.PUBLIC_READ:
+        return operation === "read";
+      
+      case VectorDBPermission.PUBLIC_READ_ADD:
+        return operation === "read" || operation === "add";
+      
+      case VectorDBPermission.PUBLIC_READ_WRITE:
+        return operation === "read" || operation === "add" || operation === "remove";
+      
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Check permission and throw error if not allowed
+   * @param instanceId Instance ID
+   * @param requestingNamespace Namespace of the requesting user
+   * @param operation Operation type
+   * @throws Error if permission denied
+   * @private
+   */
+  private enforcePermission(instanceId: string, requestingNamespace: string, operation: "read" | "add" | "remove"): void {
+    if (!this.checkPermission(instanceId, requestingNamespace, operation)) {
+      const instanceNamespace = this.extractNamespace(instanceId);
+      const instance = this.getInstance(instanceId);
+      const permission = instance?.options.permission || VectorDBPermission.PRIVATE;
+      
+      throw new Error(
+        `Access denied: Cannot ${operation} on vector index ${instanceId}. ` +
+        `Index is in workspace '${instanceNamespace}' with permission '${permission}', ` +
+        `but request is from workspace '${requestingNamespace}'.`
+      );
+    }
   }
 } 

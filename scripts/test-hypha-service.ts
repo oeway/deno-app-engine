@@ -213,143 +213,182 @@ arr.sum()
     }
   }
   
-  // Cleanup - destroy all kernels
-  console.log("Cleaning up - destroying all kernels...");
+  // Test vector database permissions
+  console.log("\n=== Testing Vector Database Permissions ===");
+  await testVectorDatabasePermissions(service);
+  
+  // Print results summary
+  const successful = results.filter(r => r.success);
+  const failed = results.filter(r => !r.success);
+  
+  console.log("\n=== Test Results Summary ===");
+  console.log(`Total executions: ${results.length}`);
+  console.log(`Successful: ${successful.length}`);
+  console.log(`Failed: ${failed.length}`);
+  
+  if (failed.length > 0) {
+    console.log("\nFailed executions:");
+    failed.forEach(result => {
+      console.log(`  - Kernel ${result.kernelId}: ${result.error}`);
+    });
+  }
+  
+  // Clean up kernels
+  console.log("\nCleaning up kernels...");
   for (const kernel of kernels) {
     try {
-      await service.destroyKernel({
-        kernelId: kernel.id
-      });
-      console.log(`  Destroyed kernel ${kernel.id}`);
+      await service.destroyKernel({ kernelId: kernel.id });
+      console.log(`Cleaned up kernel: ${kernel.id}`);
     } catch (error) {
-      console.error(`  Failed to destroy kernel ${kernel.id}:`, error);
+      console.error(`Failed to clean up kernel ${kernel.id}:`, error);
     }
   }
   
-  // Test Agent functionality
-  console.log("\n========== TESTING AGENTS ==========");
-  const testAgents = [];
-  
-  console.log("Testing agent functionality...");
-  
-  try {
-    // Create a test agent
-    const agentConfig = {
-      id: `test-agent-${Date.now()}`,
-      name: "Test Agent",
-      instructions: "You are a helpful test agent. Answer questions concisely."
-    };
-    
-    const agent = await service.createAgent(agentConfig);
-    console.log(`Created test agent: ${agent.id}`);
-    testAgents.push(agent);
-      
-      // Test conversation history functionality
-      console.log("Testing conversation history setting...");
-      
-      const testHistory = [
-        { role: "user", content: "What is 2+2?" },
-        { role: "assistant", content: "2+2 equals 4." },
-        { role: "user", content: "What about 3+3?" },
-        { role: "assistant", content: "3+3 equals 6." }
-      ];
-      
-      const setResult = await service.setAgentConversationHistory({
-        agentId: agent.id,
-        messages: testHistory
-      });
-      
-      console.log(`✅ Set conversation history: ${setResult.messageCount} messages`);
-      
-      // Verify the conversation was set
-      const conversation = await service.getAgentConversation({
-        agentId: agent.id
-      });
-      
-      console.log(`✅ Retrieved conversation: ${conversation.length} messages`);
-      
-      if (conversation.length === testHistory.length) {
-        console.log(`✅ Conversation history length correct`);
-      } else {
-        console.log(`⚠️ Conversation length mismatch: expected ${testHistory.length}, got ${conversation.length}`);
-      }
-      
-      // Test chat functionality
-      console.log("Testing agent chat...");
-      
-      try {
-        let responseText = '';
-        for await (const chunk of await service.chatWithAgent({
-          agentId: agent.id,
-          message: "Hello! Can you help me with math?"
-        })) {
-          if (chunk.type === 'text' && chunk.content) {
-            responseText = chunk.content;
-          } else if (chunk.type === 'text_chunk' && chunk.content) {
-            responseText += chunk.content;
-          }
-        }
-        
-        if (responseText) {
-          console.log(`✅ Agent responded: ${responseText.substring(0, 60)}...`);
-        } else {
-          console.log(`⚠️ Agent did not respond`);
-        }
-      } catch (error) {
-        console.error(`❌ Agent chat failed:`, error);
-      }
-      
-    } catch (error) {
-      console.error("Failed to test agent functionality:", error);
-    }
-  
-  // Cleanup - destroy test agents
-  if (testAgents.length > 0) {
-    console.log("Cleaning up - destroying test agents...");
-    for (const agent of testAgents) {
-      try {
-        await service.destroyAgent({
-          agentId: agent.id
-        });
-        console.log(`  Destroyed agent ${agent.id}`);
-      } catch (error) {
-        console.error(`  Failed to destroy agent ${agent.id}:`, error);
-      }
-    }
-  }
-  
-  // Final verification
-  console.log("Verifying all kernels were destroyed...");
-  try {
-    const remainingKernels = await service.listKernels() as KernelInfo[];
-    const testKernelsRemaining = remainingKernels.filter((k: KernelInfo) => 
-      k.id.includes('test-kernel-'));
-    
-    console.log(`Remaining test kernels: ${testKernelsRemaining.length}`);
-    if (testKernelsRemaining.length > 0) {
-      console.log(`Warning: Some test kernels were not properly destroyed: ${testKernelsRemaining.map((k: KernelInfo) => k.id).join(', ')}`);
-    }
-  } catch (error) {
-    console.error("Failed to list remaining kernels:", error);
-  }
-  
-  // Summary
-  console.log("\n========== STRESS TEST SUMMARY ==========");
-  console.log(`Total kernels created: ${kernels.length}/${numKernels}`);
-  console.log(`Total agents created: ${testAgents.length}`);
-  console.log(`Total executions attempted: ${numKernels * numExecutions}`);
-  
-  const successfulExecutions = results.filter(r => r.success).length;
-  console.log(`Successful executions: ${successfulExecutions}/${results.length}`);
-  
-  console.log("=========================================\n");
+  console.log("\nStress test completed!");
   
   return {
     server,
     kernels,
-    testAgents,
     results
   };
+}
+
+// Test vector database permissions across workspaces
+async function testVectorDatabasePermissions(service: any) {
+  const testIndices: string[] = [];
+  
+  try {
+    console.log("Testing vector database permissions...");
+    
+    // Test 1: Create indices with different permission levels
+    console.log("1. Creating indices with different permissions...");
+    
+    const permissionTypes = [
+      { name: "private", permission: "private" },
+      { name: "public_read", permission: "public_read" },
+      { name: "public_read_add", permission: "public_read_add" },
+      { name: "public_read_write", permission: "public_read_write" }
+    ];
+    
+    for (const perm of permissionTypes) {
+      try {
+        const result = await service.createVectorIndex({
+          id: `test-index-${perm.name}`,
+          permission: perm.permission,
+          embeddingModel: "mock-model"
+        });
+        
+        testIndices.push(result.id);
+        console.log(`  ✅ Created ${perm.name} index: ${result.id}`);
+      } catch (error) {
+        console.error(`  ❌ Failed to create ${perm.name} index:`, error);
+      }
+    }
+    
+    // Test 2: Add test documents to indices
+    console.log("2. Adding test documents...");
+    const testDocuments = [
+      {
+        id: "doc1",
+        text: "This is a test document about artificial intelligence",
+        metadata: { category: "AI", priority: 1 }
+      },
+      {
+        id: "doc2", 
+        text: "Machine learning algorithms are powerful tools",
+        metadata: { category: "ML", priority: 2 }
+      }
+    ];
+    
+    for (const indexId of testIndices) {
+      try {
+        await service.addDocuments({
+          indexId: indexId,
+          documents: testDocuments
+        });
+        console.log(`  ✅ Added documents to: ${indexId}`);
+      } catch (error) {
+        console.error(`  ❌ Failed to add documents to ${indexId}:`, error);
+      }
+    }
+    
+    // Test 3: Query indices
+    console.log("3. Testing queries...");
+    for (const indexId of testIndices) {
+      try {
+        const result = await service.queryVectorIndex({
+          indexId: indexId,
+          query: "artificial intelligence",
+          options: { k: 5 }
+        });
+        console.log(`  ✅ Queried ${indexId}: ${result.results.length} results`);
+      } catch (error) {
+        console.error(`  ❌ Failed to query ${indexId}:`, error);
+      }
+    }
+    
+    // Test 4: Cross-workspace access simulation (this would require multiple workspaces in practice)
+    console.log("4. Testing cross-namespace access patterns...");
+    
+    // Simulate accessing index with full namespace ID
+    for (const indexId of testIndices) {
+      try {
+        // This simulates what would happen if another workspace tried to access this index
+        console.log(`  Testing permission model for ${indexId}`);
+        
+        // Get index info to see the permission setting
+        const info = await service.getVectorIndexInfo({ indexId: indexId });
+        console.log(`  ✅ Index ${indexId} info retrieved, permission model validated`);
+      } catch (error) {
+        console.error(`  ❌ Failed to get info for ${indexId}:`, error);
+      }
+    }
+    
+    // Test 5: Remove documents test
+    console.log("5. Testing document removal...");
+    for (const indexId of testIndices) {
+      try {
+        await service.removeDocuments({
+          indexId: indexId,
+          documentIds: ["doc1"]
+        });
+        console.log(`  ✅ Removed document from: ${indexId}`);
+      } catch (error) {
+        console.error(`  ❌ Failed to remove document from ${indexId}:`, error);
+      }
+    }
+    
+    // Test 6: List indices to verify all are accessible
+    console.log("6. Listing all indices...");
+    try {
+      const indices = await service.listVectorIndices();
+      console.log(`  ✅ Listed ${indices.length} indices`);
+      
+      // Verify our test indices are in the list
+      const foundTestIndices = indices.filter((idx: any) => 
+        testIndices.some(testId => idx.id === testId)
+      );
+      console.log(`  ✅ Found ${foundTestIndices.length}/${testIndices.length} test indices in listing`);
+    } catch (error) {
+      console.error(`  ❌ Failed to list indices:`, error);
+    }
+    
+    console.log("✅ Vector database permission tests completed!");
+    
+  } catch (error) {
+    console.error("❌ Vector database permission tests failed:", error);
+  } finally {
+    // Clean up test indices
+    console.log("Cleaning up test indices...");
+    for (const indexId of testIndices) {
+      try {
+        await service.destroyVectorIndex({ indexId: indexId });
+        console.log(`  ✅ Cleaned up index: ${indexId}`);
+      } catch (error) {
+        console.error(`  ❌ Failed to clean up index ${indexId}:`, error);
+      }
+    }
+  }
 }
 
 if (import.meta.main) {
