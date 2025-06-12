@@ -6,8 +6,6 @@ import { VectorDBManager, VectorDBEvents, type IDocument, type IQueryOptions } f
 import { ensureDir, exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
 import { join } from "https://deno.land/std@0.208.0/path/mod.ts";
 
-// Import fake-indexeddb polyfill for tests
-import "npm:fake-indexeddb/auto";
 
 // Test configuration
 const TEST_CONFIG = {

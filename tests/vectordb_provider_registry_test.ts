@@ -13,8 +13,6 @@ import {
   createOllamaEmbeddingProvider
 } from "../vectordb/mod.ts";
 
-// Import fake-indexeddb polyfill for tests
-import "npm:fake-indexeddb/auto";
 
 // Test configuration
 const TEST_CONFIG = {

@@ -1,9 +1,6 @@
 // Vector Database Worker
 // This worker handles vector database operations using Voy
 
-// Import fake-indexeddb polyfill for IndexedDB API
-import "npm:fake-indexeddb/auto";
-
 // Import the Voy search engine
 import { Voy } from "./voy_search.js";
 
