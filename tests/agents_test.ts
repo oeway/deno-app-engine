@@ -1139,6 +1139,123 @@ Deno.test("Agents Module - Conversation History Setting", async () => {
   }
 });
 
+// Test naked response handling improvements
+Deno.test("Agents Module - Naked Response Handling", async () => {
+  console.log("🧪 Testing naked response handling...");
+  await cleanupTestData();
+
+  // Check if Ollama is available first
+  const ollamaAvailable = await isOllamaAvailable();
+  if (!ollamaAvailable) {
+    console.log("⚠️  Ollama not available, skipping naked response handling test");
+    return;
+  }
+
+  const agentManager = new AgentManager({
+    defaultModelSettings: OLLAMA_CONFIG,
+    agentDataDirectory: TEST_DATA_DIR,
+    defaultMaxSteps: 3 // Limit steps to prevent hanging
+  });
+
+  // Create an agent with specific instructions
+  const agentId = await agentManager.createAgent({
+    id: "naked-response-agent",
+    name: "Naked Response Test Agent",
+    description: "Agent for testing naked response handling",
+    instructions: `You are a test assistant. Respond with brief, simple answers. When asked to use tags, respond with <returnToUser>Test complete</returnToUser>.`
+  });
+
+  const agent = agentManager.getAgent(agentId)!;
+  assertExists(agent);
+
+  try {
+    // Test conversation that should trigger naked response handling
+    const messages = [{
+      role: "user" as const,
+      content: "Say hello briefly"
+    }];
+
+    let conversationSteps = 0;
+    let finalResponse = "";
+    let guidanceInjected = false;
+    let hasError = false;
+
+    console.log("🚀 Starting naked response test conversation...");
+
+    // Add timeout to prevent hanging
+    let timeoutId: number | undefined;
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("Test timeout after 15 seconds")), 15000);
+    });
+
+    const chatPromise = (async () => {
+      for await (const chunk of agent.chatCompletion(messages)) {
+        if (chunk.type === 'text_chunk' && chunk.content) {
+          finalResponse += chunk.content;
+        } else if (chunk.type === 'text' && chunk.content) {
+          finalResponse = chunk.content;
+          conversationSteps++;
+          console.log(`📝 Step ${conversationSteps}: ${chunk.content.substring(0, 50)}...`);
+          
+          // Check for proper conversation ending
+          if (chunk.content.includes('<returnToUser>')) {
+            console.log("✅ ReturnToUser tag detected - conversation ending properly");
+            break;
+          }
+          
+        } else if (chunk.type === 'error') {
+          console.error("❌ Error in naked response test:", chunk.error);
+          hasError = true;
+          break;
+        }
+      }
+    })();
+
+    // Race between chat completion and timeout
+    try {
+      await Promise.race([chatPromise, timeoutPromise]);
+    } finally {
+      // Clean up timeout to prevent leaks
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    console.log(`📊 Conversation completed with ${conversationSteps} steps`);
+    console.log(`📊 Final response: ${finalResponse}`);
+
+    // Test assertions based on expected behavior
+    assert(!hasError, "Should not have encountered errors during conversation");
+    assert(conversationSteps >= 1, "Should have at least one conversation step");
+    assert(conversationSteps <= 5, "Should not exceed reasonable step limit");
+    assert(finalResponse.length > 0, "Should have received a final response");
+    
+    // Verify conversation history was updated (may have 1 or more messages depending on completion timing)
+    assert(agent.conversationHistory.length >= 1, "Conversation history should be updated with at least user message");
+
+    console.log("✅ Naked response handling test completed successfully");
+    console.log("✅ Verification: Conversation did not hang and completed within timeout");
+
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message.includes("Test timeout")) {
+        console.error("❌ Test failed: Conversation hung and timed out");
+        console.error("🐛 This indicates the naked response handling fix may have introduced an infinite loop");
+        throw error;
+      } else if (error.message.includes("Connection error") || 
+                 error.message.includes("Connection refused") ||
+                 error.message.includes("ECONNREFUSED") || 
+                 error.message.includes("404")) {
+        console.log("⚠️  Ollama not available during test execution");
+        return;
+      }
+    }
+    throw error;
+  }
+
+  await cleanupTestData();
+});
+
 console.log("🧪 Agents module tests completed. Run with: deno test -A --no-check tests/agents_test.ts");
 
 // Test the agent ID consistency fix - namespace agent autosave issue

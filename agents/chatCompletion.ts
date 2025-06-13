@@ -158,16 +158,16 @@ export async function* chatCompletion({
       dangerouslyAllowBrowser: true
     });
 
-    let loopCount = 0;
+      let loopCount = 0;
+  let lastResponseContent = ''; // Track last response to detect infinite loops
 
-    while (loopCount < maxSteps) {
+  while (loopCount < maxSteps) {
       // Check if abort signal was triggered
       if (signal.aborted) {
         console.log('Chat completion aborted by user');
         return;
       }
 
-      loopCount++;
       const fullMessages = systemPrompt
         ? [{ role: 'system' as const, content: systemPrompt }, ...messages]
         : messages;
@@ -300,6 +300,23 @@ export async function* chatCompletion({
 
         // Log the assistant response for debugging (similar to how user queries are logged)
         console.log('DEBUG: assistant response', completionId, 'content:', accumulatedResponse.slice(0, 200) + (accumulatedResponse.length > 200 ? '...' : ''));
+
+        // Check for infinite loop - if we get the same response twice in a row, break out
+        if (accumulatedResponse.trim() === lastResponseContent.trim() && accumulatedResponse.trim().length > 0) {
+          console.warn('DEBUG: Detected potential infinite loop - same response repeated');
+          console.warn('DEBUG: Response content:', accumulatedResponse.trim().slice(0, 100));
+          
+          // Force a returnToUser to break the loop
+          if(onMessage){
+            onMessage(completionId, `Detected repeated response pattern. Ending conversation to prevent infinite loop.`, []);
+          }
+          yield {
+            type: 'text',
+            content: `Detected repeated response pattern. Ending conversation to prevent infinite loop.`
+          };
+          break;
+        }
+        lastResponseContent = accumulatedResponse;
 
       } catch (error) {
         console.error('Error connecting to LLM API:', error);
@@ -460,24 +477,58 @@ export async function* chatCompletion({
                                 accumulatedResponse.includes('<script') ||
                                 accumulatedResponse.includes('<returnToUser');
           
-          if (!hasSpecialTags) {
-            // Plain text response without any special tags - treat as final
-            if(onMessage){
-              onMessage(completionId, accumulatedResponse, []);
-            }
-            yield {
-              type: 'text',
+          if (!hasSpecialTags && accumulatedResponse.trim().length > 0) {
+            // Plain text response without any special tags - inject guidance message
+            console.log('DEBUG: Detected naked response without proper tags, injecting guidance message');
+            
+            // Add the assistant's response to the conversation
+            messages.push({
+              role: 'assistant',
               content: accumulatedResponse
+            });
+            
+            // Inject user message with guidance about proper tag usage
+            const guidanceMessage = 'Please continue your response with proper tags. Available tags:\n' +
+                        '- <thoughts>your analysis</thoughts> - for planning and analysis\n' +
+                        '- <py-script id="unique_id">python_code</py-script> - for Python code execution\n' +
+                        '- <t-script id="unique_id">typescript_code</t-script> - for TypeScript/JavaScript code execution\n' +
+                        '- <returnToUser commit="id1,id2">final_response</returnToUser> - for final answers\n';
+            
+            messages.push({
+              role: 'user',
+              content: guidanceMessage
+            });
+            
+            // Yield progress indicator so consumer knows we're still active
+            yield {
+              type: 'text_chunk',
+              content: '' // Empty chunk to indicate processing
             };
-            return; // End the conversation naturally
+            
+            // Continue the loop to get a proper response with tags
+            continue; // Explicitly continue to next iteration
           } else {
             // Has special tags but no executable content - add reminder
             messages.push({
               role: 'assistant',
               content: `<thoughts>${accumulatedResponse} (Reminder: I need to use appropriate script tags to execute code or \`returnToUser\` tag with commit property to conclude the session)</thoughts>`
             });
+            
+            // Continue to next iteration
+            continue;
+          }
+          
+          // If we have an empty response, skip this iteration entirely
+          if (accumulatedResponse.trim().length === 0) {
+            console.log('DEBUG: Skipping empty response - not adding to messages');
+            // Don't add empty responses to messages array - just continue
+            continue;
           }
         }
+        
+        // Only count this as a step if we processed meaningful content
+        loopCount++;
+        
         // add a reminder message if we are approaching the max steps
         if(loopCount >= maxSteps - 2){
           messages.push({
