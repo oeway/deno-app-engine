@@ -1472,6 +1472,12 @@ async function startHyphaService(options: {
         const exists = agentManager.agentExists(validAgentId);
         return { exists };
       } catch (error) {
+        // If the error is due to access denied (namespace mismatch), return false
+        if (error instanceof Error && error.message.includes('Access denied')) {
+          console.log(`Agent ${agentId} not accessible in workspace ${context.ws}`);
+          return { exists: false };
+        }
+        // For other errors, still throw
         console.error("Error checking agent existence:", error);
         throw error;
       }
