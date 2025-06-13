@@ -820,67 +820,82 @@ Deno.test("Agents Module - Startup Script Error Handling", async () => {
   manager.setKernelManager(kernelManager);
   
   try {
-    // Create an agent with a startup script that will fail
-    const agentId = await manager.createAgent({
-      id: "startup-error-agent",
-      name: "Startup Error Agent",
-      instructions: "You are a test agent with a broken startup script.",
-      kernelType: KernelType.PYTHON,
-      startupScript: `
+    // Test that creating an agent with a failing startup script throws an error immediately
+    let createAgentFailed = false;
+    let thrownError: any = null;
+    
+    try {
+      await manager.createAgent({
+        id: "startup-error-agent",
+        name: "Startup Error Agent",
+        instructions: "You are a test agent with a broken startup script.",
+        kernelType: KernelType.PYTHON,
+        startupScript: `
 # This startup script contains a deliberate error
 print("Starting initialization...")
 undefined_variable = some_undefined_function()  # This will cause a NameError
 print("This should never be reached")
+        `,
+        autoAttachKernel: true
+      });
+      
+      // Should not reach here - createAgent should have thrown
+      assert(false, "createAgent should have thrown startup error immediately");
+    } catch (error) {
+      createAgentFailed = true;
+      thrownError = error;
+    }
+    
+    // Verify that createAgent threw the startup error immediately
+    assert(createAgentFailed, "createAgent should have failed with startup error");
+    assert(thrownError instanceof Error, "Should throw an error");
+    assertEquals(thrownError.name, "AgentStartupError");
+    assert(thrownError.message.includes("Startup script failed"), "Error message should mention startup script failure");
+    
+    // Type assertion to access AgentStartupError properties
+    const startupErrorCast = thrownError as any; // Cast to access fullError property
+    assert(startupErrorCast.fullError.includes("NameError"), "Error should contain NameError");
+    assert(startupErrorCast.fullError.includes("some_undefined_function"), "Error should mention the undefined function");
+    assert(startupErrorCast.fullError.includes("Startup Script:"), "Error should include the startup script");
+    
+    console.log("✅ createAgent correctly threw startup error immediately:", thrownError.message);
+    console.log("📋 Full error details:", startupErrorCast.fullError);
+    
+    // Test that we can still create agents with valid startup scripts
+    const validAgentId = await manager.createAgent({
+      id: "valid-startup-agent",
+      name: "Valid Startup Agent",
+      instructions: "You are a test agent with a working startup script.",
+      kernelType: KernelType.PYTHON,
+      startupScript: `
+# This startup script should work fine
+import math
+print("Startup completed successfully!")
+print(f"Pi is approximately {math.pi:.4f}")
       `,
       autoAttachKernel: true
     });
     
-    const agent = manager.getAgent(agentId);
-    assert(agent, "Agent should be created");
+    const validAgent = manager.getAgent(validAgentId);
+    assert(validAgent, "Valid agent should be created");
     
-    // Wait a moment for startup script to execute and fail
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    // Wait a moment for startup script to complete
+    await new Promise(resolve => setTimeout(resolve, 2000));
     
-    // Check that startup error is captured
-    const startupError = agent.getStartupError();
-    assert(startupError, "Agent should have a startup error");
-    assertEquals(startupError.name, "AgentStartupError");
-    assert(startupError.fullError.includes("NameError"), "Error should contain NameError");
-    assert(startupError.fullError.includes("some_undefined_function"), "Error should mention the undefined function");
-    assert(startupError.fullError.includes("Startup Script:"), "Error should include the startup script");
+    // Check that there's no startup error for the valid agent
+    const startupError = validAgent.getStartupError();
+    assertEquals(startupError, undefined, "Valid agent should not have startup error");
     
-    console.log("✅ Startup error captured:", startupError.message);
-    console.log("📋 Full error details:", startupError.fullError);
+    console.log("✅ Valid startup script executed without error");
     
-    // Test that chatCompletion throws the startup error
-    try {
-      const chatGenerator = agent.chatCompletion([
-        { role: "user", content: "Hello, can you help me?" }
-      ]);
-      
-      // Try to get first chunk - this should throw
-      for await (const chunk of chatGenerator) {
-        // Should never reach here
-        assert(false, "Chat should have thrown startup error");
-        break;
-      }
-      
-      assert(false, "Chat should have thrown startup error");
-    } catch (error) {
-      assert(error instanceof Error, "Should throw an error");
-      assertEquals(error.name, "AgentStartupError");
-      assert(error.message.includes("Startup script failed"), "Error message should mention startup script failure");
-      console.log("✅ Chat correctly threw startup error:", error.message);
-    }
-    
-    // Test listing agents shows startup error flag
+    // Test listing agents shows correct startup flags
     const agentList = manager.listAgents();
-    const agentInfo = agentList.find(a => a.id === agentId);
-    assert(agentInfo, "Agent should be in list");
-    assertEquals(agentInfo.hasStartupError, true, "Agent should be flagged as having startup error");
-    assertEquals(agentInfo.hasStartupScript, true, "Agent should be flagged as having startup script");
+    const validAgentInfo = agentList.find(a => a.id === validAgentId);
+    assert(validAgentInfo, "Valid agent should be in list");
+    assertEquals(validAgentInfo.hasStartupError, false, "Valid agent should not be flagged as having startup error");
+    assertEquals(validAgentInfo.hasStartupScript, true, "Valid agent should be flagged as having startup script");
     
-    console.log("✅ Agent list correctly shows startup error flag");
+    console.log("✅ Agent list correctly shows startup script flags");
     
   } finally {
     await manager.destroyAll();
@@ -996,55 +1011,39 @@ Deno.test("Agents Module - Stateless Chat with Startup Error", async () => {
   manager.setKernelManager(kernelManager);
   
   try {
-    // Create an agent with a startup script that will fail
-    const agentId = await manager.createAgent({
-      id: "stateless-startup-error-agent",
-      name: "Stateless Startup Error Agent",
-      instructions: "You are a test agent with a broken startup script.",
-      kernelType: KernelType.PYTHON,
-      startupScript: `
+    // Test that creating an agent with a failing startup script throws an error immediately
+    let createAgentFailed = false;
+    let thrownCreateError: any = null;
+    
+    try {
+      await manager.createAgent({
+        id: "stateless-startup-error-agent",
+        name: "Stateless Startup Error Agent",
+        instructions: "You are a test agent with a broken startup script.",
+        kernelType: KernelType.PYTHON,
+        startupScript: `
 # This startup script contains an error
 print("Starting initialization...")
 undefined_variable = some_undefined_function()  # This will cause a NameError
 print("This should never be reached")
-      `,
-      autoAttachKernel: true
-    });
-    
-    const agent = manager.getAgent(agentId);
-    assert(agent, "Agent should be created");
-    
-    // Wait a moment for startup script to execute and fail
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Verify the startup error was captured
-    const startupError = agent.getStartupError();
-    assert(startupError, "Startup error should be captured");
-    assert(startupError.message.includes("some_undefined_function"), "Error message should contain function name");
-    
-    // Test that stateless chat completion also throws the startup error
-    const testMessages = [
-      { role: "user" as const, content: "Hello!" }
-    ];
-    
-    let errorThrown = false;
-    let thrownError: any = null;
-    
-    try {
-      for await (const chunk of agent.statelessChatCompletion(testMessages)) {
-        // Should not reach here - error should be thrown immediately
-      }
+        `,
+        autoAttachKernel: true
+      });
+      
+      // Should not reach here - createAgent should have thrown
+      assert(false, "createAgent should have thrown startup error immediately");
     } catch (error) {
-      errorThrown = true;
-      thrownError = error;
+      createAgentFailed = true;
+      thrownCreateError = error;
     }
     
-    // Verify that stateless chat completion correctly throws the startup error
-    assert(errorThrown, "Stateless chat completion should throw startup error");
-    assert(thrownError instanceof Error, "Thrown error should be an Error instance");
-    assert(thrownError.message.includes("some_undefined_function"), "Thrown error should contain startup error details");
+    // Verify that createAgent threw the startup error immediately
+    assert(createAgentFailed, "createAgent should have failed with startup error");
+    assert(thrownCreateError instanceof Error, "Should throw an error");
+    assertEquals(thrownCreateError.name, "AgentStartupError");
+    assert(thrownCreateError.message.includes("some_undefined_function"), "Error message should contain function name");
     
-    console.log(`✅ Stateless chat correctly threw startup error: ${thrownError.message.substring(0, 100)}...`);
+    console.log(`✅ createAgent correctly threw startup error immediately: ${thrownCreateError.message.substring(0, 100)}...`);
     
   } finally {
     await manager.destroyAll();

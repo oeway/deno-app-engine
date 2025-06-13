@@ -440,25 +440,39 @@ len(results)
       // Test 4.3: Test startup script error handling 
       console.log("   → Testing startup script error handling...");
       
-      const errorAgent = await service.createAgent({
-        id: "error-test-agent",
-        name: "Error Test Agent", 
-        description: "Agent for testing startup script errors",
-        instructions: "Test agent",
-        kernelType: "PYTHON",
-        autoAttachKernel: true,
-        startupScript: `
+      // Test that creating an agent with a failing startup script throws an error immediately
+      let createAgentFailed = false;
+      let thrownError: any = null;
+      
+      try {
+        await service.createAgent({
+          id: "error-test-agent",
+          name: "Error Test Agent", 
+          description: "Agent for testing startup script errors",
+          instructions: "Test agent",
+          kernelType: "PYTHON",
+          autoAttachKernel: true,
+          startupScript: `
 # This startup script contains a deliberate error
 undefined_variable = some_undefined_function()  # This will cause a NameError
 `
-      });
+        });
+        
+        // Should not reach here - createAgent should have thrown
+        assert(false, "createAgent should have thrown startup error immediately");
+      } catch (error) {
+        createAgentFailed = true;
+        thrownError = error;
+      }
       
-      assertExists(errorAgent.id, "Error agent should be created");
-      assert(errorAgent.hasStartupError, "Agent should have startup error");
-      console.log(`   ✅ Created agent with startup error: ${errorAgent.id}`);
+      // Verify that createAgent threw the startup error immediately
+      assert(createAgentFailed, "createAgent should have failed with startup error");
+      assert(thrownError instanceof Error, "Should throw an error");
+      assert(thrownError.message.includes("some_undefined_function"), "Error message should contain function name");
+      console.log(`   ✅ createAgent correctly threw startup error immediately: ${thrownError.message.substring(0, 100)}...`);
       
       // Store agent IDs for cleanup
-      agentsToCleanup = [basicAgent.id, errorAgent.id];
+      agentsToCleanup = [basicAgent.id]; // errorAgent creation failed, so no cleanup needed
       
     } else {
       // Test 4.1: Create research assistant agent

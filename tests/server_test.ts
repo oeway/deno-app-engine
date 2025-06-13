@@ -1121,36 +1121,23 @@ Deno.test({
       autoAttachKernel: true
     };
     
-    const errorAgent = await makeRequest("/agents", "POST", errorAgentData);
-    assertExists(errorAgent.id);
-    
-    // Wait for startup script execution and error capture
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Check agent status for startup error
-    const errorAgentInfo = await makeRequest(`/agents/${errorAgent.id}`);
-    assertEquals(errorAgentInfo.hasStartupError, true);
-    assertExists(errorAgentInfo.startupError);
-    assertExists(errorAgentInfo.startupError.message);
-    
-    console.log(`  ✅ Startup error captured: ${errorAgentInfo.startupError.message}`);
-    
-    // Test that chat fails due to startup error
+    // Test that agent creation fails immediately due to startup script error
     try {
-      const errorChatResponse = await fetch(`http://localhost:8001/api/agents/${errorAgent.id}/chat`, {
+      const errorAgentResponse = await fetch("http://localhost:8001/api/agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "Hello" }),
+        body: JSON.stringify(errorAgentData),
       });
       
-      assertEquals(errorChatResponse.status, 500, "Chat should fail due to startup error");
-      console.log("  ✅ Chat correctly failed due to startup error");
+      // Agent creation should fail with startup script error
+      assertEquals(errorAgentResponse.status, 500, "Agent creation should fail due to startup script error");
+      const errorResult = await errorAgentResponse.json();
+      assert(errorResult.error.includes("import nonexistent_module") || errorResult.error.includes("ModuleNotFoundError"), "Error should mention startup script failure");
+      
+      console.log(`  ✅ Agent creation correctly failed due to startup script error: ${errorResult.error.substring(0, 100)}...`);
     } catch (error) {
-      console.log("  ✅ Chat correctly failed due to startup error");
+      console.log("  ✅ Agent creation correctly failed due to startup script error");
     }
-    
-    // Clean up error agent
-    await makeRequest(`/agents/${errorAgent.id}`, "DELETE");
     
     // Test: Namespace support in agent creation  
     console.log("  → Testing namespace support...");

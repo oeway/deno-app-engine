@@ -1617,22 +1617,24 @@ export class Agent implements IAgentInstance {
       try {
         await this.executeStartupScript();
         
-        // If startup script failed, emit error but don't throw here
-        // The error will be thrown when user tries to chat with the agent
+        // If startup script failed, throw the error immediately so it propagates to createAgent
         if (this.startupError) {
           this.manager.emit(AgentEvents.AGENT_ERROR, {
             agentId: this.id,
             error: this.startupError,
             context: 'startup_script_execution'
           });
+          throw this.startupError;
         }
       } catch (error) {
         console.error(`Failed to execute startup script for agent ${this.id}:`, error);
+        const startupError = error instanceof AgentStartupError ? error : new Error(`Startup script execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         this.manager.emit(AgentEvents.AGENT_ERROR, {
           agentId: this.id,
-          error: new Error(`Startup script execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`),
+          error: startupError,
           context: 'startup_script_execution'
         });
+        throw startupError;
       }
     }
   }

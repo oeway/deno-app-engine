@@ -282,7 +282,18 @@ export class AgentManager extends EventEmitter {
         console.log(`✅ Successfully auto-attached kernel to agent: ${id}`);
       } catch (error) {
         console.error(`❌ Failed to auto-attach kernel to agent ${id}:`, error);
-        // Emit an error event but don't fail agent creation
+        
+        // If it's a startup script error, remove the agent and throw the error to fail creation
+        if (error instanceof Error && error.name === 'AgentStartupError') {
+          this.agents.delete(id); // Clean up the created agent
+          this.emit(AgentEvents.AGENT_ERROR, {
+            agentId: id,
+            error: error
+          });
+          throw error; // Propagate startup script errors to fail agent creation
+        }
+        
+        // For other kernel attachment errors, emit event but don't fail agent creation
         this.emit(AgentEvents.AGENT_ERROR, {
           agentId: id,
           error: new Error(`Failed to auto-attach kernel: ${error instanceof Error ? error.message : String(error)}`)
