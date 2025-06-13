@@ -712,10 +712,14 @@ Deno.test("Agents Module - Namespace Support", async () => {
   assertEquals(workspace1Agents.length, 2);
   assertEquals(workspace1Agents[0].namespace, "workspace1");
   assertEquals(workspace1Agents[1].namespace, "workspace1");
+  // Verify that the IDs are base IDs without namespace prefix
+  assert(["agent1", "agent2"].includes(workspace1Agents[0].id), `Expected base ID, got ${workspace1Agents[0].id}`);
+  assert(["agent1", "agent2"].includes(workspace1Agents[1].id), `Expected base ID, got ${workspace1Agents[1].id}`);
 
   const workspace2Agents = agentManager.listAgents("workspace2");
   assertEquals(workspace2Agents.length, 1);
   assertEquals(workspace2Agents[0].namespace, "workspace2");
+  assertEquals(workspace2Agents[0].id, "agent1"); // Should be base ID without namespace prefix
 
   // Test 3: List all agents
   const allAgents = agentManager.listAgents();
@@ -890,7 +894,7 @@ print(f"Pi is approximately {math.pi:.4f}")
     
     // Test listing agents shows correct startup flags
     const agentList = manager.listAgents();
-    const validAgentInfo = agentList.find(a => a.id === validAgentId);
+    const validAgentInfo = agentList.find(a => a.id === "valid-startup-agent"); // Use base ID without namespace
     assert(validAgentInfo, "Valid agent should be in list");
     assertEquals(validAgentInfo.hasStartupError, false, "Valid agent should not be flagged as having startup error");
     assertEquals(validAgentInfo.hasStartupScript, true, "Valid agent should be flagged as having startup script");

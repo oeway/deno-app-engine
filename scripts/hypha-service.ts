@@ -1570,8 +1570,12 @@ async function startHyphaService(options: {
         // Get updated agent info after potential kernel attachment
         const updatedAgent = agentManager.getAgent(agentId);
         
+        // Extract base ID from namespaced ID for consistency with listAgents
+        const namespaceMatch = agentId.match(/^([^:]+):/);
+        const baseAgentId = namespaceMatch ? agentId.substring(namespaceMatch[1].length + 1) : agentId;
+        
         return {
-          id: agentId,
+          id: baseAgentId, // Return base ID for consistency with listAgents
           name: updatedAgent?.name,
           description: updatedAgent?.description,
           instructions: updatedAgent?.instructions,
@@ -1603,8 +1607,12 @@ async function startHyphaService(options: {
           throw new Error("Agent not found");
         }
          
+         // Extract base ID from namespaced ID for consistency with listAgents
+         const namespaceMatch = validAgentId.match(/^([^:]+):/);
+         const baseAgentId = namespaceMatch ? validAgentId.substring(namespaceMatch[1].length + 1) : validAgentId;
+         
          return {
-           id: validAgentId, // Return the full namespaced ID, not agent.id
+           id: baseAgentId, // Return base ID for consistency with listAgents
            name: agent.name,
            description: agent.description,
            instructions: agent.instructions,

@@ -345,8 +345,11 @@ export class AgentManager extends EventEmitter {
         const namespaceMatch = id.match(/^([^:]+):/);
         const extractedNamespace = namespaceMatch ? namespaceMatch[1] : undefined;
         
+        // Extract base ID without namespace prefix
+        const baseId = extractedNamespace ? id.substring(extractedNamespace.length + 1) : id;
+        
         return {
-          id,
+          id: baseId, // Return base ID without namespace prefix
           name: agent.name,
           description: agent.description,
           kernel_type: agent.kernelType,
