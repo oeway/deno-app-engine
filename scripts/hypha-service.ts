@@ -2009,7 +2009,7 @@ async function startHyphaService(options: {
   });
   
   console.log("Service registered successfully!");
-  console.log(`Service is available (id: ${svc.id}), you can try it at: https://hypha.aicell.io/${server.config.workspace}/services/${svc.id.split("/")[1]}`);
+  console.log(`Service is available (id: ${svc.id}), you can try it at: ${server.config.public_base_url}/${server.config.workspace}/services/${svc.id.split("/")[1]}`);
   
   // Keep the connection alive
   return { server, service: svc };

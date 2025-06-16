@@ -26,6 +26,76 @@ function generateId(): string {
     return Date.now().toString(36) + Math.random().toString(36).substring(2);
 }
 
+// Utility functions for adaptive streaming
+interface StreamingMetrics {
+  totalChars: number;
+  startTime: number;
+  lastMeasurement: number;
+  recentRate: number; // chars per second
+}
+
+function createStreamingMetrics(): StreamingMetrics {
+  const now = Date.now();
+  return {
+    totalChars: 0,
+    startTime: now,
+    lastMeasurement: now,
+    recentRate: 0
+  };
+}
+
+function updateStreamingRate(metrics: StreamingMetrics, newChars: number): number {
+  const now = Date.now();
+  const timeDelta = now - metrics.lastMeasurement;
+  
+  metrics.totalChars += newChars;
+  
+  // Update recent rate (using a 2-second sliding window for responsiveness)
+  if (timeDelta > 0) {
+    const instantRate = (newChars / timeDelta) * 1000; // chars per second
+    // Exponential moving average for smoothing
+    metrics.recentRate = metrics.recentRate === 0 ? instantRate : 
+                         (metrics.recentRate * 0.7 + instantRate * 0.3);
+  }
+  
+  metrics.lastMeasurement = now;
+  return metrics.recentRate;
+}
+
+interface AdaptiveParams {
+  yieldIntervalMs: number;
+  maxBatchSize: number;
+}
+
+function getAdaptiveParams(streamingRate: number): AdaptiveParams {
+  // Adaptive thresholds based on streaming rate (chars/second)
+  if (streamingRate > 1000) {
+    // Fast streaming - prioritize responsiveness
+    return {
+      yieldIntervalMs: 50,
+      maxBatchSize: 150
+    };
+  } else if (streamingRate > 200) {
+    // Medium streaming - balanced approach
+    return {
+      yieldIntervalMs: 100,
+      maxBatchSize: 300
+    };
+  } else if (streamingRate > 50) {
+    // Slow streaming - more batching for efficiency
+    return {
+      yieldIntervalMs: 200,
+      maxBatchSize: 500
+    };
+  } else {
+    // Very slow streaming - maximum batching
+    return {
+      yieldIntervalMs: 300,
+      maxBatchSize: 800
+    };
+  }
+}
+
 export interface ChatCompletionOptions {
   messages: ChatMessage[];
   systemPrompt?: string;
@@ -40,6 +110,10 @@ export interface ChatCompletionOptions {
   stream?: boolean;
   abortController?: AbortController; // Add abortController to options
   reset?: boolean; // Reset memory and start fresh
+  // Streaming optimization options (these are initial values, system will adapt based on streaming speed)
+  initialYieldIntervalMs?: number; // Initial interval for yielding chunks (default: 100ms, will adapt)
+  initialMaxBatchSize?: number; // Initial max characters per batch (default: 300, will adapt)
+  enableAdaptiveStreaming?: boolean; // Enable adaptive streaming based on connection speed (default: true)
 }
 
 // Update DefaultModelSettings to use the ModelSettings interface
@@ -133,8 +207,11 @@ export async function* chatCompletion({
   maxSteps = 10,
   baseURL = 'http://localhost:11434/v1/',
   apiKey = 'ollama',
-  stream = true,
-  abortController, // Add abortController parameter
+      stream = true,
+    abortController, // Add abortController parameter
+    initialYieldIntervalMs = 100, // Initial 100ms yield interval
+    initialMaxBatchSize = 300, // Initial 300 characters max batch size
+    enableAdaptiveStreaming = true, // Enable adaptive streaming by default
 }: ChatCompletionOptions): AsyncGenerator<{
   type: 'text' | 'text_chunk' | 'function_call' | 'function_call_output' | 'new_completion' | 'error';
   content?: string;
@@ -159,6 +236,7 @@ export async function* chatCompletion({
     });
 
       let loopCount = 0;
+  let guidanceCount = 0; // Track guidance attempts to prevent infinite guidance loops
   let lastResponseContent = ''; // Track last response to detect infinite loops
 
   while (loopCount < maxSteps) {
@@ -208,45 +286,114 @@ export async function* chatCompletion({
             requestOptions
           ) as any; // Type as any since we know it's a stream when stream=true
 
-          // Process the stream and accumulate JSON
+          // Process the stream with adaptive queue-based batching
           try {
-            for await (const chunk of completionStream) {
-              // Check if abort signal was triggered during streaming
-              if (signal.aborted) {
-                console.log('Chat completion stream aborted by user');
-                return;
-              }
-
-              // More robust content extraction with better error handling
-              let content = '';
-              if (chunk && chunk.choices && Array.isArray(chunk.choices) && chunk.choices.length > 0) {
-                const choice = chunk.choices[0];
-                if (choice && choice.delta) {
-                  content = choice.delta.content || '';
-                } else if (choice && choice.message) {
-                  // Handle non-streaming format that might come through
-                  content = choice.message.content || '';
+            let chunkQueue = '';
+            let streamEnded = false;
+            let streamingMetrics = createStreamingMetrics();
+            let currentParams = { 
+              yieldIntervalMs: initialYieldIntervalMs, 
+              maxBatchSize: initialMaxBatchSize 
+            };
+            
+            // Create an adaptive batched yielder
+            const createAdaptiveBatchedYielder = async function* () {
+              while (!streamEnded || chunkQueue.length > 0) {
+                // Wait for the current yield interval unless we hit max batch size
+                const startTime = Date.now();
+                const waitTime = currentParams.yieldIntervalMs;
+                
+                while (Date.now() - startTime < waitTime && 
+                       chunkQueue.length < currentParams.maxBatchSize && 
+                       !streamEnded) {
+                  await new Promise(resolve => setTimeout(resolve, 10)); // Small sleep to prevent busy waiting
                 }
-              } else {
-                console.warn('Unexpected chunk format:', chunk);
-                continue; // Skip this chunk if it doesn't have the expected structure
+                
+                // Flush if we have content
+                if (chunkQueue.length > 0) {
+                  const batchContent = chunkQueue;
+                  chunkQueue = '';
+                  
+                  console.log(`DEBUG Adaptive batch (${batchContent.length} chars, rate: ${streamingMetrics.recentRate.toFixed(0)} chars/sec, interval: ${currentParams.yieldIntervalMs}ms): ${batchContent.slice(0, 50)}${batchContent.length > 50 ? '...' : ''}`);
+                  
+                  if (onStreaming) {
+                    onStreaming(completionId, batchContent);
+                  }
+                  
+                  yield {
+                    type: 'text_chunk' as const,
+                    content: batchContent
+                  };
+                }
               }
+            };
 
-              accumulatedResponse += content;
+            // Start the adaptive batched yielder
+            const batchedYielder = createAdaptiveBatchedYielder();
 
-              // Debug logging - show only the new content
-              if (content) {
-                console.log(`DEBUG Streaming chunk: ${content}`);
+            // Process chunks from the stream and the batched yielder concurrently
+            const streamProcessor = async () => {
+              try {
+                for await (const chunk of completionStream) {
+                  // Check if abort signal was triggered during streaming
+                  if (signal.aborted) {
+                    console.log('Chat completion stream aborted by user');
+                    streamEnded = true;
+                    return;
+                  }
+
+                  // More robust content extraction with better error handling
+                  let content = '';
+                  if (chunk && chunk.choices && Array.isArray(chunk.choices) && chunk.choices.length > 0) {
+                    const choice = chunk.choices[0];
+                    if (choice && choice.delta) {
+                      content = choice.delta.content || '';
+                    } else if (choice && choice.message) {
+                      // Handle non-streaming format that might come through
+                      content = choice.message.content || '';
+                    }
+                  } else {
+                    console.warn('Unexpected chunk format:', chunk);
+                    continue; // Skip this chunk if it doesn't have the expected structure
+                  }
+
+                  if (content) {
+                    accumulatedResponse += content;
+                    chunkQueue += content;
+                    
+                    // Update streaming metrics and adapt parameters if enabled
+                    if (enableAdaptiveStreaming) {
+                      const currentRate = updateStreamingRate(streamingMetrics, content.length);
+                      const newParams = getAdaptiveParams(currentRate);
+                      
+                      // Only update if parameters changed significantly to avoid thrashing
+                      if (Math.abs(newParams.yieldIntervalMs - currentParams.yieldIntervalMs) > 20 ||
+                          Math.abs(newParams.maxBatchSize - currentParams.maxBatchSize) > 50) {
+                        currentParams = newParams;
+                        console.log(`DEBUG Adaptive parameters updated: ${currentRate.toFixed(0)} chars/sec -> interval: ${currentParams.yieldIntervalMs}ms, batch: ${currentParams.maxBatchSize}`);
+                      }
+                    }
+                  }
+                }
+              } finally {
+                streamEnded = true;
               }
+            };
 
-              if(onStreaming && content){
-                onStreaming(completionId, content);
+            // Start processing the stream
+            const streamPromise = streamProcessor();
+
+            // Yield from the batched yielder
+            for await (const batch of batchedYielder) {
+              if (signal.aborted) {
+                console.log('Chat completion batched yielding aborted by user');
+                break;
               }
-              yield {
-                type: 'text_chunk',
-                content: content
-              };
+              yield batch;
             }
+
+            // Wait for stream processing to complete
+            await streamPromise;
             // Complete the debug line with a newline after streaming finishes
             if (accumulatedResponse) {
               console.log(); // Add newline to complete the progressive debug line
@@ -302,7 +449,20 @@ export async function* chatCompletion({
         console.log('DEBUG: assistant response', completionId, 'content:', accumulatedResponse.slice(0, 200) + (accumulatedResponse.length > 200 ? '...' : ''));
 
         // Check for infinite loop - if we get the same response twice in a row, break out
-        if (accumulatedResponse.trim() === lastResponseContent.trim() && accumulatedResponse.trim().length > 0) {
+        // Also break if we get empty responses repeatedly
+        if (accumulatedResponse.trim().length === 0 && lastResponseContent.trim().length === 0) {
+          console.warn('DEBUG: Detected infinite loop - repeated empty responses');
+          
+          // Force a returnToUser to break the loop
+          if(onMessage){
+            onMessage(completionId, `Detected repeated empty responses. Ending conversation to prevent infinite loop.`, []);
+          }
+          yield {
+            type: 'text',
+            content: `Detected repeated empty responses. Ending conversation to prevent infinite loop.`
+          };
+          break;
+        } else if (accumulatedResponse.trim() === lastResponseContent.trim() && accumulatedResponse.trim().length > 0) {
           console.warn('DEBUG: Detected potential infinite loop - same response repeated');
           console.warn('DEBUG: Response content:', accumulatedResponse.trim().slice(0, 100));
           
@@ -468,6 +628,13 @@ export async function* chatCompletion({
           }
         }
         else{
+          // If we have an empty response, skip this iteration entirely
+          if (accumulatedResponse.trim().length === 0) {
+            console.log('DEBUG: Skipping empty response - not adding to messages');
+            // Don't add empty responses to messages array - just break out of loop
+            break;
+          }
+
           // Check if response contains any special tags
           const hasThoughts = extractThoughts(accumulatedResponse);
           const hasSpecialTags = hasThoughts || 
@@ -480,6 +647,20 @@ export async function* chatCompletion({
           if (!hasSpecialTags && accumulatedResponse.trim().length > 0) {
             // Plain text response without any special tags - inject guidance message
             console.log('DEBUG: Detected naked response without proper tags, injecting guidance message');
+            
+            guidanceCount++;
+            if (guidanceCount > 3) {
+              console.log('DEBUG: Too many guidance attempts, forcing return to user');
+              // Force a return to user to prevent infinite guidance loops
+              if(onMessage){
+                onMessage(completionId, `The assistant seems to be having trouble following the proper format. Please try rephrasing your request or being more specific about what you need.`, []);
+              }
+              yield {
+                type: 'text',
+                content: `The assistant seems to be having trouble following the proper format. Please try rephrasing your request or being more specific about what you need.`
+              };
+              break;
+            }
             
             // Add the assistant's response to the conversation
             messages.push({
@@ -506,28 +687,54 @@ export async function* chatCompletion({
             };
             
             // Continue the loop to get a proper response with tags
-            continue; // Explicitly continue to next iteration
-          } else {
-            // Has special tags but no executable content - add reminder
+            // Don't increment loopCount here since this is just guidance
+          } else if (hasSpecialTags) {
+            // Has special tags but no executable content - this is incomplete response
+            console.log('DEBUG: Response has tags but no executable content, treating as incomplete');
+            
+            guidanceCount++;
+            if (guidanceCount > 3) {
+              console.log('DEBUG: Too many guidance attempts, forcing return to user');
+              // Force a return to user to prevent infinite guidance loops
+              if(onMessage){
+                onMessage(completionId, `The assistant seems to be having trouble following the proper format. Please try rephrasing your request or being more specific about what you need.`, []);
+              }
+              yield {
+                type: 'text',
+                content: `The assistant seems to be having trouble following the proper format. Please try rephrasing your request or being more specific about what you need.`
+              };
+              break;
+            }
+            
+            // Add the assistant's response to the conversation
             messages.push({
               role: 'assistant',
-              content: `<thoughts>${accumulatedResponse} (Reminder: I need to use appropriate script tags to execute code or \`returnToUser\` tag with commit property to conclude the session)</thoughts>`
+              content: accumulatedResponse
             });
             
-            // Continue to next iteration
-            continue;
-          }
-          
-          // If we have an empty response, skip this iteration entirely
-          if (accumulatedResponse.trim().length === 0) {
-            console.log('DEBUG: Skipping empty response - not adding to messages');
-            // Don't add empty responses to messages array - just continue
-            continue;
+            // Add user message requesting completion
+            messages.push({
+              role: 'user',
+              content: 'Your response appears incomplete. Please continue with executable code using <py-script> or <t-script> tags, or provide a final answer using <returnToUser> tags.'
+            });
+            
+            // Don't increment loopCount here since this is just guidance
+          } else {
+            // This shouldn't happen, but if it does, add the response and break
+            console.log('DEBUG: Unexpected response format, adding to conversation and breaking');
+            messages.push({
+              role: 'assistant',
+              content: accumulatedResponse
+            });
+            break;
           }
         }
         
-        // Only count this as a step if we processed meaningful content
-        loopCount++;
+        // Only count this as a step if we processed meaningful content (script execution or return to user)
+        const hasExecutableContent = extractScript(accumulatedResponse) || extractReturnToUser(accumulatedResponse);
+        if (hasExecutableContent) {
+          loopCount++;
+        }
         
         // add a reminder message if we are approaching the max steps
         if(loopCount >= maxSteps - 2){
@@ -581,3 +788,4 @@ export async function* chatCompletion({
     };
   }
 }
+
