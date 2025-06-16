@@ -104,7 +104,7 @@ spec:
             - name: AGENT_MODEL_BASE_URL
               value: "https://api.openai.com/v1/"
             - name: AGENT_MODEL_NAME
-              value: "gpt-4o"
+              value: "gpt-4.1"
             - name: AGENT_MODEL_API_KEY
               valueFrom:
                 secretKeyRef:
