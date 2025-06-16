@@ -445,11 +445,19 @@ async function startHyphaService(options: {
   console.log("Hypha Service Agent Manager Configuration:");
   console.log(`- Default model: ${DEFAULT_AGENT_MODEL_SETTINGS.model}`);
   console.log(`- Default base URL: ${DEFAULT_AGENT_MODEL_SETTINGS.baseURL}`);
+  console.log(`- Default API key: ${DEFAULT_AGENT_MODEL_SETTINGS.apiKey.substring(0, 8)}...`);
   console.log(`- Default temperature: ${DEFAULT_AGENT_MODEL_SETTINGS.temperature}`);
   console.log(`- Max agents: ${maxAgents}`);
   console.log(`- Agent data directory: ${agentDataDirectory}`);
   console.log(`- Auto save conversations: ${autoSaveConversations}`);
   console.log(`- Max steps cap: ${maxStepsCap}`);
+  
+  // Log the actual environment variable values for debugging
+  console.log("Environment Variable Values:");
+  console.log(`- AGENT_MODEL_NAME: ${Deno.env.get("AGENT_MODEL_NAME")}`);
+  console.log(`- AGENT_MODEL_BASE_URL: ${Deno.env.get("AGENT_MODEL_BASE_URL")}`);
+  console.log(`- AGENT_MODEL_API_KEY: ${Deno.env.get("AGENT_MODEL_API_KEY")?.substring(0, 8)}...`);
+  console.log(`- AGENT_MODEL_TEMPERATURE: ${Deno.env.get("AGENT_MODEL_TEMPERATURE")}`);
 
   
   const svc = await server.registerService({
@@ -1540,8 +1548,24 @@ async function startHyphaService(options: {
           name: config.name,
           kernelType: config.kernelType,
           autoAttachKernel: config.autoAttachKernel,
-          namespace: config.namespace
+          namespace: config.namespace,
+          customModelSettings: !!config.ModelSettings
         });
+        
+        // Log which model settings will be used
+        if (config.ModelSettings) {
+          console.log(`🔧 Agent will use CUSTOM model settings:`, {
+            model: config.ModelSettings.model,
+            baseURL: config.ModelSettings.baseURL,
+            temperature: config.ModelSettings.temperature
+          });
+        } else {
+          console.log(`🔧 Agent will use DEFAULT model settings:`, {
+            model: DEFAULT_AGENT_MODEL_SETTINGS.model,
+            baseURL: DEFAULT_AGENT_MODEL_SETTINGS.baseURL,
+            temperature: DEFAULT_AGENT_MODEL_SETTINGS.temperature
+          });
+        }
         
         let agentId: string;
         try {

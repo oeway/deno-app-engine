@@ -255,6 +255,15 @@ export class AgentManager extends EventEmitter {
     // Resolve model settings
     const resolvedModelSettings = this.resolveModelSettings(config.modelId, config.ModelSettings);
 
+    // Log which model settings are being used
+    console.log(`🤖 Agent ${id} model configuration:`, {
+      model: resolvedModelSettings.model,
+      baseURL: resolvedModelSettings.baseURL,
+      temperature: resolvedModelSettings.temperature,
+      apiKey: resolvedModelSettings.apiKey.substring(0, 8) + '...',
+      source: config.ModelSettings ? 'CUSTOM' : config.modelId ? 'REGISTRY' : 'DEFAULT'
+    });
+
     // Create agent with defaults
     const agentConfig: IAgentConfig = {
       ...config,
