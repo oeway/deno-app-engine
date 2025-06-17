@@ -348,13 +348,25 @@ Before writing any code, analyze what you need to accomplish. Write your analysi
 - Plan your approach step by step
 - **Always plan to use code execution - no task should be answered without running code**
 
+**THOUGHTS FORMATTING RULES:**
+- Think step by step, but keep each thinking step minimal
+- Use maximum 5 words per thinking step
+- Separate multiple thinking steps with line breaks
+- Focus on essential keywords only
+
 **CORRECT EXAMPLES:**
-<thoughts>Need to analyze sales data - will load CSV, calculate monthly trends, and create visualization</thoughts>
+<thoughts>
+Analyze sales data needed.
+Load CSV file first.
+Calculate monthly trend patterns.
+Create data visualization chart.
+</thoughts>
 
 **WRONG EXAMPLES (WILL END CONVERSATION):**
 ❌ "I need to analyze the sales data. Let me start by loading the CSV file."
 ❌ "To solve this problem, I'll first examine the data structure."
 ❌ "I'll execute a Python script to handle this task."
+❌ <thoughts>I need to carefully analyze the sales data by loading the CSV file and then calculating comprehensive monthly trends</thoughts>
 
 **ALWAYS USE TAGS - NO EXCEPTIONS!**
 
@@ -513,13 +525,25 @@ Before writing any code, analyze what you need to accomplish. Write your analysi
 - Plan your approach step by step
 - **Always plan to use code execution - no task should be answered without running code**
 
+**THOUGHTS FORMATTING RULES:**
+- Think step by step, but keep each thinking step minimal
+- Use maximum 5 words per thinking step
+- Separate multiple thinking steps with line breaks
+- Focus on essential keywords only
+
 **CORRECT EXAMPLES:**
-<thoughts>Need to build REST API client - will define interfaces, implement fetch wrapper, handle responses</thoughts>
+<thoughts>
+Build REST API client.
+Define TypeScript interfaces first.
+Implement fetch wrapper function.
+Handle response error cases.
+</thoughts>
 
 **WRONG EXAMPLES (WILL END CONVERSATION):**
 ❌ "I need to build a REST API client. Let me start by defining the interfaces."
 ❌ "To solve this problem, I'll first create the TypeScript types."
 ❌ "I'll execute TypeScript code to handle this task."
+❌ <thoughts>I need to build a comprehensive REST API client by defining proper interfaces and implementing robust fetch wrapper</thoughts>
 
 **ALWAYS USE TAGS - NO EXCEPTIONS!**
 
@@ -663,13 +687,25 @@ Before writing any code, analyze what you need to accomplish. Write your analysi
 - Plan your approach step by step
 - **Always plan to use code execution - no task should be answered without running code**
 
+**THOUGHTS FORMATTING RULES:**
+- Think step by step, but keep each thinking step minimal
+- Use maximum 5 words per thinking step
+- Separate multiple thinking steps with line breaks
+- Focus on essential keywords only
+
 **CORRECT EXAMPLES:**
-<thoughts>Need to process JSON data - will parse input, transform structure, validate results</thoughts>
+<thoughts>
+Process JSON data needed.
+Parse input string first.
+Transform data structure properly.
+Validate final results output.
+</thoughts>
 
 **WRONG EXAMPLES (WILL END CONVERSATION):**
 ❌ "I need to process this JSON data. Let me start by parsing the input."
 ❌ "To solve this problem, I'll first examine the data structure."
 ❌ "I'll execute JavaScript code to handle this task."
+❌ <thoughts>I need to carefully process this JSON data by parsing the input and transforming the structure</thoughts>
 
 **ALWAYS USE TAGS - NO EXCEPTIONS!**
 

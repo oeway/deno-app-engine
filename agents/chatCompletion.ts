@@ -207,11 +207,11 @@ export async function* chatCompletion({
   maxSteps = 10,
   baseURL = 'http://localhost:11434/v1/',
   apiKey = 'ollama',
-      stream = true,
-    abortController, // Add abortController parameter
-    initialYieldIntervalMs = 100, // Initial 100ms yield interval
-    initialMaxBatchSize = 300, // Initial 300 characters max batch size
-    enableAdaptiveStreaming = true, // Enable adaptive streaming by default
+  stream = true,
+  abortController, // Add abortController parameter
+  initialYieldIntervalMs = 100, // Initial 100ms yield interval
+  initialMaxBatchSize = 300, // Initial 300 characters max batch size
+  enableAdaptiveStreaming = true, // Enable adaptive streaming by default
 }: ChatCompletionOptions): AsyncGenerator<{
   type: 'text' | 'text_chunk' | 'function_call' | 'function_call_output' | 'new_completion' | 'error';
   content?: string;
@@ -314,7 +314,7 @@ export async function* chatCompletion({
                   const batchContent = chunkQueue;
                   chunkQueue = '';
                   
-                  console.log(`DEBUG Adaptive batch (${batchContent.length} chars, rate: ${streamingMetrics.recentRate.toFixed(0)} chars/sec, interval: ${currentParams.yieldIntervalMs}ms): ${batchContent.slice(0, 50)}${batchContent.length > 50 ? '...' : ''}`);
+                  // console.log(`DEBUG Adaptive batch (${batchContent.length} chars, rate: ${streamingMetrics.recentRate.toFixed(0)} chars/sec, interval: ${currentParams.yieldIntervalMs}ms): ${batchContent.slice(0, 50)}${batchContent.length > 50 ? '...' : ''}`);
                   
                   if (onStreaming) {
                     onStreaming(completionId, batchContent);
@@ -370,7 +370,6 @@ export async function* chatCompletion({
                       if (Math.abs(newParams.yieldIntervalMs - currentParams.yieldIntervalMs) > 20 ||
                           Math.abs(newParams.maxBatchSize - currentParams.maxBatchSize) > 50) {
                         currentParams = newParams;
-                        console.log(`DEBUG Adaptive parameters updated: ${currentRate.toFixed(0)} chars/sec -> interval: ${currentParams.yieldIntervalMs}ms, batch: ${currentParams.maxBatchSize}`);
                       }
                     }
                   }
