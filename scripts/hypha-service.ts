@@ -1743,6 +1743,7 @@ async function startHyphaService(options: {
     async *chatWithAgent({agentId, message}: {agentId: string, message: string}, context: {user: any, ws: string}) {
       try {
         console.log(`Starting chat with agent: ${agentId} for workspace: ${context.ws}`);
+        console.log(`🔍 [Agent ${agentId}] Current query:`, message);
         
         if (!message) {
           throw new Error("Message is required");
@@ -1966,9 +1967,9 @@ async function startHyphaService(options: {
         if (!agent) {
           throw new Error("Agent not found");
         }
-        
-        console.log(`📤 [Stateless] Processing ${messages.length} messages without modifying agent history`);
-        
+        // print the current query:
+        console.log(`🔍 [Agent ${agentId}] Current query:`, messages[messages.length - 1].content); 
+
         try {
           let hasYieldedResponse = false;
           

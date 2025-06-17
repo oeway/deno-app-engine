@@ -257,8 +257,7 @@ export async function* chatCompletion({
       } else {
         console.log('DEBUG: No system prompt provided');
       }
-      console.log('DEBUG: new completion', completionId, 'total messages:', fullMessages.length, 'roles:', fullMessages.map(m => m.role));
-
+      // console.log('DEBUG: new completion', completionId, 'total messages:', fullMessages.length, 'roles:', fullMessages.map(m => m.role));
       yield {
         type: 'new_completion',
         completion_id: completionId,
