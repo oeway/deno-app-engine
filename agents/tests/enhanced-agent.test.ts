@@ -205,11 +205,14 @@ Deno.test("Agent - Kernel attachment", () => {
   };
   
   const agent = new Agent(config, manager);
-  const kernel = new MockKernelInstance();
+  const kernelInstance = new MockKernelInstance();
   
   // Attach kernel
-  agent.attachKernel(kernel);
-  assertEquals(agent.kernel, kernel);
+  agent.attachKernel(kernelInstance);
+  assertEquals(agent.kernel, kernelInstance.kernel); // Now agent.kernel should be the inner kernel
+  assertEquals(agent.kernelId, kernelInstance.id); // Metadata stored separately
+  assertEquals(agent.kernelMode, kernelInstance.mode);
+  assertEquals(agent.kernelLanguage, kernelInstance.language);
   
   // Check events
   const attachEvents = manager.getEvents(AgentEvents.KERNEL_ATTACHED);
@@ -220,6 +223,9 @@ Deno.test("Agent - Kernel attachment", () => {
   // Detach kernel
   agent.detachKernel();
   assertEquals(agent.kernel, undefined);
+  assertEquals(agent.kernelId, undefined);
+  assertEquals(agent.kernelMode, undefined);
+  assertEquals(agent.kernelLanguage, undefined);
   
   const detachEvents = manager.getEvents(AgentEvents.KERNEL_DETACHED);
   assertEquals(detachEvents.length, 1);
@@ -351,10 +357,10 @@ Deno.test("Agent - Destroy cleanup", () => {
   };
   
   const agent = new Agent(config, manager);
-  const kernel = new MockKernelInstance();
+  const kernelInstance = new MockKernelInstance();
   
   // Set up some state
-  agent.attachKernel(kernel);
+  agent.attachKernel(kernelInstance);
   agent.conversationHistory.push({ role: 'user', content: 'test' });
   agent.memory.addStep({
     type: StepType.TASK,
@@ -368,6 +374,7 @@ Deno.test("Agent - Destroy cleanup", () => {
   
   // Check cleanup
   assertEquals(agent.kernel, undefined);
+  assertEquals(agent.kernelId, undefined);
   assertEquals(agent.conversationHistory.length, 0);
   assertEquals(agent.memory.steps.length, 0);
   

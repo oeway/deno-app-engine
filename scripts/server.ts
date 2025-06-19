@@ -2168,7 +2168,7 @@ export async function handleRequest(req: Request): Promise<Response> {
             agentId: validAgentId,
             kernelType: kernelTypeEnum,
             hasKernel: !!agent?.kernel,
-            kernelId: agent?.kernel?.id
+            kernelId: agent?.kernelId
           });
         } catch (error) {
           return jsonResponse({ 

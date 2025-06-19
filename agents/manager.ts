@@ -17,6 +17,8 @@ import {
   type IAgentInstance 
 } from "./agent.ts";
 import { KernelLanguage } from "../kernel/manager.ts";
+import { HyphaCore } from 'hypha-core';
+import { DenoWebSocketServer, DenoWebSocketClient } from 'hypha-core/deno-websocket-server';
 
 // Model registry events (additional to AgentEvents)
 export enum ModelEvents {
@@ -55,6 +57,12 @@ export interface IAgentManagerOptions {
   modelRegistry?: IModelRegistryConfig; // Initial model registry configuration
   allowedModels?: string[]; // Array of allowed model IDs from registry
   allowCustomModels?: boolean; // Whether to allow custom model settings
+  // HyphaCore integration options
+  enable_hypha_core?: boolean; // Enable HyphaCore server integration
+  hypha_core_port?: number; // Port for HyphaCore server (default: 9527)
+  hypha_core_host?: string; // Host for HyphaCore server (default: localhost)
+  hypha_core_workspace?: string; // Default workspace for HyphaCore (default: default)
+  hypha_core_jwt_secret?: string; // JWT secret for HyphaCore authentication (default: random)
 }
 
 // Interface for conversation save data
@@ -85,6 +93,15 @@ export class AgentManager extends EventEmitter {
   private modelRegistry: Map<string, IModelRegistryEntry> = new Map();
   private allowedModels?: string[];
   private allowCustomModels: boolean;
+  
+  // HyphaCore integration
+  private hyphaCore: any = null;
+  private hyphaAPI: any = null;
+  private enableHyphaCore: boolean = false;
+  private hyphaCorePort: number = 9590;
+  private hyphaCoreHost: string = '127.0.0.1';
+  private hyphaCoreWorkspace: string = 'default';
+  private hyphaCoreJwtSecret: string;
 
   constructor(options: IAgentManagerOptions = {}) {
     super();
@@ -102,8 +119,36 @@ export class AgentManager extends EventEmitter {
     this.allowedModels = options.allowedModels;
     this.allowCustomModels = options.allowCustomModels !== false; // Default true
 
+    // Initialize HyphaCore settings
+    this.enableHyphaCore = options.enable_hypha_core || false;
+    this.hyphaCorePort = options.hypha_core_port || 9527;
+    this.hyphaCoreHost = options.hypha_core_host || 'localhost';
+    this.hyphaCoreWorkspace = options.hypha_core_workspace || 'default';
+    this.hyphaCoreJwtSecret = options.hypha_core_jwt_secret || this.generateRandomJwtSecret();
+
     // Initialize model registry from config
     this.initializeModelRegistry(options.modelRegistry);
+    
+    // Start HyphaCore if enabled
+    if (this.enableHyphaCore) {
+      this.startHyphaCore().catch(error => {
+        console.error('❌ Failed to start HyphaCore server:', error);
+      });
+    }
+  }
+
+  /**
+   * Generate a random JWT secret for HyphaCore
+   * @returns Random JWT secret string
+   * @private
+   */
+  private generateRandomJwtSecret(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 32; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
   }
 
   /**
@@ -396,9 +441,9 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Agent with ID "${id}" not found`);
     }
     // destroy the agent's kernel if it has one
-    const kernelId = agent.kernel?.id;
+    const kernelId = agent.kernelId; // Use the stored kernel ID
     agent.destroy();
-    if (kernelId) {
+    if (kernelId && this.kernelManager) {
       await this.kernelManager.destroyKernel(kernelId);
     }
     this.agents.delete(id);
@@ -455,6 +500,28 @@ export class AgentManager extends EventEmitter {
     }
 
     await agent.attachKernel(kernelInstance);
+
+    // Auto-setup HyphaCore integration if enabled and kernel supports it
+    if (this.enableHyphaCore && (kernelType === KernelType.PYTHON || kernelType === KernelType.JAVASCRIPT || kernelType === KernelType.TYPESCRIPT)) {
+      try {
+        console.log(`🔧 Setting up HyphaCore integration for ${kernelType} agent ${agentId}...`);
+        
+        const hyphaStartupScript = await this.generateHyphaStartupScript(agentId, kernelId, kernelType);
+        
+        if (hyphaStartupScript) {
+          const result = await kernelInstance.kernel.execute(hyphaStartupScript);
+          
+          if (result.success) {
+            console.log(`✅ HyphaCore integration setup complete for agent ${agentId}`);
+          } else {
+            console.error(`❌ HyphaCore integration setup failed for agent ${agentId}:`, result.error);
+          }
+        }
+      } catch (error) {
+        console.error(`❌ Failed to setup HyphaCore integration for agent ${agentId}:`, error);
+        // Don't throw - let the kernel attachment succeed even if HyphaCore setup fails
+      }
+    }
   }
 
   // Detach kernel from an agent
@@ -464,9 +531,9 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Agent with ID "${agentId}" not found`);
     }
 
-    if (agent.kernel && this.kernelManager) {
-      // Destroy the kernel through the manager
-      await this.kernelManager.destroyKernel(agent.kernel.id);
+    if (agent.kernelId && this.kernelManager) {
+      // Destroy the kernel through the manager using the stored kernel ID
+      await this.kernelManager.destroyKernel(agent.kernelId);
     }
 
     agent.detachKernel();
@@ -575,6 +642,12 @@ export class AgentManager extends EventEmitter {
       allowCustomModels: boolean;
       allowedModels?: string[];
     };
+    hyphaCore: {
+      enabled: boolean;
+      serverUrl?: string;
+      workspace?: string;
+      websocketUrl?: string;
+    };
   } {
     const agentsByKernelType: Record<string, number> = {};
     let agentsWithKernels = 0;
@@ -614,7 +687,8 @@ export class AgentManager extends EventEmitter {
         modelsInUse: modelsInUse.size,
         allowCustomModels: this.allowCustomModels,
         allowedModels: this.allowedModels
-      }
+      },
+      hyphaCore: this.getHyphaCoreInfo()
     };
   }
 
@@ -902,5 +976,178 @@ export class AgentManager extends EventEmitter {
    */
   public setAllowCustomModels(allow: boolean): void {
     this.allowCustomModels = allow;
+  }
+
+  // ===== HYPHA CORE INTEGRATION METHODS =====
+
+  /**
+   * Start the HyphaCore server
+   * @private
+   */
+  private async startHyphaCore(): Promise<void> {
+    if (!this.enableHyphaCore) {
+      return;
+    }
+
+    try {
+      console.log('🚀 Starting HyphaCore server...');
+      
+      // Create HyphaCore instance
+      this.hyphaCore = new HyphaCore({
+        url: `http://${this.hyphaCoreHost}:${this.hyphaCorePort}`,
+        ServerClass: DenoWebSocketServer,
+        WebSocketClass: DenoWebSocketClient,
+        jwtSecret: this.hyphaCoreJwtSecret,
+        defaultService: {
+          returnToUser(message: string, context: any){
+            const agentId = context.to.split("/")[1];
+            console.log(`🔄 Returning to user: ${message}`);
+            console.log(`🔄 Agent ID: ${agentId}`);
+          }
+        }
+      });
+
+      // Start the hypha core server
+      this.hyphaAPI = await this.hyphaCore.start();
+      console.log(`✅ Hypha Core Server started on http://${this.hyphaCoreHost}:${this.hyphaCorePort}`);
+      
+    } catch (error) {
+      console.error('❌ Failed to start HyphaCore server:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Stop the HyphaCore server
+   * @private
+   */
+  private async stopHyphaCore(): Promise<void> {
+    if (!this.enableHyphaCore) {
+      return;
+    }
+
+    try {
+      console.log('🛑 Shutting down HyphaCore server...');
+      
+      if (this.hyphaCore) {
+        await this.hyphaCore.close();
+        this.hyphaCore = null;
+      }
+      
+      this.hyphaAPI = null;
+      
+      console.log('✅ HyphaCore server stopped');
+    } catch (error) {
+      console.error('❌ Error stopping HyphaCore server:', error);
+    }
+  }
+  /**
+   * Get HyphaCore connection info
+   * @returns Connection information or null if not enabled
+   */
+  public getHyphaCoreInfo(): {
+    enabled: boolean;
+    serverUrl?: string;
+    workspace?: string;
+    websocketUrl?: string;
+  } {
+    return {
+      enabled: this.enableHyphaCore,
+      serverUrl: this.enableHyphaCore ? `http://${this.hyphaCoreHost}:${this.hyphaCorePort}` : undefined,
+      workspace: this.enableHyphaCore ? this.hyphaCoreWorkspace : undefined,
+      websocketUrl: this.enableHyphaCore ? `ws://${this.hyphaCoreHost}:${this.hyphaCorePort}/ws` : undefined,
+    };
+  }
+
+  /**
+   * Get the HyphaCore API instance
+   * @returns HyphaCore API or null if not enabled
+   */
+  public getHyphaAPI(): any {
+    return this.hyphaAPI;
+  }
+
+  /**
+   * Generate hypha-rpc startup script for a kernel
+   * @param agentId Agent ID for token generation
+   * @param kernelId Kernel ID for client identification
+   * @param kernelType Kernel type to generate appropriate script
+   * @returns Startup script or empty string if HyphaCore not enabled
+   * @private
+   */
+  private async generateHyphaStartupScript(agentId: string, kernelId: string, kernelType: KernelType): Promise<string> {
+    if (!this.enableHyphaCore || !this.hyphaAPI) {
+      return '';
+    }
+
+    try {
+      // Generate token for this agent/kernel
+      const token = await this.hyphaAPI.generateToken({
+        user_id: `agent-${agentId}`,
+        workspace: this.hyphaCoreWorkspace,
+        expires_in: 3600 // 1 hour
+      });
+
+      // Generate different startup scripts based on kernel type
+      if (kernelType === KernelType.PYTHON) {
+        return `
+import micropip
+await micropip.install("hypha-rpc")
+
+from hypha_rpc import connect_to_server
+
+# Connect to HyphaCore server with authentication token
+_hypha_server = await connect_to_server({
+    "server_url": "http://${this.hyphaCoreHost}:${this.hyphaCorePort}",
+    "workspace": "${this.hyphaCoreWorkspace}",
+    "client_id": "${agentId}",
+    "token": "${token}"
+})
+
+print(f"✅ Connected to HyphaCore server: {_hypha_server.config.public_base_url}")
+`;
+      } else if (kernelType === KernelType.JAVASCRIPT || kernelType === KernelType.TYPESCRIPT) {
+        return `
+// Import hypha-rpc from CDN
+const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.56/dist/hypha-rpc-websocket.mjs");
+
+// Connect to HyphaCore server with authentication token
+const _hypha_server = await hyphaWebsocketClient.connectToServer({
+    server_url: "http://${this.hyphaCoreHost}:${this.hyphaCorePort}",
+    workspace: "${this.hyphaCoreWorkspace}",
+    client_id: "${agentId}",
+    token: "${token}"
+});
+
+console.log("✅ Connected to HyphaCore server:", _hypha_server.config.public_base_url);
+
+// Make _hypha_server globally available for use in subsequent code executions
+globalThis._hypha_server = _hypha_server;
+`;
+      } else {
+        console.warn(`❌ Unsupported kernel type for HyphaCore integration: ${kernelType}`);
+        return '';
+      }
+    } catch (error) {
+      console.error('❌ Failed to generate HyphaCore startup script:', error);
+      return '';
+    }
+  }
+
+  /**
+   * Shutdown the AgentManager and clean up HyphaCore
+   */
+  public async shutdown(): Promise<void> {
+    console.log('🛑 Shutting down AgentManager...');
+    
+    // Destroy all agents
+    await this.destroyAll();
+    
+    // Stop HyphaCore if running
+    if (this.enableHyphaCore) {
+      await this.stopHyphaCore();
+    }
+    
+    console.log('✅ AgentManager shutdown complete');
   }
 } 

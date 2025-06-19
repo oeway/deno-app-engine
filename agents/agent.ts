@@ -2,14 +2,15 @@
 // This file contains the core Agent implementation with kernel-aware prompt generation and planning capabilities
 
 import { 
-  chatCompletion, 
-  type ChatCompletionOptions, 
-  type ChatMessage,
-  type ModelSettings,
+  chatCompletion,
+  type ChatCompletionOptions,
+  type ChatMessage, 
+  type ModelSettings, 
   DefaultModelSettings
 } from "./chatCompletion.ts";
-import type { IKernelInstance } from "../kernel/mod.ts";
+import type { IKernelInstance, IKernel } from "../kernel/mod.ts";
 import { KernelLanguage } from "../kernel/mod.ts";
+import { KernelMode } from "../kernel/mod.ts";
 
 // Re-export enums and interfaces that the Agent needs
 export enum AgentEvents {
@@ -292,7 +293,13 @@ export interface IAgentInstance {
   startupScript?: string;
   kernelType?: KernelType;
   kernelEnvirons?: Record<string, string>;
-  kernel?: IKernelInstance;
+  kernel?: IKernel; // Direct kernel reference, not wrapped
+  // Kernel metadata - moved from IKernelInstance to agent
+  kernelId?: string;
+  kernelMode?: KernelMode;
+  kernelLanguage?: KernelLanguage;
+  kernelCreated?: Date;
+  kernelOptions?: any;
   ModelSettings: ModelSettings;
   maxSteps: number;
   enablePlanning: boolean;
@@ -303,7 +310,7 @@ export interface IAgentInstance {
   conversationHistory: ChatMessage[];
   chatCompletion(messages: ChatMessage[], options?: Partial<ChatCompletionOptions>): AsyncGenerator<any, void, unknown>;
   statelessChatCompletion(messages: ChatMessage[], options?: Partial<ChatCompletionOptions>): AsyncGenerator<any, void, unknown>;
-  attachKernel(kernel: IKernelInstance): Promise<void>;
+  attachKernel(kernelInstance: IKernelInstance): Promise<void>; // Keep original signature for KernelManager compatibility
   detachKernel(): void;
   updateConfig(config: Partial<IAgentConfig>): void;
   destroy(): void;
@@ -915,7 +922,13 @@ export class Agent implements IAgentInstance {
   public startupScript?: string;
   public kernelType?: KernelType;
   public kernelEnvirons?: Record<string, string>;
-  public kernel?: IKernelInstance;
+  public kernel?: IKernel; // Direct kernel reference, not wrapped
+  // Kernel metadata - moved from IKernelInstance to agent
+  public kernelId?: string;
+  public kernelMode?: KernelMode;
+  public kernelLanguage?: KernelLanguage;
+  public kernelCreated?: Date;
+  public kernelOptions?: any;
   public ModelSettings: ModelSettings;
   public maxSteps: number;
   public created: Date;
@@ -1406,130 +1419,74 @@ export class Agent implements IAgentInstance {
    * Execute startup script and capture output for system prompt
    */
   private async executeStartupScript(): Promise<void> {
-    if (!this.startupScript || !this.kernel) {
+    if (!this.kernel || !this.startupScript) {
       return;
     }
 
-    console.log(`🚀 Executing startup script for agent: ${this.id}`);
-    
+    console.log(`🚀 [Agent ${this.id}] Executing startup script...`);
+
     try {
-      let output = '';
-      let errorOutput = '';
-      let hasOutput = false;
-      let hasError = false;
-      
-      // Set up event listeners to capture stdout/stderr
+      let startupOutput = '';
+      let startupError: string | undefined;
+
+      // Set up output capture
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (this.kernel && event.kernelId === this.kernel.id) {
-          if (event.data.name === 'stdout') {
-            output += event.data.text;
-            hasOutput = true;
-          } else if (event.data.name === 'stderr') {
-            errorOutput += event.data.text;
-            hasOutput = true;
-          } else if (event.data.data && event.data.data['text/plain']) {
-            output += event.data.data['text/plain'] + '\n';
-            hasOutput = true;
-          } else if (event.data.ename && event.data.evalue) {
-            // This is an execution error
-            hasError = true;
-            let errorMessage = `${event.data.ename}: ${event.data.evalue}\n`;
-            if (event.data.traceback && Array.isArray(event.data.traceback)) {
-              errorMessage += event.data.traceback.join('\n') + '\n';
-            }
-            errorOutput += errorMessage;
-            hasOutput = true;
+        if (this.kernel && event.kernelId === this.kernelId) {
+          if (event.data.type === 'stream' && (event.data.name === 'stdout' || event.data.name === 'stderr')) {
+            startupOutput += event.data.text || '';
           }
         }
       };
-      
-      // Listen for kernel events through the manager
-      if (this.manager.kernelManager) {
-        this.manager.kernelManager.on('stream', handleManagerEvent);
-        this.manager.kernelManager.on('execute_result', handleManagerEvent);
-        this.manager.kernelManager.on('execute_error', handleManagerEvent);
-      }
-      
+
+      // Listen for output
+      this.manager.kernelManager.on('output', handleManagerEvent);
+
       try {
+        // Execute the startup script
         const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernel.id, this.startupScript)
-          : await this.kernel.kernel.execute(this.startupScript);
-        
-        // Give a moment for any remaining events to be processed
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        // Check if execution was successful
-        // Only treat as error if execution failed or there were actual exceptions
-        // Warnings and other stderr output should not be considered errors
-        if (!result.success || hasError) {
-          // Create a detailed error message
-          const errorMsg = result.error?.message || 'Startup script execution failed';
-          const fullErrorOutput = [
-            `Startup script execution failed for agent: ${this.id}`,
-            `Error: ${errorMsg}`,
-            errorOutput.trim() ? `Error Output:\n${errorOutput.trim()}` : '',
-            output.trim() ? `Standard Output:\n${output.trim()}` : '',
-            `Startup Script:\n${this.startupScript}`
-          ].filter(Boolean).join('\n\n');
+          ? await this.manager.kernelManager.execute(this.kernelId!, this.startupScript)
+          : await this.kernel.execute(this.startupScript);
+
+        // Store the captured output for use in system prompt
+        this.startupOutput = startupOutput.trim();
+
+        if (!result.success && result.error) {
+          const errorMessage = result.error.message || 'Unknown error';
+          const fullError = result.result?.traceback ? result.result.traceback.join('\n') : errorMessage;
           
-          // Create and store the startup error
+          console.error(`❌ [Agent ${this.id}] Startup script failed:`, errorMessage);
+          console.error(`Full error details:`, fullError);
+          
           this.startupError = new AgentStartupError(
-            `Startup script failed: ${errorMsg}`,
-            fullErrorOutput,
-            errorOutput.trim() || errorMsg
+            `Startup script failed: ${errorMessage}`,
+            fullError,
+            result.result?.traceback?.join('\n')
           );
           
-          console.error(`❌ Startup script failed for agent ${this.id}:`, this.startupError.fullError);
-          
-          // Clear startup output since we have an error
-          this.startupOutput = undefined;
-          
-          return; // Don't mark as successful
+          // Don't return here - let the error propagate to attachKernel
+          return;
         }
-        
-        // Success case - store the captured output and clear any previous error
-        // Include both stdout and stderr (warnings, etc.) in the startup output for the system prompt
-        let combinedOutput = '';
-        if (output.trim()) {
-          combinedOutput += output.trim();
+
+        console.log(`✅ [Agent ${this.id}] Startup script executed successfully`);
+        if (this.startupOutput) {
+          console.log(`📋 [Agent ${this.id}] Startup output (${this.startupOutput.length} chars):`, 
+            this.startupOutput.substring(0, 200) + (this.startupOutput.length > 200 ? '...' : ''));
         }
-        if (errorOutput.trim()) {
-          if (combinedOutput) combinedOutput += '\n';
-          combinedOutput += errorOutput.trim();
-        }
-        
-        this.startupOutput = combinedOutput || 'Startup script executed successfully (no output)';
-        this.startupError = undefined; // Clear any previous error
-        
-        console.log(`✅ Startup script completed for agent: ${this.id}`);
-        console.log(`📝 Captured startup output: ${this.startupOutput}`);
-        
+
       } finally {
-        // Clean up listeners
-        if (this.manager.kernelManager) {
-          this.manager.kernelManager.off('stream', handleManagerEvent);
-          this.manager.kernelManager.off('execute_result', handleManagerEvent);
-          this.manager.kernelManager.off('execute_error', handleManagerEvent);
-        }
+        // Clean up listener
+        this.manager.kernelManager.off('output', handleManagerEvent);
       }
+
     } catch (error) {
-      // Handle unexpected errors during startup script execution
-      const errorMsg = `Startup script execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      const fullErrorOutput = [
-        `Startup script execution failed for agent: ${this.id}`,
-        `Unexpected Error: ${errorMsg}`,
-        error instanceof Error && error.stack ? `Stack Trace:\n${error.stack}` : '',
-        `Startup Script:\n${this.startupScript}`
-      ].filter(Boolean).join('\n\n');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`💥 [Agent ${this.id}] Startup script execution exception:`, errorMessage);
       
       this.startupError = new AgentStartupError(
-        errorMsg,
-        fullErrorOutput,
+        `Startup script execution failed: ${errorMessage}`,
+        errorMessage,
         error instanceof Error ? error.stack : undefined
       );
-      
-      this.startupOutput = undefined;
-      console.error(`❌ Startup script failed for agent ${this.id}:`, this.startupError.fullError);
     }
   }
 
@@ -1538,83 +1495,63 @@ export class Agent implements IAgentInstance {
    */
   private async executeCode(completionId: string, code: string, actionStep: ActionStep): Promise<string> {
     if (!this.kernel) {
-      throw new Error('No kernel attached to agent');
+      throw new Error("No kernel attached to agent");
     }
 
-    // Console log to mark code execution step
-    console.log(`🚀 [Agent ${this.id}] Step ${this.stepNumber}: Executing ${this.kernelType} code`);
+    console.log(`🚀 [Agent ${this.id}] Step ${this.stepNumber}: Executing code`);
     console.log(`📋 Code (${code.length} chars):`, code.substring(0, 200) + (code.length > 200 ? '...' : ''));
 
-    this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
-      agentId: this.id,
-      code,
-      completionId
-    });
-    
     try {
-      let output = '';
-      let hasOutput = false;
-      
-      // Set up event listeners to capture stdout/stderr
+      let observations = '';
+      let observationImages: string[] = [];
+
+      // Set up output capture
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (this.kernel && event.kernelId === this.kernel.id) {
-          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
-            output += event.data.text;
-            hasOutput = true;
-          } else if (event.data.data && event.data.data['text/plain']) {
-            output += event.data.data['text/plain'] + '\n';
-            hasOutput = true;
-          } else if (event.data.ename && event.data.evalue) {
-            output += `${event.data.ename}: ${event.data.evalue}\n`;
-            if (event.data.traceback && Array.isArray(event.data.traceback)) {
-              output += event.data.traceback.join('\n') + '\n';
-            }
-            hasOutput = true;
+        if (this.kernel && event.kernelId === this.kernelId) {
+          if (event.data.type === 'stream' && (event.data.name === 'stdout' || event.data.name === 'stderr')) {
+            observations += event.data.text || '';
+          } else if (event.data.type === 'display_data' && event.data.data && event.data.data['image/png']) {
+            observationImages.push(event.data.data['image/png']);
           }
         }
       };
-      
-      // Listen for kernel events through the manager
-      if (this.manager.kernelManager) {
-        this.manager.kernelManager.on('stream', handleManagerEvent);
-        this.manager.kernelManager.on('execute_result', handleManagerEvent);
-        this.manager.kernelManager.on('execute_error', handleManagerEvent);
-      }
-      
+
+      // Listen for output
+      this.manager.kernelManager.on('output', handleManagerEvent);
+
       try {
+        // Execute the code
         const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernel.id, code)
-          : await this.kernel.kernel.execute(code);
-        
-        // Give a moment for any remaining events to be processed
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        actionStep.observations = hasOutput ? output.trim() : 'Code executed successfully';
-        actionStep.toolCalls = [{
-          name: 'execute_code',
-          arguments: code,
-          id: completionId
-        }];
-        
+          ? await this.manager.kernelManager.execute(this.kernelId!, code)
+          : await this.kernel.execute(code);
+
         if (result.success) {
-          console.log(`✅ [Agent ${this.id}] Step ${this.stepNumber}: Code execution completed successfully`);
-          if (hasOutput) {
-            console.log(`📤 Output (${output.trim().length} chars):`, output.trim().substring(0, 200) + (output.trim().length > 200 ? '...' : ''));
-          }
-          return hasOutput ? output.trim() : 'Code executed successfully';
+          console.log(`✅ [Agent ${this.id}] Step ${this.stepNumber}: Code executed successfully`);
         } else {
-          const errorMsg = result.error?.message || 'Code execution failed';
-          console.log(`❌ [Agent ${this.id}] Step ${this.stepNumber}: Code execution failed - ${errorMsg}`);
-          actionStep.error = new AgentExecutionError(errorMsg);
-          return hasOutput ? `${output.trim()}\n${errorMsg}` : errorMsg;
+          console.log(`❌ [Agent ${this.id}] Step ${this.stepNumber}: Code execution failed -`, result.error?.message || 'Unknown error');
         }
+
+        // Store observations in the action step
+        actionStep.observations = observations.trim();
+        if (observationImages.length > 0) {
+          actionStep.observationsImages = observationImages;
+        }
+
+        // Emit code execution event
+        this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
+          agentId: this.id,
+          completionId,
+          stepNumber: this.stepNumber,
+          code,
+          result,
+          observations: actionStep.observations,
+          observationImages: actionStep.observationsImages
+        });
+
+        return actionStep.observations || 'Code executed (no output)';
       } finally {
-        // Clean up listeners
-        if (this.manager.kernelManager) {
-          this.manager.kernelManager.off('stream', handleManagerEvent);
-          this.manager.kernelManager.off('execute_result', handleManagerEvent);
-          this.manager.kernelManager.off('execute_error', handleManagerEvent);
-        }
+        // Clean up listener
+        this.manager.kernelManager.off('output', handleManagerEvent);
       }
     } catch (error) {
       const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -1624,13 +1561,19 @@ export class Agent implements IAgentInstance {
     }
   }
 
-  async attachKernel(kernel: IKernelInstance): Promise<void> {
+  async attachKernel(kernelInstance: IKernelInstance): Promise<void> {
     const previousKernelType = this.kernelType;
     
-    this.kernel = kernel;
+    // Extract kernel and metadata from IKernelInstance
+    this.kernel = kernelInstance.kernel;
+    this.kernelId = kernelInstance.id;
+    this.kernelMode = kernelInstance.mode;
+    this.kernelLanguage = kernelInstance.language;
+    this.kernelCreated = kernelInstance.created;
+    this.kernelOptions = kernelInstance.options;
     
     // Update kernelType based on the attached kernel's language
-    this.kernelType = this.mapKernelLanguageToType(kernel.language);
+    this.kernelType = this.mapKernelLanguageToType(kernelInstance.language);
     
     console.log(`🔗 Attached ${this.kernelType} kernel to agent: ${this.id}`);
     
@@ -1644,7 +1587,7 @@ export class Agent implements IAgentInstance {
     
     this.manager.emit(AgentEvents.KERNEL_ATTACHED, {
       agentId: this.id,
-      kernelId: kernel.id,
+      kernelId: this.kernelId,
       kernelType: this.kernelType
     });
     
@@ -1677,10 +1620,15 @@ export class Agent implements IAgentInstance {
 
   detachKernel(): void {
     if (this.kernel) {
-      const kernelId = this.kernel.id;
+      const kernelId = this.kernelId;
       const previousKernelType = this.kernelType;
       
       this.kernel = undefined;
+      this.kernelId = undefined;
+      this.kernelMode = undefined;
+      this.kernelLanguage = undefined;
+      this.kernelCreated = undefined;
+      this.kernelOptions = undefined;
       // Clear kernelType when no kernel is attached
       this.kernelType = undefined;
       // Clear startup output since kernel is detached
@@ -1859,79 +1807,61 @@ export class Agent implements IAgentInstance {
    */
   private async executeCodeStateless(completionId: string, code: string): Promise<string> {
     if (!this.kernel) {
-      throw new Error('No kernel attached to agent');
+      throw new Error("No kernel attached to agent");
     }
 
-    console.log(`🚀 [Agent ${this.id}] Stateless code execution`);
+    console.log(`🚀 [Agent ${this.id}] Stateless execution: Executing code`);
     console.log(`📋 Code (${code.length} chars):`, code.substring(0, 200) + (code.length > 200 ? '...' : ''));
 
-    this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
-      agentId: this.id,
-      code,
-      completionId,
-      stateless: true
-    });
-    
     try {
-      let output = '';
-      let hasOutput = false;
-      
-      // Set up event listeners to capture stdout/stderr
+      let observations = '';
+      let observationImages: string[] = [];
+
+      // Set up output capture
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (this.kernel && event.kernelId === this.kernel.id) {
-          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
-            output += event.data.text;
-            hasOutput = true;
-          } else if (event.data.data && event.data.data['text/plain']) {
-            output += event.data.data['text/plain'] + '\n';
-            hasOutput = true;
-          } else if (event.data.ename && event.data.evalue) {
-            output += `${event.data.ename}: ${event.data.evalue}\n`;
-            if (event.data.traceback && Array.isArray(event.data.traceback)) {
-              output += event.data.traceback.join('\n') + '\n';
-            }
-            hasOutput = true;
+        if (this.kernel && event.kernelId === this.kernelId) {
+          if (event.data.type === 'stream' && (event.data.name === 'stdout' || event.data.name === 'stderr')) {
+            observations += event.data.text || '';
+          } else if (event.data.type === 'display_data' && event.data.data && event.data.data['image/png']) {
+            observationImages.push(event.data.data['image/png']);
           }
         }
       };
-      
-      // Listen for kernel events through the manager
-      if (this.manager.kernelManager) {
-        this.manager.kernelManager.on('stream', handleManagerEvent);
-        this.manager.kernelManager.on('execute_result', handleManagerEvent);
-        this.manager.kernelManager.on('execute_error', handleManagerEvent);
-      }
-      
+
+      // Listen for output
+      this.manager.kernelManager.on('output', handleManagerEvent);
+
       try {
+        // Execute the code
         const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernel.id, code)
-          : await this.kernel.kernel.execute(code);
-        
-        // Give a moment for any remaining events to be processed
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
+          ? await this.manager.kernelManager.execute(this.kernelId!, code)
+          : await this.kernel.execute(code);
+
         if (result.success) {
-          console.log(`✅ [Agent ${this.id}] Stateless code execution completed successfully`);
-          if (hasOutput) {
-            console.log(`📤 Output (${output.trim().length} chars):`, output.trim().substring(0, 200) + (output.trim().length > 200 ? '...' : ''));
-          }
-          return hasOutput ? output.trim() : 'Code executed successfully';
+          console.log(`✅ [Agent ${this.id}] Stateless execution: Code executed successfully`);
         } else {
-          const errorMsg = result.error?.message || 'Code execution failed';
-          console.log(`❌ [Agent ${this.id}] Stateless code execution failed - ${errorMsg}`);
-          return hasOutput ? `${output.trim()}\n${errorMsg}` : errorMsg;
+          console.log(`❌ [Agent ${this.id}] Stateless execution: Code execution failed -`, result.error?.message || 'Unknown error');
         }
+
+        // Emit code execution event (stateless)
+        this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
+          agentId: this.id,
+          completionId,
+          code,
+          result,
+          observations: observations.trim(),
+          observationImages,
+          stateless: true
+        });
+
+        return observations.trim() || 'Code executed (no output)';
       } finally {
-        // Clean up listeners
-        if (this.manager.kernelManager) {
-          this.manager.kernelManager.off('stream', handleManagerEvent);
-          this.manager.kernelManager.off('execute_result', handleManagerEvent);
-          this.manager.kernelManager.off('execute_error', handleManagerEvent);
-        }
+        // Clean up listener
+        this.manager.kernelManager.off('output', handleManagerEvent);
       }
     } catch (error) {
       const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      console.log(`💥 [Agent ${this.id}] Stateless kernel execution exception - ${errorMsg}`);
+      console.log(`💥 [Agent ${this.id}] Stateless execution: Kernel execution exception - ${errorMsg}`);
       throw new Error(errorMsg);
     }
   }
