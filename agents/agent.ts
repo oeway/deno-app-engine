@@ -45,6 +45,16 @@ export enum StepType {
   SYSTEM_PROMPT = "system_prompt"
 }
 
+// Interface for tracking code executions
+export interface CodeExecution {
+  completionId: string;
+  code: string;
+  language: string;
+  outputs: string;
+  timestamp: number;
+  committed: boolean;
+}
+
 // Memory step interfaces
 export interface BaseStep {
   type: StepType;
@@ -84,6 +94,22 @@ export interface PlanningStep extends BaseStep {
 export interface SystemPromptStep extends BaseStep {
   type: StepType.SYSTEM_PROMPT;
   systemPrompt: string;
+}
+
+// Completion-specific data for service calls
+export interface CompletionData {
+  completionId: string;
+  thoughts?: {
+    timestamp: number;
+    data: string;
+  };
+  returnToUser?: {
+    timestamp: number;
+    data: {
+      content: string;
+      commitIds?: string[];
+    };
+  };
 }
 
 export interface ToolCall {
@@ -138,10 +164,14 @@ export class AgentStartupError extends AgentError {
 export class AgentMemory {
   public steps: (TaskStep | ActionStep | PlanningStep | SystemPromptStep)[] = [];
   public systemPrompt?: SystemPromptStep;
+  public completionMemory: Map<string, CompletionData> = new Map(); // Store completion-specific data
+  public codeExecutions: Map<string, CodeExecution> = new Map(); // Store code executions by completion ID
 
   reset(): void {
     this.steps = [];
     this.systemPrompt = undefined;
+    this.completionMemory.clear();
+    this.codeExecutions.clear();
   }
 
   addStep(step: TaskStep | ActionStep | PlanningStep | SystemPromptStep): void {
@@ -153,6 +183,78 @@ export class AgentMemory {
 
   getStepsByType<T extends BaseStep>(type: StepType): T[] {
     return this.steps.filter(step => step.type === type) as T[];
+  }
+
+  // Code execution tracking
+  addCodeExecution(execution: CodeExecution): void {
+    this.codeExecutions.set(execution.completionId, execution);
+  }
+
+  getCodeExecution(completionId: string): CodeExecution | undefined {
+    return this.codeExecutions.get(completionId);
+  }
+
+  commitExecutions(commitIds: string[]): void {
+    for (const commitId of commitIds) {
+      const execution = this.codeExecutions.get(commitId);
+      if (execution) {
+        execution.committed = true;
+      }
+    }
+  }
+
+  getCommittedExecutions(): CodeExecution[] {
+    return Array.from(this.codeExecutions.values()).filter(exec => exec.committed);
+  }
+
+  // Completion memory management methods
+  getCompletionData(completionId: string): CompletionData | undefined {
+    return this.completionMemory.get(completionId);
+  }
+
+  setCompletionData(completionId: string, data: CompletionData): void {
+    this.completionMemory.set(completionId, data);
+  }
+
+  clearCompletionData(completionId: string): void {
+    this.completionMemory.delete(completionId);
+  }
+
+  // Cleanup old completion data
+  cleanupOldCompletions(maxAgeMs: number = 3600000): void {
+    const cutoff = Date.now() - maxAgeMs;
+    const toDelete: string[] = [];
+
+    for (const [completionId, data] of this.completionMemory.entries()) {
+      const timestamps = [
+        data.thoughts?.timestamp,
+        data.returnToUser?.timestamp
+      ].filter(t => t !== undefined) as number[];
+
+      if (timestamps.length === 0 || Math.max(...timestamps) < cutoff) {
+        toDelete.push(completionId);
+      }
+    }
+
+    for (const completionId of toDelete) {
+      this.completionMemory.delete(completionId);
+    }
+
+    // Also cleanup old code executions
+    const executionsToDelete: string[] = [];
+    for (const [completionId, execution] of this.codeExecutions.entries()) {
+      if (execution.timestamp < cutoff) {
+        executionsToDelete.push(completionId);
+      }
+    }
+
+    for (const completionId of executionsToDelete) {
+      this.codeExecutions.delete(completionId);
+    }
+
+    if (toDelete.length > 0 || executionsToDelete.length > 0) {
+      console.log(`🧹 Cleaned up ${toDelete.length} old completion entries and ${executionsToDelete.length} old executions from agent memory`);
+    }
   }
 
   toMessages(summaryMode = false): ChatMessage[] {
@@ -321,517 +423,70 @@ export interface IAgentInstance {
 // Code execution instructions for agents with kernels
 const CODE_EXECUTION_INSTRUCTIONS = {
   PYTHON: `
-You are a powerful coding assistant capable of solving complex tasks by writing and executing Python code.
-You will be given a task and must methodically analyze, plan, and execute Python code to achieve the goal.
+You are an AI assistant that executes PYTHON code to solve problems. Follow the conversation pattern exactly as shown in the examples above.
 
-**FUNDAMENTAL REQUIREMENT: ALWAYS USE CODE AND TOOLS**
-- Never provide purely text-based responses without code execution
-- Every task must involve writing and executing Python code, except for simple questions
-- Use available tools, services, and APIs to gather information and solve problems
-- If you need to explain something, demonstrate it with code examples
-- If you need to research something, write code to search or analyze data
-- Transform theoretical knowledge into practical, executable solutions
+**CRITICAL: You MUST write Python code only. Do not write TypeScript, JavaScript, or any other language.**
 
-**CRITICAL: MANDATORY TAG USAGE - FAILURE TO USE TAGS ENDS CONVERSATION**
-- You MUST ALWAYS use proper tags in your responses - NO EXCEPTIONS
-- You MUST use \`<py-script>\` tags when you want to execute Python code
-- You MUST use \`<returnToUser>\` tags when providing final results to the user
-- You MUST use \`<thoughts>\` tags when analyzing or planning your approach
-- **STRICTLY FORBIDDEN**: Never write explanatory text like "I'll execute Python code", "Let me run code", "I'll proceed with", "Let's start by", etc. without IMMEDIATELY following with the actual tags
-- **CONVERSATION KILLER**: Any response without proper tags will IMMEDIATELY end the conversation and be sent to the user as a final answer
-- **REQUIRED FLOW**: If you need to explain your approach, use \`<thoughts>\` tags, then IMMEDIATELY follow with action tags
-- **NO PLAIN TEXT**: The only acceptable plain text is brief acknowledgments like "I understand" or "Got it"
-- When in doubt, ALWAYS use \`<thoughts>\` tags first, then action tags - NEVER use plain explanatory text
+**FORMAT RULES:**
+- Always respond with: <script lang="python">your_python_code_here</script>
+- Never include explanation outside script tags
+- Use Python syntax: f-strings, def functions, print() for debug output
+- Use Python variable assignment: result = value (not const result = value)
 
-## Core Execution Cycle
+**AVAILABLE FUNCTIONS:**
+- await returnToUser(f"final answer in markdown") - Send final response to user (REQUIRED when task is complete)
+- await logThoughts("internal thinking") - Record your internal thoughts  
+- print() - Debug output (use sparingly)
 
-Follow this structured approach for every task:
-
-### 1. **Analysis Phase**
-Before writing any code, analyze what you need to accomplish. Write your analysis within <thoughts> tags:
-- Break down the task into logical components
-- Identify what data, libraries, or resources you'll need
-- Consider potential challenges or edge cases
-- Plan your approach step by step
-- **Always plan to use code execution - no task should be answered without running code**
-
-**THOUGHTS FORMATTING RULES:**
-- Think step by step, but keep each thinking step minimal
-- Use maximum 5 words per thinking step
-- Separate multiple thinking steps with line breaks
-- Focus on essential keywords only
-
-**CORRECT EXAMPLES:**
-<thoughts>
-Analyze sales data needed.
-Load CSV file first.
-Calculate monthly trend patterns.
-Create data visualization chart.
-</thoughts>
-
-**WRONG EXAMPLES (WILL END CONVERSATION):**
-❌ "I need to analyze the sales data. Let me start by loading the CSV file."
-❌ "To solve this problem, I'll first examine the data structure."
-❌ "I'll execute a Python script to handle this task."
-❌ <thoughts>I need to carefully analyze the sales data by loading the CSV file and then calculating comprehensive monthly trends</thoughts>
-
-**ALWAYS USE TAGS - NO EXCEPTIONS!**
-
-### 2. **Code Execution Phase**  
-Write Python code within <py-script> tags with a unique ID. Always include:
-- Clear, well-commented code
-- **Essential: Use \`print()\` statements** to output results, variables, and progress updates
-- Only printed output becomes available in subsequent observations
-- Error handling where appropriate
-
-Example:
-<py-script id="load_data">
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# Load the sales data
-df = pd.read_csv('sales_data.csv')
-print(f"Loaded {len(df)} records")
-print(f"Columns: {list(df.columns)}")
-print(df.head())
-</py-script>
-
-Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed.
-Unless explicitly asked, you should NEVER show user scripts or code.
-
-### 3. **Observation Analysis**
-After each code execution, you'll receive an <observation> with the output. Use this to:
-- Verify your code worked as expected
-- Understand the data or results
-- Plan your next step based on what you learned
-
-**IMPORTANT**: NEVER generate <observation> blocks yourself - these are automatically created by the system after code execution. Attempting to include observation blocks in your response will result in an error.
-
-### 4. **Final Response**
-Use <returnToUser> tags when you have completed the task or need to return control:
-- Include a \`commit="id1,id2,id3"\` attribute to preserve important code blocks
-- Provide a clear summary of what was accomplished
-- Include relevant results or findings
-- **IMPORTANT**: Only responses wrapped in \`<returnToUser>\` tags will be delivered to the user as final answers
-
-Example:
-<returnToUser commit="load_data,analysis,visualization">
-Successfully analyzed the sales data showing a 15% increase in Q4. Created visualization showing monthly trends with peak in December.
-</returnToUser>
-
-## Advanced Capabilities
-
-### Service Integration
-You have access to Hypha services through the kernel environment. These services are automatically available as functions:
-- Use them directly like any Python function
-- Services handle complex operations like web search, image processing, etc.
-- Always print() the results to see outputs in observations
-
-### API Access
-Access to internal APIs through the \`api\` object:
-- Vision: \`await api.inspectImages(images=[{'url': 'data:image/png;base64,...'}], query='Describe this')\`
-- Chat: \`await api.chatCompletion(messages=[...], max_tokens=50)\`
-- Use JSON schema for structured responses when needed
-
-### Data Visualization
-For plots and charts:
-- Use matplotlib, plotly, or seaborn
-- Always save plots and print confirmation
-- For inline display, use appropriate backend settings
-
-### Web and File Operations
-- Use requests for web data
-- Handle file I/O with proper error checking
-- For large datasets, consider memory management
-
-## Key Requirements
-
-### Code Quality
-- Write clean, readable code with comments
-- Use appropriate error handling
-- Follow Python best practices
-- Import only what you need
-
-### Output Management
-- **Critical: Use print() for any data you need to reference later**
-- Print intermediate results, not just final answers
-- Include context in your print statements
-- For large outputs, print summaries or key excerpts
-
-### State Management
-- Variables and imports persist between code blocks
-- Build on previous results rather than re-computing
-- Use descriptive variable names for clarity
-- Don't assume variables exist unless you created them
-
-### Problem Solving
-- If you encounter errors, analyze the observation and adapt
-- Try alternative approaches when initial attempts fail
-- Break complex problems into smaller, manageable steps
-- Don't give up - iterate until you find a solution
-
-### Planning Integration
-When planning is enabled, your code execution should align with the overall plan:
-- Reference specific plan steps in your thoughts
-- Update progress and status through print statements
-- Adapt your approach based on planning insights
-
-## Runtime Environment
-
-- **Platform**: Pyodide (Python in WebAssembly)
-- **Package Management**: Use \`import micropip; await micropip.install(['package'])\`
-- **Standard Libraries**: Most stdlib modules available
-- **External Libraries**: Install via micropip as needed
-- **File System**: Limited file system access in web environment
-- **Network**: HTTP requests available through patched requests library
-
-## Error Recovery
-
-When things go wrong:
-1. Read the error message carefully in the observation
-2. Identify the specific issue (syntax, logic, missing dependency, etc.)
-3. Adapt your approach in the next code block
-4. Use print() to debug and understand the state
-5. Try simpler approaches if complex ones fail
-
-Remember: Every piece of information you need for subsequent steps must be explicitly printed. The observation is your only window into code execution results.
+**PYTHON SYNTAX EXAMPLES:**
+- Variables: result = 2 + 3
+- Strings: f"The result is {result}"
+- Functions: def greet(name): return f"Hello, {name}!"
 `,
   
   TYPESCRIPT: `
-You are a powerful coding assistant capable of solving complex tasks by writing and executing TypeScript code.
-You will be given a task and must methodically analyze, plan, and execute TypeScript code to achieve the goal.
+You are an AI assistant that executes TYPESCRIPT code to solve problems. Follow the conversation pattern exactly as shown in the examples above.
 
-**FUNDAMENTAL REQUIREMENT: ALWAYS USE CODE AND TOOLS**
-- Never provide purely text-based responses without code execution
-- Every task must involve writing and executing TypeScript code, even for simple questions
-- Use available tools, services, and APIs to gather information and solve problems
-- If you need to explain something, demonstrate it with code examples
-- If you need to research something, write code to search or analyze data
-- Transform theoretical knowledge into practical, executable solutions
+**CRITICAL: You MUST write TypeScript code only. Do not write Python, JavaScript, or any other language.**
 
-**CRITICAL: MANDATORY TAG USAGE - FAILURE TO USE TAGS ENDS CONVERSATION**
-- You MUST ALWAYS use proper tags in your responses - NO EXCEPTIONS
-- You MUST use \`<t-script>\` tags when you want to execute TypeScript code
-- You MUST use \`<returnToUser>\` tags when providing final results to the user
-- You MUST use \`<thoughts>\` tags when analyzing or planning your approach
-- **STRICTLY FORBIDDEN**: Never write explanatory text like "I'll execute TypeScript code", "Let me run code", "I'll proceed with", "Let's start by", etc. without IMMEDIATELY following with the actual tags
-- **CONVERSATION KILLER**: Any response without proper tags will IMMEDIATELY end the conversation and be sent to the user as a final answer
-- **REQUIRED FLOW**: If you need to explain your approach, use \`<thoughts>\` tags, then IMMEDIATELY follow with action tags
-- **NO PLAIN TEXT**: The only acceptable plain text is brief acknowledgments like "I understand" or "Got it"
-- When in doubt, ALWAYS use \`<thoughts>\` tags first, then action tags - NEVER use plain explanatory text
+**FORMAT RULES:**
+- Always respond with: <script lang="typescript">your_typescript_code_here</script>
+- Never include explanation outside script tags
+- Use TypeScript syntax: template literals, const/let, console.log() for debug output
+- Use TypeScript variable assignment: const result = value (not result = value)
+- Include type annotations where helpful: function greet(name: string): string
 
-## Core Execution Cycle
+**AVAILABLE FUNCTIONS:**
+- await returnToUser(\`final answer in markdown\`) - Send final response to user (REQUIRED when task is complete)
+- await logThoughts("internal thinking") - Record your internal thoughts
+- console.log() - Debug output (use sparingly)
 
-Follow this structured approach for every task:
-
-### 1. **Analysis Phase**
-Before writing any code, analyze what you need to accomplish. Write your analysis within <thoughts> tags:
-- Break down the task into logical components
-- Identify what interfaces, types, or modules you'll need
-- Consider async/await patterns and error handling
-- Plan your approach step by step
-- **Always plan to use code execution - no task should be answered without running code**
-
-**THOUGHTS FORMATTING RULES:**
-- Think step by step, but keep each thinking step minimal
-- Use maximum 5 words per thinking step
-- Separate multiple thinking steps with line breaks
-- Focus on essential keywords only
-
-**CORRECT EXAMPLES:**
-<thoughts>
-Build REST API client.
-Define TypeScript interfaces first.
-Implement fetch wrapper function.
-Handle response error cases.
-</thoughts>
-
-**WRONG EXAMPLES (WILL END CONVERSATION):**
-❌ "I need to build a REST API client. Let me start by defining the interfaces."
-❌ "To solve this problem, I'll first create the TypeScript types."
-❌ "I'll execute TypeScript code to handle this task."
-❌ <thoughts>I need to build a comprehensive REST API client by defining proper interfaces and implementing robust fetch wrapper</thoughts>
-
-**ALWAYS USE TAGS - NO EXCEPTIONS!**
-
-### 2. **Code Execution Phase**
-Write TypeScript code within <t-script> tags with a unique ID. Always include:
-- Proper type definitions and interfaces
-- **Essential: Use \`console.log()\` statements** to output results and progress
-- Modern ES6+ syntax and async/await patterns
-- Clear, well-commented code
-
-Example:
-<t-script id="api_client">
-interface User {
-  id: number;
-  name: string;
-  email: string;
-}
-
-async function fetchUsers(): Promise<User[]> {
-  try {
-    const response = await fetch('/api/users');
-    const users: User[] = await response.json();
-    console.log(\`Fetched \${users.length} users\`);
-    return users;
-  } catch (error) {
-    console.error('Failed to fetch users:', error);
-    throw error;
-  }
-}
-
-// Test the function
-const users = await fetchUsers();
-console.log('Users:', users);
-</t-script>
-
-Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed.
-Unless explicitly asked, you should NEVER show user scripts or code.
-
-### 3. **Observation Analysis**
-After each code execution, you'll receive an <observation> with the console output. Use this to:
-- Verify your code compiled and executed correctly
-- Understand the results and any type information
-- Plan your next step based on what you learned
-
-**IMPORTANT**: NEVER generate <observation> blocks yourself - these are automatically created by the system after code execution. Attempting to include observation blocks in your response will result in an error.
-
-### 4. **Final Response**
-Use <returnToUser> tags when you have completed the task:
-- Include a \`commit="id1,id2,id3"\` attribute to preserve important code blocks
-- Provide a clear summary of what was accomplished
-- Include relevant results or findings
-- **IMPORTANT**: Only responses wrapped in \`<returnToUser>\` tags will be delivered to the user as final answers
-
-## Advanced Capabilities
-
-### Service Integration
-Access to Hypha services through the runtime environment:
-- Services are available as TypeScript functions with proper typing
-- Use them directly in your code with appropriate await syntax
-- Always log results to see outputs in observations
-
-### Deno Environment
-- **Runtime**: Modern Deno environment with TypeScript support
-- **Imports**: Use standard Deno import syntax
-- **Standard Library**: Full access to Deno std library
-- **Web APIs**: Fetch, WebSocket, and other web standards available
-
-### Type Safety
-- Use strict TypeScript configuration
-- Define proper interfaces for data structures
-- Leverage union types and generics appropriately
-- Handle null/undefined values explicitly
-
-### Async Programming
-- Use async/await for asynchronous operations
-- Handle promises properly with error catching
-- Understand async iteration and generators when needed
-- Use appropriate concurrency patterns
-
-## Key Requirements
-
-### Code Quality
-- Write type-safe, well-structured TypeScript
-- Use proper error handling with try/catch
-- Follow modern TypeScript best practices
-- Leverage the type system for safety
-
-### Output Management
-- **Critical: Use console.log() for any data you need to reference later**
-- Log intermediate results, not just final answers
-- Include context in your log statements
-- For complex objects, use JSON.stringify() for clarity
-
-### State Management
-- Variables and imports persist between code blocks
-- Build on previous results and type definitions
-- Use descriptive naming for interfaces and variables
-- Don't assume types exist unless you defined them
-
-### Problem Solving
-- If you encounter type errors, analyze and fix them systematically
-- Use TypeScript's compiler feedback to guide improvements
-- Break complex problems into smaller, typed components
-- Iterate until you achieve type safety and correctness
-
-Remember: Every piece of information you need for subsequent steps must be explicitly logged. The observation is your only window into code execution results.
+**TYPESCRIPT SYNTAX EXAMPLES:**
+- Variables: const result = 2 + 3;
+- Strings: \`The result is \${result}\`
+- Functions: function greet(name: string): string { return \`Hello, \${name}!\`; }
 `,
 
   JAVASCRIPT: `
-You are a powerful coding assistant capable of solving complex tasks by writing and executing JavaScript code.
-You will be given a task and must methodically analyze, plan, and execute JavaScript code to achieve the goal.
+You are an AI assistant that executes JAVASCRIPT code to solve problems. Follow the conversation pattern exactly as shown in the examples above.
 
-**FUNDAMENTAL REQUIREMENT: ALWAYS USE CODE AND TOOLS**
-- Never provide purely text-based responses without code execution
-- Every task must involve writing and executing JavaScript code, even for simple questions
-- Use available tools, services, and APIs to gather information and solve problems
-- If you need to explain something, demonstrate it with code examples
-- If you need to research something, write code to search or analyze data
-- Transform theoretical knowledge into practical, executable solutions
+**CRITICAL: You MUST write JavaScript code only. Do not write Python, TypeScript, or any other language.**
 
-**CRITICAL: MANDATORY TAG USAGE - FAILURE TO USE TAGS ENDS CONVERSATION**
-- You MUST ALWAYS use proper tags in your responses - NO EXCEPTIONS
-- You MUST use \`<t-script>\` tags when you want to execute JavaScript code
-- You MUST use \`<returnToUser>\` tags when providing final results to the user
-- You MUST use \`<thoughts>\` tags when analyzing or planning your approach
-- **STRICTLY FORBIDDEN**: Never write explanatory text like "I'll execute JavaScript code", "Let me run code", "I'll proceed with", "Let's start by", etc. without IMMEDIATELY following with the actual tags
-- **CONVERSATION KILLER**: Any response without proper tags will IMMEDIATELY end the conversation and be sent to the user as a final answer
-- **REQUIRED FLOW**: If you need to explain your approach, use \`<thoughts>\` tags, then IMMEDIATELY follow with action tags
-- **NO PLAIN TEXT**: The only acceptable plain text is brief acknowledgments like "I understand" or "Got it"
-- When in doubt, ALWAYS use \`<thoughts>\` tags first, then action tags - NEVER use plain explanatory text
+**FORMAT RULES:**
+- Always respond with: <script lang="javascript">your_javascript_code_here</script>
+- Never include explanation outside script tags
+- Use JavaScript syntax: template literals, const/let, console.log() for debug output
+- Use JavaScript variable assignment: const result = value (not result = value)
 
-## Core Execution Cycle
+**AVAILABLE FUNCTIONS:**
+- await returnToUser(\`final answer in markdown\`) - Send final response to user (REQUIRED when task is complete)
+- await logThoughts("internal thinking") - Record your internal thoughts
+- console.log() - Debug output (use sparingly)
 
-Follow this structured approach for every task:
-
-### 1. **Analysis Phase**
-Before writing any code, analyze what you need to accomplish. Write your analysis within <thoughts> tags:
-- Break down the task into logical components
-- Identify what functions, objects, or modules you'll need
-- Consider async patterns and error handling
-- Plan your approach step by step
-- **Always plan to use code execution - no task should be answered without running code**
-
-**THOUGHTS FORMATTING RULES:**
-- Think step by step, but keep each thinking step minimal
-- Use maximum 5 words per thinking step
-- Separate multiple thinking steps with line breaks
-- Focus on essential keywords only
-
-**CORRECT EXAMPLES:**
-<thoughts>
-Process JSON data needed.
-Parse input string first.
-Transform data structure properly.
-Validate final results output.
-</thoughts>
-
-**WRONG EXAMPLES (WILL END CONVERSATION):**
-❌ "I need to process this JSON data. Let me start by parsing the input."
-❌ "To solve this problem, I'll first examine the data structure."
-❌ "I'll execute JavaScript code to handle this task."
-❌ <thoughts>I need to carefully process this JSON data by parsing the input and transforming the structure</thoughts>
-
-**ALWAYS USE TAGS - NO EXCEPTIONS!**
-
-### 2. **Code Execution Phase**
-Write JavaScript code within <t-script> tags with a unique ID. Always include:
-- Modern ES6+ syntax and features
-- **Essential: Use \`console.log()\` statements** to output results and progress
-- Proper error handling with try/catch
-- Clear, well-commented code
-
-Example:
-<t-script id="data_processing">
-// Process and transform user data
-const processUserData = (rawData) => {
-  try {
-    const parsed = JSON.parse(rawData);
-    console.log(\`Processing \${parsed.length} user records\`);
-    
-    const transformed = parsed.map(user => ({
-      id: user.id,
-      fullName: \`\${user.firstName} \${user.lastName}\`,
-      email: user.email.toLowerCase(),
-      isActive: user.status === 'active'
-    }));
-    
-    console.log('Transformation completed');
-    console.log('Sample result:', transformed[0]);
-    return transformed;
-  } catch (error) {
-    console.error('Processing failed:', error.message);
-    throw error;
-  }
-};
-
-// Test with sample data
-const sampleData = '[{"id":1,"firstName":"John","lastName":"Doe","email":"JOHN@EXAMPLE.COM","status":"active"}]';
-const result = processUserData(sampleData);
-console.log('Final result:', result);
-</t-script>
-
-Importantly, markdown code blocks (\`\`\`...\`\`\`) will NOT be executed;
-Unless explicitly asked, you should NEVER show user scripts or code.
-
-### 3. **Observation Analysis**
-After each code execution, you'll receive an <observation> with the console output. Use this to:
-- Verify your code executed correctly
-- Understand the results and data structures
-- Plan your next step based on what you learned
-
-**IMPORTANT**: NEVER generate <observation> blocks yourself - these are automatically created by the system after code execution. Attempting to include observation blocks in your response will result in an error.
-
-### 4. **Final Response**
-Use <returnToUser> tags when you have completed the task:
-- Include a \`commit="id1,id2,id3"\` attribute to preserve important code blocks
-- Provide a clear summary of what was accomplished
-- Include relevant results or findings
-- **IMPORTANT**: Only responses wrapped in \`<returnToUser>\` tags will be delivered to the user as final answers
-
-## Advanced Capabilities
-
-### Service Integration
-Access to Hypha services through the runtime environment:
-- Services are available as JavaScript functions
-- Use them directly with appropriate async/await syntax
-- Always log results to see outputs in observations
-
-### Modern JavaScript Features
-- **ES6+ Syntax**: Arrow functions, destructuring, template literals
-- **Async/Await**: For handling asynchronous operations
-- **Modules**: Import/export when supported
-- **Array Methods**: map, filter, reduce, forEach, etc.
-- **Object Methods**: Object.keys, Object.values, Object.entries
-
-### API Access
-Access to internal APIs through the \`api\` object:
-- Vision: \`await api.inspectImages(images=[{url: 'data:image/png;base64,...'}], query='Describe this')\`
-- Chat: \`await api.chatCompletion(messages=[...], max_tokens=50)\`
-
-## Key Requirements
-
-### Code Quality
-- Write clean, readable JavaScript with modern syntax
-- Use proper error handling with try/catch blocks
-- Follow JavaScript best practices and conventions
-- Use meaningful variable and function names
-
-### Output Management
-- **Critical: Use console.log() for any data you need to reference later**
-- Log intermediate results, not just final answers
-- Include context in your log statements
-- For complex objects, use JSON.stringify() or object destructuring
-
-### State Management
-- Variables and functions persist between code blocks
-- Build on previous results and function definitions
-- Use descriptive naming for clarity
-- Don't assume variables exist unless you created them
-
-### Problem Solving
-- If you encounter errors, analyze the error message and adapt
-- Try alternative approaches when initial attempts fail
-- Break complex problems into smaller, manageable functions
-- Test your code incrementally as you build
-
-### Async Programming
-- Use async/await for promises and asynchronous operations
-- Handle promise rejections with proper error catching
-- Understand callback patterns when necessary
-- Use appropriate timing functions (setTimeout, setInterval) when needed
-
-## Runtime Environment
-
-- **Platform**: Modern JavaScript environment (Deno-based)
-- **Standards**: ES2020+ features available
-- **APIs**: Standard web APIs and Node.js-style APIs
-- **Modules**: Support for ES modules and dynamic imports
-- **Console**: Full console API for debugging and output
-
-Remember: Every piece of information you need for subsequent steps must be explicitly logged. The observation is your only window into code execution results.
+**JAVASCRIPT SYNTAX EXAMPLES:**
+- Variables: const result = 2 + 3;
+- Strings: \`The result is \${result}\`
+- Functions: function greet(name) { return \`Hello, \${name}!\`; }
 `
 };
 
@@ -979,6 +634,35 @@ export class Agent implements IAgentInstance {
   }
 
   /**
+   * Format committed executions for display to user
+   */
+  private formatCommittedExecutions(): string {
+    const committedExecutions = this.memory.getCommittedExecutions();
+    
+    if (committedExecutions.length === 0) {
+      return '';
+    }
+
+    let formatted = '\n\n## Code Executions\n\n';
+    
+    for (const execution of committedExecutions) {
+      formatted += `### Execution ${execution.completionId.slice(-8)}\n\n`;
+      formatted += `**Language:** ${execution.language}\n\n`;
+      formatted += `**Code:**\n\`\`\`${execution.language}\n${execution.code}\n\`\`\`\n\n`;
+      
+      if (execution.outputs) {
+        formatted += `**Output:**\n\`\`\`\n${execution.outputs}\n\`\`\`\n\n`;
+      } else {
+        formatted += `**Output:** *(no output)*\n\n`;
+      }
+      
+      formatted += '---\n\n';
+    }
+
+    return formatted;
+  }
+
+  /**
    * Generate kernel-aware system prompt with planning context
    */
   private generateSystemPrompt(basePrompt?: string): string {
@@ -993,8 +677,6 @@ export class Agent implements IAgentInstance {
     if (this.startupOutput) {
       console.log(`📋 Including startup output in system prompt for agent: ${this.id}`);
       systemPrompt += "\n" + this.startupOutput;
-    } else {
-      console.log(`⚠️  No startup output available for agent: ${this.id}`);
     }
     
     // Add kernel-specific instructions based on configured kernelType
@@ -1013,7 +695,7 @@ export class Agent implements IAgentInstance {
       systemPrompt += '\nUse these services directly in your code as if they were local functions.\n';
     }
 
-    // Add planning context if enabled
+    // Add planning context if enabled - now only looks at agent memory
     if (this.enablePlanning) {
       const plans = this.memory.getStepsByType<PlanningStep>(StepType.PLANNING);
       if (plans.length > 0) {
@@ -1031,9 +713,20 @@ export class Agent implements IAgentInstance {
    * Get kernel-specific instructions based on kernel type
    */
   private getKernelSpecificInstructions(kernelType: KernelType): string {
+    // Check if HyphaCore service is available for this agent
+    const serviceManager = this.manager?.getAgentServiceManager?.();
+    const hasHyphaService = serviceManager?.hasService?.(this.id);
+    
+    // If no HyphaCore service is available, throw an error
+    if (!hasHyphaService) {
+      throw new AgentError(`Agent ${this.id} has a kernel attached but no HyphaCore service available. Kernel-based agents require HyphaCore integration for returnToUser() and logThoughts() functions.`);
+    }
+    
     const instructionKey = kernelType.toUpperCase() as keyof typeof CODE_EXECUTION_INSTRUCTIONS;
     return CODE_EXECUTION_INSTRUCTIONS[instructionKey] || '';
   }
+
+  
 
   /**
    * Map KernelLanguage to KernelType
@@ -1258,30 +951,39 @@ export class Agent implements IAgentInstance {
           maxSteps: Math.min(this.maxSteps, this.manager.getMaxStepsCap()), // Use agent's maxSteps config, capped at manager-configured limit
           stream: options.stream !== undefined ? options.stream : true,
           abortController: options.abortController,
+          serviceManager: this.manager.getAgentServiceManager(), // Pass service manager for completion result checking
+          agentId: this.id, // Pass agent ID for service checking
+          agentKernelType: this.kernelType, // Pass agent's kernel type for syntax conversion decisions
           onExecuteCode: this.kernel ? 
-            (async (completionId: string, code: string): Promise<string> => {
+            (async (completionId: string, code: string, language?: string): Promise<string> => {
               console.log(`🚀 [Agent ${this.id}] Step ${this.stepNumber}: Executing code`);
               console.log(`📋 Code (${code.length} chars):`, code.substring(0, 200) + (code.length > 200 ? '...' : ''));  
-              return await this.executeCode(completionId, code, actionStep);
+              return await this.executeCode(completionId, code, actionStep, language);
             }) : 
             options.onExecuteCode,
           onMessage: (completionId: string, message: string, commitIds?: string[]) => {
             // Validate final message before processing
             this.validateAgentOutput(message);
             
+            // Include committed executions in the final answer if any exist
+            const committedExecutions = this.formatCommittedExecutions();
+            const finalMessage = message + committedExecutions;
+            
             // This is a final answer
-            finalAnswer = message;
-            actionStep.actionOutput = message;
+            finalAnswer = finalMessage;
+            actionStep.actionOutput = finalMessage;
             
             this.manager.emit(AgentEvents.AGENT_MESSAGE, {
               agentId: this.id,
               completionId,
-              message,
-              commitIds
+              message: finalMessage,
+              originalMessage: message,
+              commitIds,
+              committedExecutions: this.memory.getCommittedExecutions()
             });
             
             if (options.onMessage) {
-              options.onMessage(completionId, message, commitIds);
+              options.onMessage(completionId, finalMessage, commitIds);
             }
           },
           onStreaming: (completionId: string, chunk: string) => {
@@ -1306,8 +1008,8 @@ export class Agent implements IAgentInstance {
             // Accumulate the content for this step
             stepAccumulatedContent += chunk.content;
             
-            // Validate agent output before processing (validate accumulated content)
-            this.validateAgentOutput(stepAccumulatedContent);
+            // Don't validate during streaming - only validate final content
+            // Validation during streaming can interrupt the flow if partial content triggers false positives
             
             actionStep.modelOutput = stepAccumulatedContent;
             actionStep.modelOutputMessage = {
@@ -1326,8 +1028,42 @@ export class Agent implements IAgentInstance {
               role: 'assistant',
               content: chunk.content
             };
+            
+            // For non-kernel agents, treat the first text response as final
+            if (!this.kernel && finalAnswer === null) {
+              console.log(`✅ [Agent ${this.id}] Non-kernel agent completing with first response`);
+              finalAnswer = chunk.content;
+              actionStep.actionOutput = chunk.content;
+              
+              this.manager.emit(AgentEvents.AGENT_MESSAGE, {
+                agentId: this.id,
+                completionId: '', // No specific completion ID for non-kernel agents
+                message: chunk.content,
+                originalMessage: chunk.content,
+                commitIds: [],
+                committedExecutions: []
+              });
+              
+              if (options.onMessage) {
+                options.onMessage('', chunk.content, []);
+              }
+            } else if (this.kernel) {
+              // For kernel agents, don't treat text chunks as final here
+              // Let the reactive loop in chatCompletion.ts handle script extraction and execution
+              console.log(`🔄 [Agent ${this.id}] Kernel agent received text chunk - letting reactive loop handle script extraction`);
+              console.log(`📋 [Agent ${this.id}] Text chunk content:`, chunk.content.substring(0, 200));
+              console.log(`📋 [Agent ${this.id}] finalAnswer is currently:`, finalAnswer === null ? 'null' : 'set');
+            }
           }
+          
           yield chunk;
+          
+          // CRITICAL FIX: Break immediately if finalAnswer has been set by returnToUser callback
+          if (finalAnswer !== null) {
+            console.log(`✅ [Agent ${this.id}] Step ${this.stepNumber}: Code executed successfully`);
+            console.log(`📤 [Agent ${this.id}] finalAnswer set, breaking from chunk iteration`);
+            break;
+          }
         }
 
       } catch (error) {
@@ -1493,7 +1229,7 @@ export class Agent implements IAgentInstance {
   /**
    * Execute code through the kernel with proper event handling
    */
-  private async executeCode(completionId: string, code: string, actionStep: ActionStep): Promise<string> {
+  private async executeCode(completionId: string, code: string, actionStep: ActionStep, language?: string): Promise<string> {
     if (!this.kernel) {
       throw new Error("No kernel attached to agent");
     }
@@ -1520,10 +1256,32 @@ export class Agent implements IAgentInstance {
       this.manager.kernelManager.on('output', handleManagerEvent);
 
       try {
+        // Update completion ID for persistent wrapper functions
+        const serviceManager = this.manager.getAgentServiceManager();
+        let finalCode = code;
+        
+        if (serviceManager.hasService(this.id)) {
+          // Instead of re-injecting wrapper code, just update the completion ID
+          const updateCompletionIdCode = `
+// Update the current completion ID for persistent wrapper functions
+if (typeof globalThis.setCurrentCompletionId === 'function') {
+    globalThis.setCurrentCompletionId("${completionId}");
+} else {
+    console.warn("⚠️ setCurrentCompletionId function not available - wrapper functions may not be injected");
+}
+`;
+          
+          // Inject completion ID update before user code
+          finalCode = updateCompletionIdCode + '\n\n' + code;
+          console.log(`📋 [Agent ${this.id}] Updated completion ID for persistent wrapper functions: ${completionId}`);
+        } else {
+          console.warn(`⚠️ [Agent ${this.id}] No HyphaCore service available - agent functions will not work`);
+        }
+
         // Execute the code
         const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernelId!, code)
-          : await this.kernel.execute(code);
+          ? await this.manager.kernelManager.execute(this.kernelId!, finalCode)
+          : await this.kernel.execute(finalCode);
 
         if (result.success) {
           console.log(`✅ [Agent ${this.id}] Step ${this.stepNumber}: Code executed successfully`);
@@ -1531,10 +1289,52 @@ export class Agent implements IAgentInstance {
           console.log(`❌ [Agent ${this.id}] Step ${this.stepNumber}: Code execution failed -`, result.error?.message || 'Unknown error');
         }
 
+        // For TypeScript/JavaScript kernels, also check for captured output in the result
+        let capturedOutput = '';
+        if (result.result && typeof result.result === 'object' && result.result.captured_output) {
+          capturedOutput = result.result.captured_output;
+          console.log(`📋 [Agent ${this.id}] Found captured output from TypeScript kernel: ${capturedOutput.length} chars`);
+        }
+        
+        // Combine event-based observations with captured output from result
+        const combinedObservations = (observations.trim() + (capturedOutput ? '\n' + capturedOutput : '')).trim();
+
         // Store observations in the action step
-        actionStep.observations = observations.trim();
+        actionStep.observations = combinedObservations;
         if (observationImages.length > 0) {
           actionStep.observationsImages = observationImages;
+        }
+
+        // Store code execution in memory for potential commit
+        const codeExecution: CodeExecution = {
+          completionId,
+          code: finalCode,
+          language: language || this.kernelType || 'python',
+          outputs: combinedObservations,
+          timestamp: Date.now(),
+          committed: false
+        };
+        this.memory.addCodeExecution(codeExecution);
+
+        // Log service calls if they exist (for debugging)
+        const serviceCalls = serviceManager.getServiceCalls(completionId, this.id);
+        let returnToUserMessage = '';
+        
+        if (serviceCalls) {
+          if (serviceCalls.thoughts) {
+            console.log(`💭 [Agent ${this.id}] Thoughts logged: ${serviceCalls.thoughts.data}`);
+          }
+          if (serviceCalls.returnToUser) {
+            console.log(`📤 [Agent ${this.id}] returnToUser called with: ${JSON.stringify(serviceCalls.returnToUser.data)}`);
+            returnToUserMessage = serviceCalls.returnToUser.data.content;
+            
+            // If commit IDs are provided, mark those executions as committed
+            const { commitIds } = serviceCalls.returnToUser.data;
+            if (commitIds && Array.isArray(commitIds)) {
+              this.memory.commitExecutions(commitIds);
+              console.log(`📋 [Agent ${this.id}] Committed ${commitIds.length} executions: ${commitIds.join(', ')}`);
+            }
+          }
         }
 
         // Emit code execution event
@@ -1542,13 +1342,24 @@ export class Agent implements IAgentInstance {
           agentId: this.id,
           completionId,
           stepNumber: this.stepNumber,
-          code,
+          code: finalCode, // Include the injected code
           result,
           observations: actionStep.observations,
           observationImages: actionStep.observationsImages
         });
 
-        return actionStep.observations || 'Code executed (no output)';
+        // Combine stdout/stderr observations with returnToUser message
+        let executionOutput = actionStep.observations || '';
+        if (returnToUserMessage) {
+          if (executionOutput) {
+            executionOutput += `\n\n📤 returnToUser: ${returnToUserMessage}`;
+          } else {
+            executionOutput = `📤 returnToUser: ${returnToUserMessage}`;
+          }
+        }
+
+        // Always return observation, let chatCompletion.ts handle completion detection
+        return executionOutput || 'Code executed (no output)';
       } finally {
         // Clean up listener
         this.manager.kernelManager.off('output', handleManagerEvent);
@@ -1736,6 +1547,9 @@ export class Agent implements IAgentInstance {
       maxSteps: Math.min(options.maxSteps || this.maxSteps, this.manager.getMaxStepsCap()),
       stream: options.stream !== undefined ? options.stream : true,
       abortController: options.abortController,
+      serviceManager: this.manager.getAgentServiceManager(), // Pass service manager for completion result checking
+      agentId: this.id, // Pass agent ID for service checking
+      agentKernelType: this.kernelType, // Pass agent's kernel type for syntax conversion decisions
       onExecuteCode: this.kernel ? 
         (async (completionId: string, code: string): Promise<string> => {
           console.log(`🚀 [Agent ${this.id}] Stateless execution: Executing code`);
@@ -1745,6 +1559,9 @@ export class Agent implements IAgentInstance {
         options.onExecuteCode,
       onMessage: (completionId: string, message: string, commitIds?: string[]) => {
         console.log(`📤 [Agent ${this.id}] Stateless completion finished with message`);
+        
+        // For stateless execution, we don't format committed executions since they're not persisted
+        // The message is returned as-is for stateless mode
         
         this.manager.emit(AgentEvents.AGENT_MESSAGE, {
           agentId: this.id,
@@ -1776,12 +1593,13 @@ export class Agent implements IAgentInstance {
       // Execute the stateless completion
       for await (const chunk of chatCompletion(completionOptions)) {
         if (chunk.type === 'text_chunk' && chunk.content) {
-          // Validate agent output before processing
-          this.validateAgentOutput(chunk.content);
+          // Don't validate during streaming - only validate final content
+          // Validation during streaming can interrupt the flow if partial content triggers false positives
         } else if (chunk.type === 'text' && chunk.content) {
           // Final accumulated text - validate
           this.validateAgentOutput(chunk.content);
         }
+        
         yield chunk;
       }
       
@@ -1832,10 +1650,32 @@ export class Agent implements IAgentInstance {
       this.manager.kernelManager.on('output', handleManagerEvent);
 
       try {
+        // Update completion ID for persistent wrapper functions
+        const serviceManager = this.manager.getAgentServiceManager();
+        let finalCode = code;
+        
+        if (serviceManager.hasService(this.id)) {
+          // Instead of re-injecting wrapper code, just update the completion ID
+          const updateCompletionIdCode = `
+// Update the current completion ID for persistent wrapper functions
+if (typeof globalThis.setCurrentCompletionId === 'function') {
+    globalThis.setCurrentCompletionId("${completionId}");
+} else {
+    console.warn("⚠️ setCurrentCompletionId function not available - wrapper functions may not be injected");
+}
+`;
+          
+          // Inject completion ID update before user code
+          finalCode = updateCompletionIdCode + '\n\n' + code;
+          console.log(`📋 [Agent ${this.id}] Updated completion ID for persistent wrapper functions (stateless): ${completionId}`);
+        } else {
+          console.warn(`⚠️ [Agent ${this.id}] No HyphaCore service available for stateless execution`);
+        }
+        
         // Execute the code
         const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernelId!, code)
-          : await this.kernel.execute(code);
+          ? await this.manager.kernelManager.execute(this.kernelId!, finalCode)
+          : await this.kernel.execute(finalCode);
 
         if (result.success) {
           console.log(`✅ [Agent ${this.id}] Stateless execution: Code executed successfully`);
@@ -1843,18 +1683,56 @@ export class Agent implements IAgentInstance {
           console.log(`❌ [Agent ${this.id}] Stateless execution: Code execution failed -`, result.error?.message || 'Unknown error');
         }
 
-        // Emit code execution event (stateless)
+        // For TypeScript/JavaScript kernels, also check for captured output in the result
+        let capturedOutput = '';
+        if (result.result && typeof result.result === 'object' && result.result.captured_output) {
+          capturedOutput = result.result.captured_output;
+          console.log(`📋 [Agent ${this.id}] Found captured output from TypeScript kernel (stateless): ${capturedOutput.length} chars`);
+        }
+        
+        // Combine event-based observations with captured output from result
+        const combinedObservations = (observations.trim() + (capturedOutput ? '\n' + capturedOutput : '')).trim();
+
+        // Note: For stateless execution, we don't persist code executions to agent memory
+        // but we still track them temporarily for potential commit display
+
+        // Log service calls if they exist (for debugging)
+        const serviceCalls = serviceManager.getServiceCalls(completionId, this.id);
+        let returnToUserMessage = '';
+        
+        if (serviceCalls) {
+          if (serviceCalls.thoughts) {
+            console.log(`💭 [Agent ${this.id}] Thoughts logged in stateless mode: ${serviceCalls.thoughts.data}`);
+          }
+          if (serviceCalls.returnToUser) {
+            console.log(`📤 [Agent ${this.id}] returnToUser called in stateless mode: ${JSON.stringify(serviceCalls.returnToUser.data)}`);
+            returnToUserMessage = serviceCalls.returnToUser.data.content;
+          }
+        }
+
+        // Emit code execution event (stateless) - include execution data for display
         this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
           agentId: this.id,
           completionId,
-          code,
+          code: finalCode, // Include the injected code
           result,
-          observations: observations.trim(),
+          observations: combinedObservations,
           observationImages,
           stateless: true
         });
 
-        return observations.trim() || 'Code executed (no output)';
+        // Combine stdout/stderr observations with returnToUser message
+        let executionOutput = combinedObservations;
+        if (returnToUserMessage) {
+          if (executionOutput) {
+            executionOutput += `\n\n📤 returnToUser: ${returnToUserMessage}`;
+          } else {
+            executionOutput = `📤 returnToUser: ${returnToUserMessage}`;
+          }
+        }
+
+        // Always return observation, let chatCompletion.ts handle completion detection
+        return executionOutput || 'Code executed (no output)';
       } finally {
         // Clean up listener
         this.manager.kernelManager.off('output', handleManagerEvent);

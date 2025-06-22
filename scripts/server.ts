@@ -5,6 +5,25 @@ import { AgentManager, AgentEvents, KernelType, type IAgentConfig } from "../age
 import { Status } from "https://deno.land/std@0.201.0/http/http_status.ts";
 import { contentType } from "https://deno.land/std/media_types/mod.ts";
 
+// Add global error handlers to prevent server crashes from unhandled promise rejections
+globalThis.addEventListener('error', (event) => {
+  console.error('🚨 [SERVER] Global error caught:', event.error);
+  console.error('🚨 [SERVER] Error stack:', event.error?.stack);
+  // Prevent the error from crashing the server
+  event.preventDefault();
+});
+
+globalThis.addEventListener('unhandledrejection', (event) => {
+  console.error('🚨 [SERVER] Unhandled promise rejection caught:', event.reason);
+  if (event.reason instanceof Error) {
+    console.error('🚨 [SERVER] Rejection stack:', event.reason.stack);
+  }
+  // Prevent the rejection from crashing the server
+  event.preventDefault();
+});
+
+console.log('✅ [SERVER] Global error handlers installed to prevent crashes');
+
 // Available embedding providers configuration
 const EMBEDDING_PROVIDERS = {
   "mock-model": { type: "builtin", description: "Built-in mock model for testing" },
@@ -208,6 +227,13 @@ const maxAgents = parseInt(Deno.env.get("MAX_AGENTS") || "10");
 const autoSaveConversations = Deno.env.get("AUTO_SAVE_CONVERSATIONS") !== "false"; // Default true
 const maxStepsCap = parseInt(Deno.env.get("AGENT_MAX_STEPS_CAP") || "10");
 
+// HyphaCore configuration from environment variables - enabled by default
+const enableHyphaCore = Deno.env.get("ENABLE_HYPHA_CORE") !== "false"; // Default true, can be explicitly disabled
+const hyphaCorePort = parseInt(Deno.env.get("HYPHA_CORE_PORT") || "9527");
+const hyphaCoreHost = Deno.env.get("HYPHA_CORE_HOST") || "localhost";
+const hyphaCoreWorkspace = Deno.env.get("HYPHA_CORE_WORKSPACE") || "default";
+const hyphaCoreJwtSecret = Deno.env.get("HYPHA_CORE_JWT_SECRET");
+
 // Create a global agent manager instance
 const agentManager = new AgentManager({
   defaultModelSettings: DEFAULT_AGENT_MODEL_SETTINGS,
@@ -215,7 +241,13 @@ const agentManager = new AgentManager({
   maxAgents,
   autoSaveConversations,
   defaultKernelType: KernelType.PYTHON,
-  maxStepsCap
+  maxStepsCap,
+  // HyphaCore integration options
+  enable_hypha_core: enableHyphaCore,
+  hypha_core_port: hyphaCorePort,
+  hypha_core_host: hyphaCoreHost,
+  hypha_core_workspace: hyphaCoreWorkspace,
+  hypha_core_jwt_secret: hyphaCoreJwtSecret
 });
 
 // Set the kernel manager for agent kernel integration
@@ -227,6 +259,67 @@ console.log(`- Max agents: ${maxAgents}`);
 console.log(`- Agent data directory: ${agentDataDirectory}`);
 console.log(`- Auto save conversations: ${autoSaveConversations}`);
 console.log(`- Max steps cap: ${maxStepsCap}`);
+console.log(`- HyphaCore enabled: ${enableHyphaCore}`);
+if (enableHyphaCore) {
+  console.log(`- HyphaCore host: ${hyphaCoreHost}`);
+  console.log(`- HyphaCore port: ${hyphaCorePort}`);
+  console.log(`- HyphaCore workspace: ${hyphaCoreWorkspace}`);
+}
+
+// Create default test agents
+const createDefaultAgents = async () => {
+  try {
+    console.log("🤖 Creating default test agents...");
+    
+    // Create Python agent
+    const pythonAgentId = await agentManager.createAgent({
+      id: "test-python-agent",
+      name: "Test Python Agent",
+      description: "Default Python agent for testing code execution",
+      instructions: "You are a Python coding assistant. When asked to solve problems, write Python code to find the solution.",
+      kernelType: KernelType.PYTHON,
+      autoAttachKernel: true,
+      maxSteps: 10,
+      startupScript: `
+# Python test agent initialization
+print("🐍 Python test agent initialized")
+import os, sys, json
+print(f"Python version: {sys.version}")
+print(f"Current working directory: {os.getcwd()}")
+      `.trim()
+    });
+    
+    console.log(`✅ Created Python agent: ${pythonAgentId}`);
+    
+    // Create TypeScript agent
+    const typescriptAgentId = await agentManager.createAgent({
+      id: "test-typescript-agent", 
+      name: "Test TypeScript Agent",
+      description: "Default TypeScript agent for testing code execution",
+      instructions: "You are a TypeScript coding assistant. When asked to solve problems, write TypeScript code to find the solution.",
+      kernelType: KernelType.TYPESCRIPT,
+      autoAttachKernel: true,
+      maxSteps: 10,
+      startupScript: `
+// TypeScript test agent initialization
+console.log("🔷 TypeScript test agent initialized");
+console.log(\`Node.js version: \${process.version}\`);
+console.log(\`Current working directory: \${process.cwd()}\`);
+      `.trim()
+    });
+    
+    console.log(`✅ Created TypeScript agent: ${typescriptAgentId}`);
+    
+    console.log("🎉 Default test agents created successfully!");
+    
+  } catch (error) {
+    console.warn("⚠️ Failed to create default test agents:", error instanceof Error ? error.message : String(error));
+    console.warn("This is normal if agents already exist or if there are configuration issues.");
+  }
+};
+
+// Create default agents after a short delay to ensure all services are ready
+setTimeout(createDefaultAgents, 2000);
 
 // Store execution sessions and their results
 interface ExecutionSession {
@@ -1800,39 +1893,26 @@ export async function handleRequest(req: Request): Promise<Response> {
               throw error;
             }
           }
+          
+          // Get agent info (kernel attachment is handled by manager if autoAttachKernel is true)
           const agent = agentManager.getAgent(agentId);
-          
-          // If auto-attach kernel is requested and we have a kernelType, attach it
-          if (config.autoAttachKernel && config.kernelType) {
-            try {
-              console.log(`🔧 Auto-attaching ${config.kernelType} kernel to agent ${agentId}`);
-              await agentManager.attachKernelToAgent(agentId, config.kernelType);
-              console.log(`✅ Kernel attached successfully to agent ${agentId}`);
-            } catch (kernelError) {
-              console.error(`❌ Failed to auto-attach kernel to agent ${agentId}:`, kernelError);
-              // Don't fail the agent creation, just log the error
-            }
-          }
-          
-          // Get updated agent info after potential kernel attachment
-          const updatedAgent = agentManager.getAgent(agentId);
           
           return jsonResponse({
             id: agentId,
-            name: updatedAgent?.name,
-            description: updatedAgent?.description,
-            instructions: updatedAgent?.instructions,
-            startupScript: updatedAgent?.startupScript,
-            kernelType: updatedAgent?.kernelType,
-            hasKernel: !!updatedAgent?.kernel,
-            hasStartupError: !!updatedAgent?.getStartupError(),
-            startupError: updatedAgent?.getStartupError() ? {
-              message: updatedAgent.getStartupError()!.message,
-              fullError: updatedAgent.getStartupError()!.fullError,
-              stackTrace: updatedAgent.getStartupError()!.stackTrace
+            name: agent?.name,
+            description: agent?.description,
+            instructions: agent?.instructions,
+            startupScript: agent?.startupScript,
+            kernelType: agent?.kernelType,
+            hasKernel: !!agent?.kernel,
+            hasStartupError: !!agent?.getStartupError(),
+            startupError: agent?.getStartupError() ? {
+              message: agent.getStartupError()!.message,
+              fullError: agent.getStartupError()!.fullError,
+              stackTrace: agent.getStartupError()!.stackTrace
             } : undefined,
-            created: updatedAgent?.created.toISOString(),
-            maxSteps: updatedAgent?.maxSteps,
+            created: agent?.created.toISOString(),
+            maxSteps: agent?.maxSteps,
             namespace: namespace
           });
         } catch (error) {
@@ -2259,6 +2339,37 @@ export async function handleRequest(req: Request): Promise<Response> {
 
 export async function startServer(port = 8000) {
   console.log(`Starting kernel HTTP server on port ${port}...`);
+  
+  // Set up graceful shutdown handlers
+  const setupShutdownHandlers = () => {
+    const handleShutdown = async (signal: string) => {
+      console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+      
+      try {
+        // Shutdown agent manager (this will also close HyphaCore if enabled)
+        await agentManager.shutdown();
+        
+        // Shutdown kernel manager
+        await kernelManager.destroyAll();
+        
+        console.log('✅ Server shutdown complete');
+        Deno.exit(0);
+      } catch (error) {
+        console.error('❌ Error during shutdown:', error);
+        Deno.exit(1);
+      }
+    };
+
+    // Handle SIGINT (Ctrl+C) and SIGTERM
+    Deno.addSignalListener("SIGINT", () => handleShutdown("SIGINT"));
+    Deno.addSignalListener("SIGTERM", () => handleShutdown("SIGTERM"));
+  };
+
+  // Only set up shutdown handlers if this is the main module
+  if (import.meta.main) {
+    setupShutdownHandlers();
+  }
+  
   return Deno.serve({ port }, handleRequest);
 }
 

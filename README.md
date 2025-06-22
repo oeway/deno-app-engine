@@ -77,6 +77,41 @@ cd deno-app-engine
   - Inactivity timeout for idle kernels
   - Detection of stalled/deadlocked executions
 
+## Agent Reactive Loop Architecture
+
+The agent system uses a simplified reactive loop that ensures reliable code execution and completion detection:
+
+```mermaid
+graph TD
+    A["🚀 Start Completion"] --> B["📥 Accumulate Response"]
+    B --> C["🔍 Extract Script"]
+    C --> D{"📋 Script Found?"}
+    
+    D -->|No| E["💬 Add Guidance"]
+    E --> F["🔄 Continue Loop"]
+    F --> B
+    
+    D -->|Yes| G["⚙️ Execute Code"]
+    G --> H{"🏁 returnToUser?"}
+    
+    H -->|Yes| I["✅ Finish"]
+    H -->|No| J["📄 Add Observation"]
+    J --> F
+    
+    style A fill:#e1f5fe
+    style I fill:#e8f5e8
+    style D fill:#fff3e0
+    style H fill:#fff3e0
+```
+
+**Key Improvements:**
+
+- **Clean Linear Flow**: Simplified from complex multi-path logic to predictable sequence
+- **Reliable Script Detection**: Uses proper parsing instead of text matching
+- **Silent Guidance**: Provides format guidance without counting against step limits
+- **Proper State Tracking**: Uses flags instead of unreliable text parsing
+- **Deadloop Prevention**: Handles edge cases where no code execution is available
+
 ## Prerequisites
 
 - Deno 1.x or higher

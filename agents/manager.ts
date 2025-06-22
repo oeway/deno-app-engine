@@ -16,9 +16,10 @@ import {
   type IAgentConfig, 
   type IAgentInstance 
 } from "./agent.ts";
-import { KernelLanguage } from "../kernel/manager.ts";
+import { KernelMode, KernelLanguage } from '../kernel/mod.ts';
 import { HyphaCore } from 'hypha-core';
 import { DenoWebSocketServer, DenoWebSocketClient } from 'hypha-core/deno-websocket-server';
+import { AgentServiceManager } from "./agentService.ts";
 
 // Model registry events (additional to AgentEvents)
 export enum ModelEvents {
@@ -58,7 +59,7 @@ export interface IAgentManagerOptions {
   allowedModels?: string[]; // Array of allowed model IDs from registry
   allowCustomModels?: boolean; // Whether to allow custom model settings
   // HyphaCore integration options
-  enable_hypha_core?: boolean; // Enable HyphaCore server integration
+  enable_hypha_core?: boolean; // Enable HyphaCore server integration (default: true)
   hypha_core_port?: number; // Port for HyphaCore server (default: 9527)
   hypha_core_host?: string; // Host for HyphaCore server (default: localhost)
   hypha_core_workspace?: string; // Default workspace for HyphaCore (default: default)
@@ -102,6 +103,9 @@ export class AgentManager extends EventEmitter {
   private hyphaCoreHost: string = '127.0.0.1';
   private hyphaCoreWorkspace: string = 'default';
   private hyphaCoreJwtSecret: string;
+  
+  // Agent service manager
+  private agentServiceManager: AgentServiceManager;
 
   constructor(options: IAgentManagerOptions = {}) {
     super();
@@ -119,8 +123,8 @@ export class AgentManager extends EventEmitter {
     this.allowedModels = options.allowedModels;
     this.allowCustomModels = options.allowCustomModels !== false; // Default true
 
-    // Initialize HyphaCore settings
-    this.enableHyphaCore = options.enable_hypha_core || false;
+    // Initialize HyphaCore settings - enabled by default since TypeScript/JavaScript agents depend on it
+    this.enableHyphaCore = options.enable_hypha_core !== false; // Default true, can be explicitly disabled
     this.hyphaCorePort = options.hypha_core_port || 9527;
     this.hyphaCoreHost = options.hypha_core_host || 'localhost';
     this.hyphaCoreWorkspace = options.hypha_core_workspace || 'default';
@@ -128,6 +132,9 @@ export class AgentManager extends EventEmitter {
 
     // Initialize model registry from config
     this.initializeModelRegistry(options.modelRegistry);
+    
+    // Initialize agent service manager
+    this.agentServiceManager = new AgentServiceManager(this);
     
     // Start HyphaCore if enabled
     if (this.enableHyphaCore) {
@@ -252,6 +259,11 @@ export class AgentManager extends EventEmitter {
   // Getter for maxStepsCap to allow agent access
   getMaxStepsCap(): number {
     return this.maxStepsCap;
+  }
+
+  // Getter for AgentServiceManager to allow agent access
+  getAgentServiceManager(): AgentServiceManager {
+    return this.agentServiceManager;
   }
 
   // Helper method to count agents in a specific namespace
@@ -440,6 +452,16 @@ export class AgentManager extends EventEmitter {
     if (!agent) {
       throw new Error(`Agent with ID "${id}" not found`);
     }
+    
+    // Unregister agent service if it exists
+    if (this.agentServiceManager.hasService(id)) {
+      try {
+        await this.agentServiceManager.unregisterService(id);
+      } catch (error) {
+        console.error(`❌ Failed to unregister service for agent ${id}:`, error);
+      }
+    }
+    
     // destroy the agent's kernel if it has one
     const kernelId = agent.kernelId; // Use the stored kernel ID
     agent.destroy();
@@ -459,68 +481,72 @@ export class AgentManager extends EventEmitter {
     await Promise.all(agentIds.map(id => this.destroyAgent(id)));
   }
 
-  // Attach a kernel to an agent
+  /**
+   * Attach a kernel to an agent
+   */
   async attachKernelToAgent(agentId: string, kernelType: KernelType): Promise<void> {
     const agent = this.agents.get(agentId);
     if (!agent) {
-      throw new Error(`Agent with ID "${agentId}" not found`);
+      throw new Error(`Agent ${agentId} not found`);
     }
 
-    if (!this.kernelManager) {
-      throw new Error("Kernel manager not set. Use setKernelManager() first.");
+    if (agent.kernelId) {
+      console.warn(`⚠️ Agent ${agentId} already has a kernel attached`);
+      return;
     }
 
-    // Create or get a kernel instance
-    const kernelLanguageMap: Record<KernelType, KernelLanguage> = {
-      [KernelType.PYTHON]: KernelLanguage.PYTHON,
-      [KernelType.TYPESCRIPT]: KernelLanguage.TYPESCRIPT, 
-      [KernelType.JAVASCRIPT]: KernelLanguage.JAVASCRIPT
-    };
-
-    const kernelLanguage = kernelLanguageMap[kernelType];
-    
-    // Prepare kernel creation options with environment variables
-    const kernelOptions: any = {
-      lang: kernelLanguage,
-    };
-    
-    // Add environment variables if the agent has them
-    if (agent.kernelEnvirons) {
-      kernelOptions.env = agent.kernelEnvirons;
-    }
-    
-    // createKernel returns a kernel ID, not the instance
-    const kernelId = await this.kernelManager.createKernel(kernelOptions);
-
-    // Get the actual kernel instance using the ID
-    const kernelInstance = this.kernelManager.getKernel(kernelId);
-    
-    if (!kernelInstance) {
-      throw new Error(`Failed to retrieve kernel instance with ID: ${kernelId}`);
+    if (!this.kernelManager_) {
+      throw new Error('Kernel manager not set');
     }
 
-    await agent.attachKernel(kernelInstance);
+    try {
+      // Create the kernel
+      const kernelId = await this.kernelManager_.createKernel({
+        mode: kernelType === KernelType.PYTHON ? KernelMode.WORKER : KernelMode.WORKER,
+        lang: kernelType === KernelType.PYTHON ? KernelLanguage.PYTHON : 
+              kernelType === KernelType.TYPESCRIPT ? KernelLanguage.TYPESCRIPT : 
+              KernelLanguage.JAVASCRIPT
+      });
+      agent.kernelId = kernelId;
+      agent.kernelType = kernelType;
 
-    // Auto-setup HyphaCore integration if enabled and kernel supports it
-    if (this.enableHyphaCore && (kernelType === KernelType.PYTHON || kernelType === KernelType.JAVASCRIPT || kernelType === KernelType.TYPESCRIPT)) {
-      try {
+      console.log(`🔗 Attached ${kernelType} kernel to agent: ${agentId}`);
+
+      // Set up HyphaCore integration if enabled
+      if (this.enableHyphaCore && this.hyphaAPI) {
         console.log(`🔧 Setting up HyphaCore integration for ${kernelType} agent ${agentId}...`);
         
-        const hyphaStartupScript = await this.generateHyphaStartupScript(agentId, kernelId, kernelType);
-        
-        if (hyphaStartupScript) {
-          const result = await kernelInstance.kernel.execute(hyphaStartupScript);
-          
-          if (result.success) {
-            console.log(`✅ HyphaCore integration setup complete for agent ${agentId}`);
-          } else {
-            console.error(`❌ HyphaCore integration setup failed for agent ${agentId}:`, result.error);
+        try {
+          // Generate and execute HyphaCore startup script
+          const startupScript = await this.generateHyphaStartupScript(agentId, kernelId, kernelType);
+          if (startupScript) {
+            const startupResult = await this.kernelManager_.execute(kernelId, startupScript);
+            if (startupResult.success) {
+              console.log(`✅ HyphaCore integration setup complete for agent ${agentId}`);
+            } else {
+              console.error(`❌ HyphaCore startup script failed for agent ${agentId}:`, startupResult.error);
+            }
           }
+        } catch (error) {
+          console.error(`❌ HyphaCore integration setup failed for agent ${agentId}:`, error);
         }
-      } catch (error) {
-        console.error(`❌ Failed to setup HyphaCore integration for agent ${agentId}:`, error);
-        // Don't throw - let the kernel attachment succeed even if HyphaCore setup fails
       }
+
+      // Register HyphaCore service for this agent
+      await this.agentServiceManager.registerService(agentId, kernelId);
+      
+      // AFTER service registration, inject wrapper functions
+      if (this.enableHyphaCore && this.hyphaAPI) {
+        try {
+          await this.injectAgentServiceWrapperFunctions(agentId, kernelId, kernelType);
+        } catch (error) {
+          console.error(`❌ Failed to inject wrapper functions for agent ${agentId}:`, error);
+        }
+      }
+
+    } catch (error) {
+      console.error(`❌ Failed to attach kernel to agent ${agentId}:`, error);
+      throw error;
     }
   }
 
@@ -529,6 +555,15 @@ export class AgentManager extends EventEmitter {
     const agent = this.agents.get(agentId);
     if (!agent) {
       throw new Error(`Agent with ID "${agentId}" not found`);
+    }
+
+    // Unregister agent service if it exists
+    if (this.agentServiceManager.hasService(agentId)) {
+      try {
+        await this.agentServiceManager.unregisterService(agentId);
+      } catch (error) {
+        console.error(`❌ Failed to unregister service for agent ${agentId}:`, error);
+      }
     }
 
     if (agent.kernelId && this.kernelManager) {
@@ -992,6 +1027,11 @@ export class AgentManager extends EventEmitter {
     try {
       console.log('🚀 Starting HyphaCore server...');
       
+      // Workaround for hypha-core console.warning issue
+      if (!(console as any).warning) {
+        (console as any).warning = console.warn;
+      }
+      
       // Create HyphaCore instance
       this.hyphaCore = new HyphaCore({
         url: `http://${this.hyphaCoreHost}:${this.hyphaCorePort}`,
@@ -999,10 +1039,14 @@ export class AgentManager extends EventEmitter {
         WebSocketClass: DenoWebSocketClient,
         jwtSecret: this.hyphaCoreJwtSecret,
         defaultService: {
-          returnToUser(message: string, context: any){
-            const agentId = context.to.split("/")[1];
-            console.log(`🔄 Returning to user: ${message}`);
-            console.log(`🔄 Agent ID: ${agentId}`);
+          // Add workspace-manager service for proper service resolution
+          'workspace-manager': {
+            resolve: async (serviceId: string) => {
+              console.log(`🔍 Resolving service: ${serviceId}`);
+              // This is a basic implementation of service resolution
+              // It allows hypha-rpc clients to find services properly
+              return { id: serviceId, config: { visibility: 'public' } };
+            }
           }
         }
       });
@@ -1068,6 +1112,41 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
+   * Inject agent service wrapper functions into a kernel immediately after HyphaCore setup
+   * This makes the functions persistent across all executions
+   * @private
+   */
+  private async injectAgentServiceWrapperFunctions(agentId: string, kernelId: string, kernelType: KernelType): Promise<void> {
+    try {
+      // Generate a dummy completion ID for the initial wrapper injection
+      const dummyCompletionId = `init-${agentId}-${Date.now()}`;
+      
+      // Generate wrapper code
+      const wrapperCode = await this.agentServiceManager.generateWrapperCode(
+        agentId,
+        dummyCompletionId,
+        kernelType
+      );
+      
+      if (wrapperCode) {
+        console.log(`💉 Injecting persistent wrapper functions for agent ${agentId}...`);
+        
+        const wrapperResult = await this.kernelManager_.execute(kernelId, wrapperCode);
+        
+        if (wrapperResult.success) {
+          console.log(`✅ Agent service wrapper functions injected successfully for agent ${agentId}`);
+        } else {
+          console.error(`❌ Failed to inject wrapper functions for agent ${agentId}:`, wrapperResult.error);
+        }
+      } else {
+        console.warn(`⚠️ No wrapper code generated for agent ${agentId}`);
+      }
+    } catch (error) {
+      console.error(`❌ Error injecting wrapper functions for agent ${agentId}:`, error);
+    }
+  }
+
+  /**
    * Generate hypha-rpc startup script for a kernel
    * @param agentId Agent ID for token generation
    * @param kernelId Kernel ID for client identification
@@ -1096,33 +1175,125 @@ await micropip.install("hypha-rpc")
 
 from hypha_rpc import connect_to_server
 
-# Connect to HyphaCore server with authentication token
-_hypha_server = await connect_to_server({
-    "server_url": "http://${this.hyphaCoreHost}:${this.hyphaCorePort}",
-    "workspace": "${this.hyphaCoreWorkspace}",
-    "client_id": "${agentId}",
-    "token": "${token}"
-})
-
-print(f"✅ Connected to HyphaCore server: {_hypha_server.config.public_base_url}")
+try:
+    # Connect to HyphaCore server with authentication token
+    _hypha_server = await connect_to_server({
+        "server_url": "http://${this.hyphaCoreHost}:${this.hyphaCorePort}",
+        "workspace": "${this.hyphaCoreWorkspace}",
+        "client_id": "${agentId}",
+        "token": "${token}"
+    })
+    
+    # Ensure the connection object has proper structure for _rintf handling
+    if hasattr(_hypha_server, 'config') and _hypha_server.config:
+        print(f"✅ Connected to HyphaCore server: {_hypha_server.config.public_base_url}")
+    else:
+        print("✅ Connected to HyphaCore server")
+        
+except Exception as e:
+    print(f"❌ Failed to connect to HyphaCore server: {str(e)}")
+    # Set a placeholder to prevent undefined variable errors
+    _hypha_server = None
+    raise e
 `;
       } else if (kernelType === KernelType.JAVASCRIPT || kernelType === KernelType.TYPESCRIPT) {
         return `
-// Import hypha-rpc from CDN
-const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.56/dist/hypha-rpc-websocket.mjs");
+// Import hypha-rpc using ESM version with enhanced error handling
+let hyphaRPC;
+try {
+    hyphaRPC = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.56/dist/hypha-rpc-websocket.mjs");
+    console.log("✅ Successfully imported hypha-rpc");
+} catch (error) {
+    console.error("❌ Failed to import hypha-rpc:", error);
+    throw new Error("Failed to import hypha-rpc: " + error.message);
+}
 
-// Connect to HyphaCore server with authentication token
-const _hypha_server = await hyphaWebsocketClient.connectToServer({
-    server_url: "http://${this.hyphaCoreHost}:${this.hyphaCorePort}",
-    workspace: "${this.hyphaCoreWorkspace}",
-    client_id: "${agentId}",
-    token: "${token}"
-});
+// Extract connectToServer function
+const { connectToServer } = hyphaRPC;
 
-console.log("✅ Connected to HyphaCore server:", _hypha_server.config.public_base_url);
+// Connect to HyphaCore server with enhanced error handling and _rintf support
+let _hyphaServer;
+try {
+    _hyphaServer = await connectToServer({
+        server_url: "http://${this.hyphaCoreHost}:${this.hyphaCorePort}",
+        workspace: "${this.hyphaCoreWorkspace}",
+        client_id: "${agentId}",
+        token: "${token}",
+        // Add connection options to prevent WebSocket errors
+        reconnect: true,
+        reconnect_interval: 5000,
+        // Ensure proper handling of interface functions (_rintf)
+        enable_execution: false // Disable execution for security
+    });
+    
+    // Validate the connection object structure
+    if (_hyphaServer && typeof _hyphaServer === 'object') {
+        console.log("✅ Connected to HyphaCore server:", _hyphaServer.config?.public_base_url || _hyphaServer.config?.server_url || "connection established");
+        
+        // Ensure the connection object can handle _rintf properties properly
+        if (typeof _hyphaServer.getService === 'function') {
+            console.log("🔧 HyphaServer service interface verified");
+        } else {
+            console.warn("⚠️ HyphaServer getService method not available");
+        }
+    } else {
+        throw new Error("Invalid HyphaServer connection object");
+    }
+    
+} catch (error) {
+    console.error("❌ Failed to connect to HyphaCore server:", error);
+    
+    // Provide detailed error information for debugging
+    if (error.message && error.message.includes('_rintf')) {
+        console.error("🔧 _rintf error detected - this may be related to interface function handling");
+        console.error("💡 Suggestion: Check if the hypha-rpc version supports _rintf properly");
+    }
+    
+    if (error.message && error.message.includes('WebSocket')) {
+        console.error("🔧 WebSocket error detected - connection may be unstable");
+        console.error("💡 Suggestion: Check network connectivity and server status");
+    }
+    
+    // Set a placeholder to prevent undefined variable errors
+    _hyphaServer = null;
+    throw new Error("Failed to connect to HyphaCore: " + error.message);
+}
 
-// Make _hypha_server globally available for use in subsequent code executions
-globalThis._hypha_server = _hypha_server;
+// Make _hyphaServer globally available with null checks
+if (_hyphaServer) {
+    globalThis._hyphaServer = _hyphaServer;
+    if (typeof self !== 'undefined') {
+        self._hyphaServer = _hyphaServer;
+    }
+    
+    // Create getter functions with null safety
+    globalThis.getHyphaServer = () => {
+        if (!globalThis._hyphaServer) {
+            throw new Error("HyphaServer connection is not available");
+        }
+        return globalThis._hyphaServer;
+    };
+    
+    if (typeof self !== 'undefined') {
+        self.getHyphaServer = () => {
+            if (!self._hyphaServer) {
+                throw new Error("HyphaServer connection is not available");
+            }
+            return self._hyphaServer;
+        };
+    }
+    
+    // Verify the global assignment worked
+    if (globalThis._hyphaServer) {
+        console.log("✅ HyphaServer successfully assigned to globalThis");
+    } else {
+        console.error("❌ Failed to assign HyphaServer to globalThis");
+        throw new Error("Failed to assign HyphaServer to globalThis");
+    }
+} else {
+    console.error("❌ Cannot assign null HyphaServer to global scope");
+    throw new Error("HyphaServer connection failed - cannot proceed");
+}
 `;
       } else {
         console.warn(`❌ Unsupported kernel type for HyphaCore integration: ${kernelType}`);
@@ -1140,8 +1311,11 @@ globalThis._hypha_server = _hypha_server;
   public async shutdown(): Promise<void> {
     console.log('🛑 Shutting down AgentManager...');
     
-    // Destroy all agents
+    // Destroy all agents (this will also clean up services)
     await this.destroyAll();
+    
+    // Clean up any remaining service storage
+    this.agentServiceManager.cleanupOldEntries(0); // Remove all entries
     
     // Stop HyphaCore if running
     if (this.enableHyphaCore) {

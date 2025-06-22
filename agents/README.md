@@ -75,6 +75,52 @@ for await (const chunk of agent.chatCompletion(messages)) {
 
 ## Core Concepts
 
+### Simplified Reactive Loop Workflow
+
+The agent system uses a streamlined "show don't tell" approach with reliable state tracking for handling conversations and code execution:
+
+```mermaid
+graph TD
+    A["🚀 Start Loop"] --> B["📤 Send LLM Request"]
+    B --> C["💬 Accumulate Full Response"]
+    C --> D["🔍 Extract Script"]
+    D --> E{"📜 Script Found?"}
+    
+    E -->|No| F["🎯 Set guidanceProvided = true"]
+    F --> G["📝 Add Assistant Response to Messages"]
+    G --> H["💡 Add Guidance Message"]
+    H --> I["⚡ Yield 'guidance' Event"]
+    I --> J["🔄 Continue Loop (no count increment)"]
+    J --> B
+    
+    E -->|Yes| K{"🛡️ Code Handler Available?"}
+    K -->|No| L["🚪 Break Loop with Script Content"]
+    K -->|Yes| M["⚙️ Execute Code"]
+    
+    M --> N["🔍 Check Service Calls"]
+    N --> O{"📞 returnToUser Called?"}
+    
+    O -->|Yes| P["🏁 Commit & Finish"]
+    O -->|No| Q["📄 Add Execution Results"]
+    Q --> R["➕ Increment Loop Count"]
+    R --> S{"🔢 Max Steps Reached?"}
+    S -->|Yes| T["⏰ Max Steps Exit"]
+    S -->|No| B
+    
+    style F fill:#e1f5fe
+    style I fill:#c8e6c9
+    style M fill:#fff3e0
+    style P fill:#e8f5e8
+    style L fill:#fce4ec
+```
+
+**Key Improvements:**
+- **Example-Driven**: Uses concrete examples instead of guidance text
+- **Reliable State Tracking**: Tracks guidance state directly rather than parsing text
+- **Simplified Logic**: Clear completion conditions with proper error handling
+- **Non-Kernel Support**: Handles text-only agents without infinite loops
+- **HyphaCore Integration**: Requires HyphaCore for kernel-based agents
+
 ### Agent Instance
 
 Each agent is a self-contained AI assistant with:

@@ -101,7 +101,7 @@ export interface ChatCompletionOptions {
   systemPrompt?: string;
   model?: string;
   temperature?: number;
-  onExecuteCode?: (completionId: string, scriptContent: string) => Promise<string>;
+  onExecuteCode?: (completionId: string, scriptContent: string, language?: string) => Promise<string>;
   onMessage?: (completionId: string, message: string, commitIds?: string[]) => void;
   onStreaming?: (completionId: string, message: string) => void;
   maxSteps?: number; // Maximum number of tool call steps before stopping
@@ -110,6 +110,10 @@ export interface ChatCompletionOptions {
   stream?: boolean;
   abortController?: AbortController; // Add abortController to options
   reset?: boolean; // Reset memory and start fresh
+  // Service manager for checking completion results
+  serviceManager?: any; // AgentServiceManager instance
+  agentId?: string; // Agent ID for service checking
+  agentKernelType?: string; // Agent's kernel type for syntax conversion decisions
   // Streaming optimization options (these are initial values, system will adapt based on streaming speed)
   initialYieldIntervalMs?: number; // Initial interval for yielding chunks (default: 100ms, will adapt)
   initialMaxBatchSize?: number; // Initial max characters per batch (default: 300, will adapt)
@@ -124,74 +128,137 @@ export const DefaultModelSettings: ModelSettings = {
     temperature: 0.7,
   };
 
-// Helper function to extract final response from script
-interface ReturnToUserResult {
+// Legacy tag extraction removed - all communication now goes through HyphaCore storage
+
+// Helper function to extract script content and language
+interface ScriptInfo {
   content: string;
-  properties: Record<string, string>;
+  language: string;
 }
 
-function extractReturnToUser(script: string): ReturnToUserResult | null {
-  // Match <returnToUser> with optional attributes, followed by content, then closing tag
-  const match = script.match(/<returnToUser(?:\s+([^>]*))?>([\s\S]*?)<\/returnToUser>/);
-  if (!match) return null;
-
-  // Extract properties from attributes if they exist
-  const properties: Record<string, string> = {};
-  const [, attrs, content] = match;
-
-  if (attrs) {
-    // Match all key="value" or key='value' pairs
-    const propRegex = /(\w+)=["']([^"']*)["']/g;
-    let propMatch;
-    while ((propMatch = propRegex.exec(attrs)) !== null) {
-      const [, key, value] = propMatch;
-      properties[key] = value;
-    }
+// Convert markdown code blocks to script tags
+function convertMarkdownToScript(text: string): string {
+  // If the text already contains script tags, don't convert anything
+  // This prevents converting markdown blocks that might be inside script content
+  if (/<script\b[^>]*>/i.test(text)) {
+    return text;
   }
-
-  return {
-    content: content.trim(),
-    properties
-  };
-}
-
-// Helper function to extract thoughts from script
-function extractThoughts(script: string): string | null {
-  const match = script.match(/<thoughts>([\s\S]*?)<\/thoughts>/);
-  return match ? match[1].trim() : null;
-}
-
-// Helper function to extract script content
-function extractScript(script: string): string | null {
-  // Try different script tag types in order
-  const tagTypes = ['py-script', 't-script', 'js-script'];
   
-  for (const tagType of tagTypes) {
-    const regex = new RegExp(`<${tagType}(?:\\s+[^>]*)?>[\\s\\S]*?<\\/${tagType}>`, 'i');
-    const match = script.match(regex);
-    if (match) {
-      // Extract content between tags
-      const contentRegex = new RegExp(`<${tagType}(?:\\s+[^>]*)?>(([\\s\\S]*?))<\\/${tagType}>`, 'i');
-      const contentMatch = script.match(contentRegex);
-      return contentMatch ? contentMatch[1].trim() : null;
+  // Only convert top-level markdown code blocks (not nested inside other content)
+  const markdownRegex = /```(\w+)\s*([\s\S]*?)```/gi;
+  
+  return text.replace(markdownRegex, (match, language, code) => {
+    const trimmedCode = code.trim();
+    const supportedLanguages = ['python', 'javascript', 'typescript', 'js', 'ts'];
+    
+    // Normalize language names
+    let normalizedLang = language.toLowerCase();
+    if (normalizedLang === 'js') normalizedLang = 'javascript';
+    if (normalizedLang === 'ts') normalizedLang = 'typescript';
+    
+    // Only convert supported languages
+    if (supportedLanguages.includes(normalizedLang) || supportedLanguages.includes(language.toLowerCase())) {
+      return `<script lang="${normalizedLang}">\n${trimmedCode}\n</script>`;
     }
+    
+    return match; // Return original if not a supported language
+  });
+}
+
+function extractScript(script: string): ScriptInfo | null {
+  // First, try to convert any markdown code blocks to script tags
+  const convertedScript = convertMarkdownToScript(script);
+  
+  // Match various script tag formats:
+  // 1. <script lang="language">
+  const scriptRegexLang = /<script\s+lang=["'](\w+)["'][^>]*>([\s\S]*?)<\/script>/i;
+  // 2. <script type="text/language">
+  const scriptRegexType = /<script\s+type=["']text\/(\w+)["'][^>]*>([\s\S]*?)<\/script>/i;
+  // 3. Plain <script> (default to javascript)
+  const scriptRegexPlain = /<script[^>]*>([\s\S]*?)<\/script>/i;
+  
+  let match = convertedScript.match(scriptRegexLang);
+  if (match) {
+    return {
+      content: match[2].trim(),
+      language: match[1].toLowerCase()
+    };
+  }
+  
+  match = convertedScript.match(scriptRegexType);
+  if (match) {
+    return {
+      content: match[2].trim(),
+      language: match[1].toLowerCase()
+    };
+  }
+  
+  match = convertedScript.match(scriptRegexPlain);
+  if (match) {
+    return {
+      content: match[1].trim(),
+      language: 'javascript' // Default to javascript for plain script tags
+    };
   }
   
   return null;
 }
 
-// Helper function to get the script tag type that was used
-function getScriptTagType(script: string): string {
-  const tagTypes = ['py-script', 't-script', 'js-script'];
-  
-  for (const tagType of tagTypes) {
-    const regex = new RegExp(`<${tagType}(?:\\s+[^>]*)?>[\\s\\S]*?<\\/${tagType}>`, 'i');
-    if (script.match(regex)) {
-      return tagType;
-    }
+// Helper function to get the script tag format that was used
+function getScriptTagFormat(script: string): string {
+  // Check for script lang format (with or without id attribute)
+  const formatMatch = script.match(/<script\s+lang=["'](\w+)["'][^>]*>/i);
+  if (formatMatch) {
+    return `script lang="${formatMatch[1]}"`;
   }
   
-  return 'py-script'; // Default fallback
+  return 'script lang="python"'; // Default fallback
+}
+
+// Helper function to validate that assistant messages follow script format
+function validateAssistantMessageFormat(content: string, isCodeAgent: boolean): boolean {
+  if (!isCodeAgent) {
+    // Non-code agents can have any format
+    return true;
+  }
+  
+  // For code agents, assistant messages should contain script tags
+  const hasScript = extractScript(content) !== null;
+  if (!hasScript) {
+    console.warn('WARNING: Code agent assistant message lacks script format:', content.slice(0, 100) + '...');
+    return false;
+  }
+  
+  return true;
+}
+
+// Helper function to ensure assistant message is properly formatted before adding to history
+function addAssistantMessageToHistory(messages: ChatMessage[], content: string, completionId: string, isCodeAgent: boolean): void {
+  if (isCodeAgent) {
+    // For code agents, ensure the message contains script tags
+    const scriptInfo = extractScript(content);
+    if (scriptInfo) {
+      const scriptTagFormat = getScriptTagFormat(content);
+      const formattedContent = content.includes(`id="${completionId}"`) 
+        ? content 
+        : `<${scriptTagFormat} id="${completionId}">${scriptInfo.content}</${scriptTagFormat.split(' ')[0]}>`;
+      
+      messages.push({
+        role: 'assistant',
+        content: formattedContent
+      });
+      console.log('DEBUG: Added properly formatted assistant message to history');
+    } else {
+      console.warn('WARNING: Attempting to add non-script assistant message for code agent - skipping');
+    }
+  } else {
+    // Non-code agents can add any content
+    messages.push({
+      role: 'assistant',
+      content
+    });
+    console.log('DEBUG: Added assistant message to history (non-code agent)');
+  }
 }
 
 
@@ -209,11 +276,14 @@ export async function* chatCompletion({
   apiKey = 'ollama',
   stream = true,
   abortController, // Add abortController parameter
+  serviceManager, // Service manager for checking completion results
+  agentId, // Agent ID for service checking
   initialYieldIntervalMs = 100, // Initial 100ms yield interval
   initialMaxBatchSize = 300, // Initial 300 characters max batch size
   enableAdaptiveStreaming = true, // Enable adaptive streaming by default
+  agentKernelType, // Agent's kernel type for language-specific examples
 }: ChatCompletionOptions): AsyncGenerator<{
-  type: 'text' | 'text_chunk' | 'function_call' | 'function_call_output' | 'new_completion' | 'error';
+  type: 'text' | 'text_chunk' | 'function_call' | 'function_call_output' | 'new_completion' | 'error' | 'guidance';
   content?: string;
   name?: string;
   arguments?: any;
@@ -236,8 +306,7 @@ export async function* chatCompletion({
     });
 
       let loopCount = 0;
-  let guidanceCount = 0; // Track guidance attempts to prevent infinite guidance loops
-  let lastResponseContent = ''; // Track last response to detect infinite loops
+  let guidanceProvided = false;
 
   while (loopCount < maxSteps) {
       // Check if abort signal was triggered
@@ -246,9 +315,103 @@ export async function* chatCompletion({
         return;
       }
 
-      const fullMessages = systemPrompt
-        ? [{ role: 'system' as const, content: systemPrompt }, ...messages]
-        : messages;
+      // Add example exchanges only if code execution is available
+      let exampleExchanges: ChatMessage[] = [];
+      
+      if (onExecuteCode) {
+        // Generate language-specific examples based on agent's kernel type
+        const kernelType = agentKernelType?.toLowerCase();
+        
+        if (kernelType === 'typescript') {
+          exampleExchanges = [
+            {
+              role: 'user',
+              content: 'Calculate 2 + 3 and show me the result'
+            },
+            {
+              role: 'assistant', 
+              content: '<script lang="typescript">\nconst result = 2 + 3;\nawait returnToUser(`The calculation result is **${result}**`);\n</script>'
+            },
+            {
+              role: 'user',
+              content: '<observation>Code executed. Output:\n```\n(no output)\n```\nContinue with the next step.</observation>'
+            },
+            {
+              role: 'user',
+              content: 'Write a simple function to greet someone'
+            },
+            {
+              role: 'assistant',
+              content: '<script lang="typescript">\nfunction greet(name: string): string {\n    return `Hello, ${name}!`;\n}\n\n// Test and return the result\nconst greeting = greet("World");\nawait returnToUser(`I created a greeting function. Here\'s a test: ${greeting}`);\n</script>'
+            },
+            {
+              role: 'user', 
+              content: '<observation>Code executed. Output:\n```\n(no output)\n```\nContinue with the next step.</observation>'
+            }
+          ];
+        } else if (kernelType === 'javascript') {
+          exampleExchanges = [
+            {
+              role: 'user',
+              content: 'Calculate 2 + 3 and show me the result'
+            },
+            {
+              role: 'assistant', 
+              content: '<script lang="javascript">\nconst result = 2 + 3;\nawait returnToUser(`The calculation result is **${result}**`);\n</script>'
+            },
+            {
+              role: 'user',
+              content: '<observation>Code executed. Output:\n```\n(no output)\n```\nContinue with the next step.</observation>'
+            },
+            {
+              role: 'user',
+              content: 'Write a simple function to greet someone'
+            },
+            {
+              role: 'assistant',
+              content: '<script lang="javascript">\nfunction greet(name) {\n    return `Hello, ${name}!`;\n}\n\n// Test and return the result\nconst greeting = greet("World");\nawait returnToUser(`I created a greeting function. Here\'s a test: ${greeting}`);\n</script>'
+            },
+            {
+              role: 'user', 
+              content: '<observation>Code executed. Output:\n```\n(no output)\n```\nContinue with the next step.</observation>'
+            }
+          ];
+        } else {
+          // Default to Python examples for python kernel or unspecified
+          exampleExchanges = [
+            {
+              role: 'user',
+              content: 'Calculate 2 + 3 and show me the result'
+            },
+            {
+              role: 'assistant', 
+              content: '<script lang="python">\nresult = 2 + 3\nawait returnToUser(f"The calculation result is **{result}**")\n</script>'
+            },
+            {
+              role: 'user',
+              content: '<observation>Code executed. Output:\n```\n(no output)\n```\nContinue with the next step.</observation>'
+            },
+            {
+              role: 'user',
+              content: 'Write a simple function to greet someone'
+            },
+            {
+              role: 'assistant',
+              content: '<script lang="python">\ndef greet(name):\n    return f"Hello, {name}!"\n\n# Test and return the result\ngreeting = greet("World")\nawait returnToUser(f"I created a greeting function. Here\'s a test: {greeting}")\n</script>'
+            },
+            {
+              role: 'user', 
+              content: '<observation>Code executed. Output:\n```\n(no output)\n```\nContinue with the next step.</observation>'
+            }
+          ];
+        }
+      }
+
+      const baseMessages = systemPrompt
+        ? [{ role: 'system' as const, content: systemPrompt }]
+        : [];
+      
+      const fullMessages = [...baseMessages, ...exampleExchanges, ...messages];
       const completionId = generateId();
       
       // Enhanced debugging for system prompt inclusion
@@ -443,38 +606,8 @@ export async function* chatCompletion({
           };
         }
 
-        // Log the assistant response for debugging (similar to how user queries are logged)
+        // Log the assistant response for debugging
         console.log('DEBUG: assistant response', completionId, 'content:', accumulatedResponse.slice(0, 200) + (accumulatedResponse.length > 200 ? '...' : ''));
-
-        // Check for infinite loop - if we get the same response twice in a row, break out
-        // Also break if we get empty responses repeatedly
-        if (accumulatedResponse.trim().length === 0 && lastResponseContent.trim().length === 0) {
-          console.warn('DEBUG: Detected infinite loop - repeated empty responses');
-          
-          // Force a returnToUser to break the loop
-          if(onMessage){
-            onMessage(completionId, `Detected repeated empty responses. Ending conversation to prevent infinite loop.`, []);
-          }
-          yield {
-            type: 'text',
-            content: `Detected repeated empty responses. Ending conversation to prevent infinite loop.`
-          };
-          break;
-        } else if (accumulatedResponse.trim() === lastResponseContent.trim() && accumulatedResponse.trim().length > 0) {
-          console.warn('DEBUG: Detected potential infinite loop - same response repeated');
-          console.warn('DEBUG: Response content:', accumulatedResponse.trim().slice(0, 100));
-          
-          // Force a returnToUser to break the loop
-          if(onMessage){
-            onMessage(completionId, `Detected repeated response pattern. Ending conversation to prevent infinite loop.`, []);
-          }
-          yield {
-            type: 'text',
-            content: `Detected repeated response pattern. Ending conversation to prevent infinite loop.`
-          };
-          break;
-        }
-        lastResponseContent = accumulatedResponse;
 
       } catch (error) {
         console.error('Error connecting to LLM API:', error);
@@ -504,7 +637,7 @@ export async function* chatCompletion({
         return; // Exit generator on API error
       }
 
-      // Parse and validate the accumulated JSON
+              // Parse and validate the accumulated response
       try {
         // Check if abort signal was triggered after streaming
         if (signal.aborted) {
@@ -512,52 +645,66 @@ export async function* chatCompletion({
           return;
         }
 
-        // Extract thoughts for logging
-        const thoughts = extractThoughts(accumulatedResponse);
-        if (thoughts) {
-          console.log('Thoughts:', thoughts);
-        }
-
-        // Check if this is a final response - if so, we should stop the loop and return control to the user
-        const returnToUser = extractReturnToUser(accumulatedResponse);
-        if (returnToUser) {
-          if(onMessage){
-              // Extract commit IDs from properties and pass them as an array
-              const commitIds = returnToUser.properties.commit ?
-                returnToUser.properties.commit.split(',').map(id => id.trim()) :
-                [];
-
-              onMessage(completionId, returnToUser.content, commitIds);
+          // Skip empty responses
+          if (accumulatedResponse.trim().length === 0) {
+            console.log('DEBUG: Skipping empty response');
+            break;
           }
-          yield {
-            type: 'text',
-            content: returnToUser.content
-          };
-          // Exit the loop since we have a final response that concludes this round of conversation
-          return;
-        }
 
-        // Handle script execution
-        const scriptContent = extractScript(accumulatedResponse);
-        if (scriptContent) {
+          // Always try to extract script first
+          const scriptInfo = extractScript(accumulatedResponse);
+          
+          if (!scriptInfo) {
+            // No script found - handle based on agent type
+            console.log('DEBUG: No script found');
+            
+            // If this is a non-code agent (no onExecuteCode), accept first response as final
+            if (!onExecuteCode) {
+              console.log('DEBUG: Non-code agent, treating as final response');
+              yield {
+                type: 'text',
+                content: accumulatedResponse
+              };
+              break;
+            }
+            
+            // For code agents, silently ignore the malformed response and inject guidance
+            console.log('DEBUG: Code agent without script - injecting guidance and retrying');
+            
+            // Don't add the malformed assistant response to messages history
+            // Instead, modify the last user message by appending guidance as a note
+            const lastMessage = messages[messages.length - 1];
+            if (lastMessage && lastMessage.role === 'user') {
+              // Add guidance as a note to the user's message
+              const originalContent = lastMessage.content || '';
+              const guidanceNote = '\n\n**Note: Please respond with code in script tags, for example: <script lang="python">your_code_here</script>**';
+              
+              // Check if guidance was already added to avoid duplication
+              if (!originalContent.includes('**Note: Please respond with code in script tags')) {
+                lastMessage.content = originalContent + guidanceNote;
+                console.log('DEBUG: Added guidance note to last user message');
+              }
+            }
+            
+            // Continue the loop to regenerate (don't break, don't increment loop count)
+            continue;
+          }
+
+          // Script found - execute it
+          const { content: scriptContent, language: scriptLanguage } = scriptInfo;
+          
           if (!onExecuteCode) {
-            // No code execution handler available - skip execution and inform the model
+            // No code execution handler available - break out of loop with the script content
             console.warn('Script execution detected but no onExecuteCode handler available');
             
-            // Get the script tag type that was actually used
-            const scriptTagType = getScriptTagType(accumulatedResponse);
+            // Since no execution is possible, return the script content as the final response
+            yield {
+              type: 'text',
+              content: accumulatedResponse
+            };
             
-            // Add the tool call to messages with XML format
-            messages.push({
-              role: 'assistant',
-              content: `<thoughts>${thoughts}</thoughts>\n<${scriptTagType} id="${completionId}">${scriptContent}</${scriptTagType}>`
-            });
-
-            // Add an error message to indicate code execution is not available
-            messages.push({
-              role: 'user',
-              content: `<observation>Code execution is not available in this context. Please provide a text-based response instead.</observation>`
-            });
+            // Exit the loop
+            break;
           } else {
             // Check if abort signal was triggered before tool execution
             if (signal.aborted) {
@@ -570,43 +717,57 @@ export async function* chatCompletion({
               name: 'runCode',
               arguments: {
                 code: scriptContent,
+                language: scriptLanguage
               },
               call_id: completionId
             };
 
-            // Get the script tag type that was actually used
-            const scriptTagType = getScriptTagType(accumulatedResponse);
+            // Always add assistant message in proper script format to maintain consistency
+            addAssistantMessageToHistory(messages, accumulatedResponse, completionId, !!onExecuteCode);
 
-            // Add the tool call to messages with XML format
-            messages.push({
-              role: 'assistant',
-              content: `<thoughts>${thoughts}</thoughts>\n<${scriptTagType} id="${completionId}">${scriptContent}</${scriptTagType}>`
-            });
-
-            // on Streaming about executing the code
             if(onStreaming){
               onStreaming(completionId, `Executing code...`);
             }
 
-            // Execute the tool call
+            // Execute the code
             try {
               const result = await onExecuteCode(
                 completionId,
-                scriptContent
+                scriptContent,
+                scriptLanguage
               );
 
-              // Yield the tool call output
-              yield {
-                type: 'function_call_output',
-                content: result,
-                call_id: completionId
-              };
+              // NOW check for returnToUser after code execution
+              if (serviceManager) {
+                const serviceCalls = serviceManager.getServiceCalls(completionId, agentId);
+                
+                if (serviceCalls && serviceCalls.returnToUser) {
+                  console.log(`📤 returnToUser detected after code execution, stopping conversation`);
+                  const returnData = serviceCalls.returnToUser.data;
+                  
+                  // Clear service calls for this completion
+                  serviceManager.clearServiceCalls(completionId, agentId);
+                  
+                  if (onMessage) {
+                    onMessage(completionId, returnData.content, returnData.commitIds || []);
+                  }
+                  
+                  yield {
+                    type: 'text',
+                    content: returnData.content
+                  };
+                  
+                  // Exit the loop since we have a final response
+                  return;
+                }
+              }
 
-              // Add tool response to messages
+              // Add execution result to messages and continue (follow exact format from examples)
               messages.push({
                 role: 'user',
-                content: `<observation>I have executed the code. Here are the outputs:\n\`\`\`\n${result}\n\`\`\`\nNow continue with the next step.</observation>`
+                content: `<observation>Code executed. Output:\n\`\`\`\n${result}\n\`\`\`\nContinue with the next step.</observation>`
               });
+
             } catch (error) {
               console.error('Error executing code:', error);
               const errorMessage = `Error executing code: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -617,128 +778,31 @@ export async function* chatCompletion({
                 error: error instanceof Error ? error : new Error(errorMessage)
               };
 
-              // Add error message to messages so the model can attempt recovery
+              // Add error message to messages and continue (follow exact format from examples)
               messages.push({
                 role: 'user',
-                content: `<observation>Error executing the code: ${error instanceof Error ? error.message : 'Unknown error'}\nPlease try a different approach.</observation>`
+                content: `<observation>Error executing code: ${error instanceof Error ? error.message : 'Unknown error'}\nPlease fix the error and try again.</observation>`
               });
-            }
-          }
-        }
-        else{
-          // If we have an empty response, skip this iteration entirely
-          if (accumulatedResponse.trim().length === 0) {
-            console.log('DEBUG: Skipping empty response - not adding to messages');
-            // Don't add empty responses to messages array - just break out of loop
-            break;
-          }
-
-          // Check if response contains any special tags
-          const hasThoughts = extractThoughts(accumulatedResponse);
-          const hasSpecialTags = hasThoughts || 
-                                accumulatedResponse.includes('<py-script') ||
-                                accumulatedResponse.includes('<js-script') ||
-                                accumulatedResponse.includes('<t-script') ||
-                                accumulatedResponse.includes('<script') ||
-                                accumulatedResponse.includes('<returnToUser');
-          
-          if (!hasSpecialTags && accumulatedResponse.trim().length > 0) {
-            // Plain text response without any special tags - inject guidance message
-            console.log('DEBUG: Detected naked response without proper tags, injecting guidance message');
-            
-            guidanceCount++;
-            if (guidanceCount > 3) {
-              console.log('DEBUG: Too many guidance attempts, forcing return to user');
-              // Force a return to user to prevent infinite guidance loops
-              if(onMessage){
-                onMessage(completionId, `The assistant seems to be having trouble following the proper format. Please try rephrasing your request or being more specific about what you need.`, []);
-              }
-              yield {
-                type: 'text',
-                content: `The assistant seems to be having trouble following the proper format. Please try rephrasing your request or being more specific about what you need.`
-              };
-              break;
-            }
-            
-            // Add the assistant's response to the conversation
-            messages.push({
-              role: 'assistant',
-              content: accumulatedResponse
-            });
-            
-            // Inject user message with guidance about proper tag usage
-            const guidanceMessage = 'Please continue your response with proper tags. Available tags:\n' +
-                        '- <thoughts>your analysis</thoughts> - for planning and analysis\n' +
-                        '- <py-script id="unique_id">python_code</py-script> - for Python code execution\n' +
-                        '- <t-script id="unique_id">typescript_code</t-script> - for TypeScript/JavaScript code execution\n' +
-                        '- <returnToUser commit="id1,id2">final_response</returnToUser> - for final answers\n';
-            
-            messages.push({
-              role: 'user',
-              content: guidanceMessage
-            });
-            
-            // Yield progress indicator so consumer knows we're still active
-            yield {
-              type: 'text_chunk',
-              content: '' // Empty chunk to indicate processing
-            };
-            
-            // Continue the loop to get a proper response with tags
-            // Don't increment loopCount here since this is just guidance
-          } else if (hasSpecialTags) {
-            // Has special tags but no executable content - this is incomplete response
-            console.log('DEBUG: Response has tags but no executable content, treating as incomplete');
-            
-            guidanceCount++;
-            if (guidanceCount > 3) {
-              console.log('DEBUG: Too many guidance attempts, forcing return to user');
-              // Force a return to user to prevent infinite guidance loops
-              if(onMessage){
-                onMessage(completionId, `The assistant seems to be having trouble following the proper format. Please try rephrasing your request or being more specific about what you need.`, []);
-              }
-              yield {
-                type: 'text',
-                content: `The assistant seems to be having trouble following the proper format. Please try rephrasing your request or being more specific about what you need.`
-              };
-              break;
-            }
-            
-            // Add the assistant's response to the conversation
-            messages.push({
-              role: 'assistant',
-              content: accumulatedResponse
-            });
-            
-            // Add user message requesting completion
-            messages.push({
-              role: 'user',
-              content: 'Your response appears incomplete. Please continue with executable code using <py-script> or <t-script> tags, or provide a final answer using <returnToUser> tags.'
-            });
-            
-            // Don't increment loopCount here since this is just guidance
-          } else {
-            // This shouldn't happen, but if it does, add the response and break
-            console.log('DEBUG: Unexpected response format, adding to conversation and breaking');
-            messages.push({
-              role: 'assistant',
-              content: accumulatedResponse
-            });
-            break;
           }
         }
         
-        // Only count this as a step if we processed meaningful content (script execution or return to user)
-        const hasExecutableContent = extractScript(accumulatedResponse) || extractReturnToUser(accumulatedResponse);
+        // Only count this as a step if we processed meaningful content (script execution)
+        const hasExecutableContent = extractScript(accumulatedResponse);
         if (hasExecutableContent) {
           loopCount++;
         }
         
         // add a reminder message if we are approaching the max steps
         if(loopCount >= maxSteps - 2){
+          // Check if HyphaCore services are available for context-aware reminder
+          const hasHyphaServices = serviceManager?.hasServiceForCompletion?.(agentId) || false;
+          const reminderMessage = hasHyphaServices 
+            ? `You are approaching the maximum number of steps (${maxSteps}). Please conclude the session with await returnToUser() function call within executed code, otherwise the session will be aborted.`
+            : `You are approaching the maximum number of steps (${maxSteps}). Please conclude the session by printing your final answer within executed code, otherwise the session will be aborted.`;
+            
           messages.push({
             role: 'user',
-            content: `You are approaching the maximum number of steps (${maxSteps}). Please conclude the session with \`returnToUser\` tag and commit the current code and outputs, otherwise the session will be aborted.`
+            content: reminderMessage
           });
         }
 
@@ -746,11 +810,11 @@ export async function* chatCompletion({
         if (loopCount >= maxSteps) {
           console.warn(`Chat completion reached maximum loop limit of ${maxSteps}`);
           if(onMessage){
-            onMessage(completionId, `<thoughts>Maximum steps reached</thoughts>\n<returnToUser>Reached maximum number of tool calls (${maxSteps}). Some actions may not have completed. I'm returning control to you now. Please try breaking your request into smaller steps or provide additional guidance.</returnToUser>`, []);
+            onMessage(completionId, `Reached maximum number of tool calls (${maxSteps}). Some actions may not have completed. I'm returning control to you now. Please try breaking your request into smaller steps or provide additional guidance.`, []);
           }
           yield {
             type: 'text',
-            content: `<thoughts>Maximum steps reached</thoughts>\n<returnToUser>Reached maximum number of tool calls (${maxSteps}). Some actions may not have completed. I'm returning control to you now. Please try breaking your request into smaller steps or provide additional guidance.</returnToUser>`
+            content: `Reached maximum number of tool calls (${maxSteps}). Some actions may not have completed. I'm returning control to you now. Please try breaking your request into smaller steps or provide additional guidance.`
           };
           break;
         }

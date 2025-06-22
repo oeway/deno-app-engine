@@ -433,8 +433,9 @@ class CodeExecutor {
     // Remove common indentation from all lines to handle indented code blocks
     const cleanedCode = this.removeCommonIndentation(code);
     
-    // Handle JavaScript code - try to capture last expression
-    const statements = cleanedCode.split(/[;\n]/).map(s => s.trim()).filter(s => s.length > 0);
+    // For JavaScript code, we need to be more careful about splitting statements
+    // Don't split on newlines if we're inside braces, brackets, or parentheses
+    const statements = this.smartSplitStatements(cleanedCode);
     
     if (statements.length === 0) {
       return undefined;
@@ -456,6 +457,96 @@ class CodeExecutor {
       // Execute all statements normally
       return eval(`(() => { ${cleanedCode}; return undefined; })()`);
     }
+  }
+
+  private smartSplitStatements(code: string): string[] {
+    // Split by semicolons, but respect nested structures
+    const statements: string[] = [];
+    let current = '';
+    let braceDepth = 0;
+    let bracketDepth = 0;
+    let parenDepth = 0;
+    let inString = false;
+    let stringChar = '';
+    let inComment = false;
+    let i = 0;
+    
+    while (i < code.length) {
+      const char = code[i];
+      const nextChar = code[i + 1];
+      
+      // Handle comments
+      if (!inString && char === '/' && nextChar === '/') {
+        inComment = true;
+        current += char;
+        i++;
+        continue;
+      }
+      
+      if (inComment && char === '\n') {
+        inComment = false;
+        current += char;
+        i++;
+        continue;
+      }
+      
+      if (inComment) {
+        current += char;
+        i++;
+        continue;
+      }
+      
+      // Handle strings
+      if (!inString && (char === '"' || char === "'" || char === '`')) {
+        inString = true;
+        stringChar = char;
+        current += char;
+        i++;
+        continue;
+      }
+      
+      if (inString && char === stringChar && code[i - 1] !== '\\') {
+        inString = false;
+        stringChar = '';
+        current += char;
+        i++;
+        continue;
+      }
+      
+      if (inString) {
+        current += char;
+        i++;
+        continue;
+      }
+      
+      // Track nesting depth
+      if (char === '{') braceDepth++;
+      else if (char === '}') braceDepth--;
+      else if (char === '[') bracketDepth++;
+      else if (char === ']') bracketDepth--;
+      else if (char === '(') parenDepth++;
+      else if (char === ')') parenDepth--;
+      
+      // Split on semicolon only if we're at the top level
+      if (char === ';' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+        if (current.trim()) {
+          statements.push(current.trim());
+        }
+        current = '';
+        i++;
+        continue;
+      }
+      
+      current += char;
+      i++;
+    }
+    
+    // Add the last statement if there's content
+    if (current.trim()) {
+      statements.push(current.trim());
+    }
+    
+    return statements.filter(s => s.length > 0);
   }
   
   private removeCommonIndentation(code: string): string {
