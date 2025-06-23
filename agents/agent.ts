@@ -11,6 +11,7 @@ import {
 import type { IKernelInstance, IKernel } from "../kernel/mod.ts";
 import { KernelLanguage } from "../kernel/mod.ts";
 import { KernelMode } from "../kernel/mod.ts";
+import { KernelEvents } from '../kernel/mod.ts';
 
 // Re-export enums and interfaces that the Agent needs
 export enum AgentEvents {
@@ -1342,7 +1343,7 @@ export class Agent implements IAgentInstance {
       } finally {
         // Finalize action step
         actionStep.endTime = Date.now();
-        actionStep.duration = actionStep.endTime - stepStartTime;
+        actionStep.duration = actionStep.endTime - (actionStep.startTime || Date.now());
         this.memory.addStep(actionStep);
         
         this.stepNumber++;
@@ -1432,14 +1433,14 @@ export class Agent implements IAgentInstance {
       // Set up output capture
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
         if (this.kernel && event.kernelId === this.kernelId) {
-          if (event.data.type === 'stream' && (event.data.name === 'stdout' || event.data.name === 'stderr')) {
+          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
             startupOutput += event.data.text || '';
           }
         }
       };
 
       // Listen for output
-      this.manager.kernelManager.on('output', handleManagerEvent);
+      this.manager.kernelManager.on(KernelEvents.STREAM, handleManagerEvent);
 
       try {
         // Execute the startup script
@@ -1475,7 +1476,7 @@ export class Agent implements IAgentInstance {
 
       } finally {
         // Clean up listener
-        this.manager.kernelManager.off('output', handleManagerEvent);
+        this.manager.kernelManager.off(KernelEvents.STREAM, handleManagerEvent);
       }
 
     } catch (error) {
@@ -1508,16 +1509,16 @@ export class Agent implements IAgentInstance {
       // Set up output capture
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
         if (this.kernel && event.kernelId === this.kernelId) {
-          if (event.data.type === 'stream' && (event.data.name === 'stdout' || event.data.name === 'stderr')) {
+          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
             observations += event.data.text || '';
-          } else if (event.data.type === 'display_data' && event.data.data && event.data.data['image/png']) {
+          } else if (event.data.data && event.data.data['image/png']) {
             observationImages.push(event.data.data['image/png']);
           }
         }
       };
 
       // Listen for output
-      this.manager.kernelManager.on('output', handleManagerEvent);
+      this.manager.kernelManager.on(KernelEvents.STREAM, handleManagerEvent);
 
       try {
         // Execute the code
@@ -1551,7 +1552,7 @@ export class Agent implements IAgentInstance {
         return actionStep.observations || 'Code executed (no output)';
       } finally {
         // Clean up listener
-        this.manager.kernelManager.off('output', handleManagerEvent);
+        this.manager.kernelManager.off(KernelEvents.STREAM, handleManagerEvent);
       }
     } catch (error) {
       const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -1820,16 +1821,16 @@ export class Agent implements IAgentInstance {
       // Set up output capture
       const handleManagerEvent = (event: { kernelId: string; data: any }) => {
         if (this.kernel && event.kernelId === this.kernelId) {
-          if (event.data.type === 'stream' && (event.data.name === 'stdout' || event.data.name === 'stderr')) {
+          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
             observations += event.data.text || '';
-          } else if (event.data.type === 'display_data' && event.data.data && event.data.data['image/png']) {
+          } else if (event.data.data && event.data.data['image/png']) {
             observationImages.push(event.data.data['image/png']);
           }
         }
       };
 
       // Listen for output
-      this.manager.kernelManager.on('output', handleManagerEvent);
+      this.manager.kernelManager.on(KernelEvents.STREAM, handleManagerEvent);
 
       try {
         // Execute the code
@@ -1857,7 +1858,7 @@ export class Agent implements IAgentInstance {
         return observations.trim() || 'Code executed (no output)';
       } finally {
         // Clean up listener
-        this.manager.kernelManager.off('output', handleManagerEvent);
+        this.manager.kernelManager.off(KernelEvents.STREAM, handleManagerEvent);
       }
     } catch (error) {
       const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;

@@ -2258,6 +2258,30 @@ export async function handleRequest(req: Request): Promise<Response> {
 }
 
 export async function startServer(port = 8000) {
+  // Add global error handlers to prevent server crashes
+  globalThis.addEventListener("error", (event) => {
+    console.error("🚨 Uncaught error:", event.error);
+    console.error("Error details:", {
+      message: event.error?.message,
+      stack: event.error?.stack,
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno
+    });
+    // Don't prevent default to allow error reporting but keep server running
+  });
+
+  globalThis.addEventListener("unhandledrejection", (event) => {
+    console.error("🚨 Unhandled promise rejection:", event.reason);
+    console.error("Promise rejection details:", {
+      reason: event.reason,
+      stack: event.reason?.stack,
+      promise: event.promise
+    });
+    // Prevent the unhandled rejection from crashing the process
+    event.preventDefault();
+  });
+
   console.log(`Starting kernel HTTP server on port ${port}...`);
   return Deno.serve({ port }, handleRequest);
 }
