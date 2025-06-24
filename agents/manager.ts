@@ -102,6 +102,10 @@ export class AgentManager extends EventEmitter {
   private hyphaCoreHost: string = '127.0.0.1';
   private hyphaCoreWorkspace: string = 'default';
   private hyphaCoreJwtSecret: string;
+  
+  // Initialization tracking
+  private _initialized: boolean = false;
+  private _initializing: Promise<void> | null = null;
 
   constructor(options: IAgentManagerOptions = {}) {
     super();
@@ -128,13 +132,82 @@ export class AgentManager extends EventEmitter {
 
     // Initialize model registry from config
     this.initializeModelRegistry(options.modelRegistry);
+  }
+
+  /**
+   * Initialize the AgentManager with async operations
+   * This method should be called after creating the manager instance
+   * @returns Promise that resolves when initialization is complete
+   */
+  public async init(): Promise<void> {
+    if (this._initialized) {
+      return;
+    }
+
+    if (this._initializing) {
+      return this._initializing;
+    }
+
+    this._initializing = this._performInit();
+    await this._initializing;
+    this._initialized = true;
+    this._initializing = null;
+  }
+
+  /**
+   * Perform the actual initialization work
+   * @private
+   */
+  private async _performInit(): Promise<void> {
+    console.log('🚀 Initializing AgentManager...');
     
+    // Ensure agent data directory exists
+    try {
+      await ensureDir(this.agentDataDirectory);
+    } catch (error) {
+      console.error(`Failed to create agent data directory: ${error}`);
+    }
+
     // Start HyphaCore if enabled
     if (this.enableHyphaCore) {
-      this.startHyphaCore().catch(error => {
+      try {
+        await this.startHyphaCore();
+      } catch (error) {
         console.error('❌ Failed to start HyphaCore server:', error);
-      });
+        throw error;
+      }
     }
+
+    console.log('✅ AgentManager initialization complete');
+  }
+
+  /**
+   * Ensure the manager is initialized before performing operations
+   * This method will automatically call init() if not already initialized
+   * @private
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this._initialized && !this._initializing) {
+      await this.init();
+    } else if (this._initializing) {
+      await this._initializing;
+    }
+  }
+
+  /**
+   * Check if the manager is initialized
+   * @returns True if the manager has been initialized
+   */
+  public get initialized(): boolean {
+    return this._initialized;
+  }
+
+  /**
+   * Check if the manager is currently initializing
+   * @returns True if the manager is currently initializing
+   */
+  public get initializing(): boolean {
+    return this._initializing !== null;
   }
 
   /**
@@ -267,6 +340,9 @@ export class AgentManager extends EventEmitter {
 
   // Create a new agent
   async createAgent(config: IAgentConfig): Promise<string> {
+    // Ensure manager is initialized
+    await this.ensureInitialized();
+    
     // Validate input
     if (!config.id || !config.name) {
       throw new Error("Agent ID and name are required");
@@ -461,6 +537,9 @@ export class AgentManager extends EventEmitter {
 
   // Attach a kernel to an agent
   async attachKernelToAgent(agentId: string, kernelType: KernelType): Promise<void> {
+    // Ensure manager is initialized
+    await this.ensureInitialized();
+    
     const agent = this.agents.get(agentId);
     if (!agent) {
       throw new Error(`Agent with ID "${agentId}" not found`);
@@ -541,16 +620,12 @@ export class AgentManager extends EventEmitter {
 
   // Save conversation to file
   async saveConversation(agentId: string, filename?: string): Promise<void> {
+    // Ensure manager is initialized
+    await this.ensureInitialized();
+    
     const agent = this.agents.get(agentId);
     if (!agent) {
       throw new Error(`Agent with ID "${agentId}" not found`);
-    }
-
-    // Ensure directory exists before saving
-    try {
-      await ensureDir(this.agentDataDirectory);
-    } catch (error) {
-      console.error(`Failed to create agent data directory: ${error}`);
     }
 
     const saveData: IConversationData = {
@@ -573,6 +648,9 @@ export class AgentManager extends EventEmitter {
 
   // Load conversation from file
   async loadConversation(agentId: string, filename?: string): Promise<ChatMessage[]> {
+    // Ensure manager is initialized
+    await this.ensureInitialized();
+    
     if (!filename) {
       // If no filename provided, try to find the most recent conversation file for this agent
       const files = [];
@@ -986,7 +1064,7 @@ export class AgentManager extends EventEmitter {
    */
   private async startHyphaCore(): Promise<void> {
     if (!this.enableHyphaCore) {
-      return;
+      throw new Error("HyphaCore is not enabled");
     }
 
     try {
@@ -1140,13 +1218,22 @@ globalThis._hypha_server = _hypha_server;
   public async shutdown(): Promise<void> {
     console.log('🛑 Shutting down AgentManager...');
     
+    // Wait for any ongoing initialization to complete
+    if (this._initializing) {
+      await this._initializing;
+    }
+    
     // Destroy all agents
     await this.destroyAll();
     
     // Stop HyphaCore if running
-    if (this.enableHyphaCore) {
+    if (this.enableHyphaCore && this._initialized) {
       await this.stopHyphaCore();
     }
+    
+    // Reset initialization state
+    this._initialized = false;
+    this._initializing = null;
     
     console.log('✅ AgentManager shutdown complete');
   }

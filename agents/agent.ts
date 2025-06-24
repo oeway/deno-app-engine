@@ -317,6 +317,7 @@ export interface IAgentInstance {
   destroy(): void;
   getStartupError(): AgentStartupError | undefined;
   setConversationHistory(messages: ChatMessage[]): void;
+  execute(code: string): Promise<{ success: boolean; output: string; error?: any; result?: any }>;
 }
 
 // Code execution instructions for agents with kernels
@@ -1703,6 +1704,77 @@ export class Agent implements IAgentInstance {
       context: 'conversation_history_set',
       messageCount: messages.length
     });
+  }
+
+  /**
+   * Execute code directly in the attached kernel
+   * @param code The code to execute
+   * @returns Promise with execution result and captured output
+   * @throws Error if no kernel is attached
+   */
+  async execute(code: string): Promise<{ success: boolean; output: string; error?: any; result?: any }> {
+    if (!this.kernel) {
+      throw new Error(`No kernel attached to agent ${this.id}. Please attach a kernel before executing code.`);
+    }
+
+    console.log(`🚀 [Agent ${this.id}] Executing code directly`);
+    console.log(`📋 Code (${code.length} chars):`, code.substring(0, 200) + (code.length > 200 ? '...' : ''));
+
+    let capturedOutput = '';
+
+    try {
+      // Set up output capture
+      const handleManagerEvent = (event: { kernelId: string; data: any }) => {
+        if (this.kernel && event.kernelId === this.kernelId) {
+          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
+            capturedOutput += event.data.text || '';
+          }
+        }
+      };
+
+      // Listen for output if manager is available
+      if (this.manager.kernelManager) {
+        this.manager.kernelManager.on(KernelEvents.STREAM, handleManagerEvent);
+      }
+
+      try {
+        // Execute the code
+        const result = this.manager.kernelManager 
+          ? await this.manager.kernelManager.execute(this.kernelId!, code)
+          : await this.kernel.execute(code);
+
+        if (result.success) {
+          console.log(`✅ [Agent ${this.id}] Code executed successfully`);
+          return {
+            success: true,
+            output: capturedOutput.trim(),
+            result: result.result
+          };
+        } else {
+          console.log(`❌ [Agent ${this.id}] Code execution failed -`, result.error?.message || 'Unknown error');
+          return {
+            success: false,
+            output: capturedOutput.trim(),
+            error: result.error,
+            result: result.result
+          };
+        }
+      } finally {
+        // Clean up listener
+        if (this.manager.kernelManager) {
+          this.manager.kernelManager.off(KernelEvents.STREAM, handleManagerEvent);
+        }
+      }
+    } catch (error) {
+      const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      console.log(`💥 [Agent ${this.id}] Kernel execution exception - ${errorMsg}`);
+      
+      return {
+        success: false,
+        output: capturedOutput.trim(),
+        error: error instanceof Error ? error : new Error(errorMsg)
+      };
+    }
   }
 
   /**
