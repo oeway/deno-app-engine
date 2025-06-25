@@ -19,6 +19,7 @@ import {
 import { KernelLanguage } from "../kernel/manager.ts";
 import { HyphaCore } from 'hypha-core';
 import { DenoWebSocketServer, DenoWebSocketClient } from 'hypha-core/deno-websocket-server';
+import type { InspectImagesOptions } from './vision.ts';
 
 // Model registry events (additional to AgentEvents)
 export enum ModelEvents {
@@ -1071,16 +1072,72 @@ export class AgentManager extends EventEmitter {
       console.log('🚀 Starting HyphaCore server...');
       
       // Create HyphaCore instance
+      const agentManager = this; // Capture the AgentManager instance
       this.hyphaCore = new HyphaCore({
         url: `http://${this.hyphaCoreHost}:${this.hyphaCorePort}`,
         ServerClass: DenoWebSocketServer,
         WebSocketClass: DenoWebSocketClient,
         jwtSecret: this.hyphaCoreJwtSecret,
         defaultService: {
-          returnToUser(message: string, context: any){
-            const agentId = context.to.split("/")[1];
-            console.log(`🔄 Returning to user: ${message}`);
+          async *chatCompletion(messages: ChatMessage[], context: any) {
+            const agentId = context.from.split("/")[1];
             console.log(`🔄 Agent ID: ${agentId}`);
+            console.log(`🔍 Available agents: ${Array.from(agentManager.agents.keys()).join(', ')}`);
+            console.log(`🔍 Context from: ${context.from}, to: ${context.to}`);
+            // get the agent then call the chatCompletion method
+            const agent = agentManager.getAgent(agentId);
+            if (!agent) {
+              throw new Error(`Agent with ID "${agentId}" not found`);
+            }
+            
+            // Stream the response from the generator
+            const generator = agent.chatCompletion(messages, {
+              stream: true, // Enable streaming for API calls
+              maxSteps: context.max_steps || 5 // Use max_steps from context or default
+            });
+            
+            try {
+              for await (const chunk of generator) {
+                yield chunk;
+              }
+            } catch (error) {
+              console.error(`❌ Chat completion failed for agent ${agentId}:`, error);
+              throw error;
+            }
+          },
+          async *inspectImages(options: InspectImagesOptions, context: any) {
+            const agentId = context.from.split("/")[1];
+            console.log(`🔄 Agent ID for image inspection: ${agentId}`);
+            
+            // Get the agent to access its model settings for the API call
+            const agent = agentManager.getAgent(agentId);
+            if (!agent) {
+              throw new Error(`Agent with ID "${agentId}" not found`);
+            }
+            
+            // Import the vision utilities
+            const { inspectImages } = await import('./vision.ts');
+            
+            // Use the agent's model settings for the vision API call
+            const inspectionOptions = {
+              images: options.images || [],
+              query: options.query || '',
+              contextDescription: options.contextDescription || '',
+              model: agent.ModelSettings.model,
+              maxTokens: options.max_tokens || options.maxTokens || 1024,
+              baseURL: agent.ModelSettings.baseURL,
+              apiKey: agent.ModelSettings.apiKey,
+              outputSchema: options.outputSchema
+            };
+            
+            try {
+              for await (const chunk of inspectImages(inspectionOptions)) {
+                yield chunk;
+              }
+            } catch (error) {
+              console.error(`❌ Image inspection failed for agent ${agentId}:`, error);
+              throw error;
+            }
           }
         }
       });

@@ -430,9 +430,47 @@ You have access to Hypha services through the kernel environment. These services
 - Always print() the results to see outputs in observations
 
 ### API Access
-Access to internal APIs through the \`api\` object:
-- Vision: \`await api.inspectImages(images=[{'url': 'data:image/png;base64,...'}], query='Describe this')\`
-- Chat: \`await api.chatCompletion(messages=[...], max_tokens=50)\`
+Access to internal APIs through the \`api\` object (both return streaming generators):
+
+**Response Types (Both APIs):**
+- \`text_chunk\` (streaming): Intermediate pieces as they arrive
+- \`text\` (complete): Final complete response
+
+**Vision API Examples:**
+\`\`\`python
+# Stream processing with all chunks
+async for chunk in api.inspectImages({"images": [{"url": "data:image/..."}], "query": "Describe this"}):
+    if chunk["type"] == "text_chunk":
+        print(chunk["content"], end="")  # Stream piece by piece
+    elif chunk["type"] == "text":
+        print(f"\\nFinal: {chunk['content']}")  # Complete result
+        break
+
+# Quick final result only
+async for chunk in api.inspectImages({"images": [...], "query": "..."}):
+    if chunk["type"] == "text":
+        result = chunk["content"]
+        break
+\`\`\`
+
+**Chat API Examples:**
+\`\`\`python
+# Stream processing
+full_response = ""
+async for chunk in api.chatCompletion(messages, {"max_steps": 5}):
+    if chunk["type"] == "text_chunk":
+        print(chunk["content"], end="")  # Stream smoothly
+    elif chunk["type"] == "text":
+        full_response = chunk["content"]  # Final complete response
+        break
+
+# Quick final result only
+async for chunk in api.chatCompletion(messages):
+    if chunk["type"] == "text":
+        result = chunk["content"]
+        break
+\`\`\`
+
 - Use JSON schema for structured responses when needed
 
 ### Data Visualization
@@ -789,9 +827,54 @@ Access to Hypha services through the runtime environment:
 - **Object Methods**: Object.keys, Object.values, Object.entries
 
 ### API Access
-Access to internal APIs through the \`api\` object:
-- Vision: \`await api.inspectImages(images=[{url: 'data:image/png;base64,...'}], query='Describe this')\`
-- Chat: \`await api.chatCompletion(messages=[...], max_tokens=50)\`
+Access to internal APIs through the \`api\` object (both return streaming generators):
+
+**Response Types (Both APIs):**
+- \`text_chunk\` (streaming): Intermediate pieces as they arrive
+- \`text\` (complete): Final complete response
+
+**Vision API Examples:**
+\`\`\`javascript
+// Stream processing with all chunks
+for await (const chunk of api.inspectImages({images: [{url: "data:image/..."}], query: "Describe this"})) {
+    if (chunk.type === "text_chunk") {
+        process.stdout.write(chunk.content);  // Stream piece by piece
+    } else if (chunk.type === "text") {
+        console.log(\`\\nFinal: \${chunk.content}\`);  // Complete result
+        break;
+    }
+}
+
+// Quick final result only
+for await (const chunk of api.inspectImages({images: [...], query: "..."})) {
+    if (chunk.type === "text") {
+        const result = chunk.content;
+        break;
+    }
+}
+\`\`\`
+
+**Chat API Examples:**
+\`\`\`javascript
+// Stream processing
+let fullResponse = "";
+for await (const chunk of api.chatCompletion(messages, {max_steps: 5})) {
+    if (chunk.type === "text_chunk") {
+        process.stdout.write(chunk.content);  // Stream smoothly
+    } else if (chunk.type === "text") {
+        fullResponse = chunk.content;  // Final complete response
+        break;
+    }
+}
+
+// Quick final result only
+for await (const chunk of api.chatCompletion(messages)) {
+    if (chunk.type === "text") {
+        const result = chunk.content;
+        break;
+    }
+}
+\`\`\`
 
 ## Key Requirements
 

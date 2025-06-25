@@ -10,8 +10,8 @@
     "comlink": "https://esm.sh/comlink@4.3.1",
     "ollama": "npm:ollama@^0.5.0",
     "openai": "npm:openai@^4.65.0",
-    "hypha-core": "npm:hypha-core@0.20.56-pre10",
-    "hypha-core/deno-websocket-server": "npm:hypha-core@0.20.56-pre10/deno-websocket-server",
+    "hypha-core": "npm:hypha-core@0.20.56-pre12",
+    "hypha-core/deno-websocket-server": "npm:hypha-core@0.20.56-pre12/deno-websocket-server",
     "hypha-rpc": "npm:hypha-rpc@0.20.56"
   },
   "tasks": {

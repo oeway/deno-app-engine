@@ -14,4 +14,7 @@ export {
   type ModelSettings,
   type ChatCompletionOptions,
   DefaultModelSettings
-} from "./chatCompletion.ts"; 
+} from "./chatCompletion.ts";
+
+// Export vision utilities
+export * from "./vision.ts"; 

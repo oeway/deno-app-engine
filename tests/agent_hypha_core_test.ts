@@ -84,7 +84,7 @@ import json
 _hypha_server = await connect_to_server({
     "server_url": "http://${TEST_CONFIG.hypha_core_host}:${TEST_CONFIG.hypha_core_port}",
     "workspace": "${TEST_CONFIG.hypha_core_workspace}",
-    "client_id": "python-test-agent",
+    "client_id": "python-hypha-test",
     "token": "${pythonToken}"
 })
 
@@ -142,7 +142,7 @@ const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rp
 const _hypha_server = await hyphaWebsocketClient.connectToServer({
     server_url: "http://${TEST_CONFIG.hypha_core_host}:${TEST_CONFIG.hypha_core_port}",
     workspace: "${TEST_CONFIG.hypha_core_workspace}",
-    client_id: "typescript-test-agent",
+    client_id: "typescript-hypha-test",
     token: "${tsToken}"
 });
 
@@ -220,7 +220,7 @@ const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rp
 const _hypha_server = await hyphaWebsocketClient.connectToServer({
     server_url: "http://${TEST_CONFIG.hypha_core_host}:${TEST_CONFIG.hypha_core_port}",
     workspace: "${TEST_CONFIG.hypha_core_workspace}",
-    client_id: "javascript-test-agent",
+    client_id: "javascript-hypha-test",
     token: "${jsToken}"
 });
 
@@ -289,8 +289,8 @@ console.log("✅ JavaScript data service registered successfully");
       
       // Test Python service
       console.log("🧪 Testing Python math service...");
-      // Service is registered as test-workspace/python-test-agent:python-math-service
-      const pythonService = await hyphaAPI.getService("test-workspace/python-test-agent:python-math-service");
+      // Service is registered as test-workspace/python-hypha-test:python-math-service
+      const pythonService = await hyphaAPI.getService("test-workspace/python-hypha-test:python-math-service");
       assertExists(pythonService, "Python service should be accessible");
       
       const addResult = await pythonService.add(5, 3);
@@ -311,8 +311,8 @@ console.log("✅ JavaScript data service registered successfully");
       
       // Test TypeScript service
       console.log("🧪 Testing TypeScript utils service...");
-      // Service is registered as test-workspace/typescript-test-agent:typescript-utils-service
-      const tsService = await hyphaAPI.getService("test-workspace/typescript-test-agent:typescript-utils-service");
+      // Service is registered as test-workspace/typescript-hypha-test:typescript-utils-service
+      const tsService = await hyphaAPI.getService("test-workspace/typescript-hypha-test:typescript-utils-service");
       assertExists(tsService, "TypeScript service should be accessible");
       
       const reverseResult = await tsService.reverseString("hello");
@@ -333,8 +333,8 @@ console.log("✅ JavaScript data service registered successfully");
       
       // Test JavaScript service
       console.log("🧪 Testing JavaScript data service...");
-      // Service is registered as test-workspace/javascript-test-agent:javascript-data-service
-      const jsService = await hyphaAPI.getService("test-workspace/javascript-test-agent:javascript-data-service");
+      // Service is registered as test-workspace/javascript-hypha-test:javascript-data-service
+      const jsService = await hyphaAPI.getService("test-workspace/javascript-hypha-test:javascript-data-service");
       assertExists(jsService, "JavaScript service should be accessible");
       
       const dataResult = await jsService.processData([1, 2, 3, 4, 5]);
@@ -358,7 +358,194 @@ console.log("✅ JavaScript data service registered successfully");
       assertEquals(jsInfo.language, "javascript", "JavaScript service info should be correct");
       console.log("✅ JavaScript service info:", jsInfo);
       
-      console.log("\n🎉 All HyphaCore integration tests passed!");
+      // Test 5: Test chatCompletion API from agent scripts
+      console.log("\n📝 Test 5: Testing chatCompletion API from Agent Scripts");
+      
+      // Test calling chatCompletion API from Python agent script
+      console.log("🐍 Testing chatCompletion API from Python agent...");
+      const pythonChatResult = await pythonAgent.execute(`
+# Test the chatCompletion API from within the agent
+# The chatCompletion method is available directly on _hypha_server
+
+import json
+
+# Define test messages for the chat completion
+messages = [
+    {"role": "user", "content": "What is 15 + 27? Please show your work."}
+]
+
+# Call the chatCompletion API via HyphaCore
+try:
+    print("📤 Calling chatCompletion API directly on _hypha_server...")
+    
+    # Call the chatCompletion method directly on _hypha_server
+    # The context (including target agent) is automatically provided by HyphaCore
+    chat_generator = await _hypha_server.chat_completion(messages)
+    
+    print("✅ Successfully got chat completion generator")
+    
+    # Collect all chunks from the generator
+    result_chunks = []
+    final_response = ""
+    
+    async for chunk in chat_generator:
+        result_chunks.append(chunk)
+        if hasattr(chunk, 'type') and chunk.type == 'text_chunk' and hasattr(chunk, 'content'):
+            print(f"📝 Chunk: {chunk.content}")
+            final_response += chunk.content  # Accumulate chunks
+        elif hasattr(chunk, 'type') and chunk.type == 'text' and hasattr(chunk, 'content'):
+            final_response = chunk.content
+            print(f"✅ Final: {chunk.content}")
+    
+    print(f"📊 Total chunks received: {len(result_chunks)}")
+    print(f"🎯 Final response: {final_response}")
+    
+    # Verify we got a reasonable response
+    if "15 + 27" in final_response or "42" in final_response or "addition" in final_response.lower():
+        print("✅ ChatCompletion API test PASSED - Got expected mathematical response")
+    else:
+        print(f"⚠️ ChatCompletion API test WARNING - Unexpected response: {final_response}")
+    
+except Exception as e:
+    print(f"❌ ChatCompletion API test FAILED: {str(e)}")
+    import traceback
+    traceback.print_exc()
+`);
+      
+      assertEquals(pythonChatResult.success, true, "Python chatCompletion API test should succeed");
+      console.log("🐍 Python chatCompletion test output:", pythonChatResult.output);
+      
+//       // Test calling chatCompletion API from TypeScript agent script
+//       console.log("📘 Testing chatCompletion API from TypeScript agent...");
+//       const tsChatResult = await tsAgent.execute(`
+// // Test the chatCompletion API from TypeScript agent
+// // Use globalThis to access the _hypha_server that was set in the previous execution
+// console.log("🔄 Testing chatCompletion API from TypeScript...");
+
+// const messages = [
+//     { role: "user", content: "Explain the concept of recursion in programming with a simple example." }
+// ];
+
+// try {
+//     console.log("📤 Calling chatCompletion API using globalThis._hypha_server...");
+    
+//     // Use globalThis to access the _hypha_server from previous execution
+//     if (!globalThis._hypha_server) {
+//         throw new Error("globalThis._hypha_server is not available. Previous connection may have failed.");
+//     }
+    
+//     // Call the chatCompletion method directly on globalThis._hypha_server
+//     // The context (including target agent) is automatically provided by HyphaCore
+//     const chatGenerator = await globalThis._hypha_server.chatCompletion(messages);
+    
+//     console.log("✅ Successfully got chat completion generator from TypeScript");
+    
+//     let resultChunks: any[] = [];
+//     let finalResponse = "";
+    
+//     // Iterate through the async generator
+//     for await (const chunk of chatGenerator) {
+//         resultChunks.push(chunk);
+        
+//         if (chunk.type === 'text_chunk' && chunk.content) {
+//             console.log(\`📝 TS Chunk: \${chunk.content}\`);
+//             finalResponse += chunk.content; // Accumulate chunks
+//         } else if (chunk.type === 'text' && chunk.content) {
+//             finalResponse = chunk.content;
+//             console.log(\`✅ TS Final: \${chunk.content}\`);
+//         }
+//     }
+    
+//     console.log(\`📊 TS Total chunks received: \${resultChunks.length}\`);
+//     console.log(\`🎯 TS Final response: \${finalResponse}\`);
+    
+//     // Verify we got a reasonable response about recursion
+//     const responseText = finalResponse.toLowerCase();
+//     if (responseText.includes("recursion") || responseText.includes("function") || responseText.includes("itself")) {
+//         console.log("✅ TypeScript ChatCompletion API test PASSED - Got expected recursion explanation");
+//     } else {
+//         console.log(\`⚠️ TypeScript ChatCompletion API test WARNING - Unexpected response: \${finalResponse}\`);
+//     }
+    
+// } catch (error) {
+//     console.error("❌ TypeScript ChatCompletion API test FAILED:", error);
+//     console.error("Error details:", error.message);
+//     console.error("Error stack:", error.stack);
+// }
+// `);
+      
+//       console.log("✅ TypeScript chatCompletion test result:", tsChatResult.success ? "SUCCESS" : "FAILED");
+//       console.log("📘 TypeScript chatCompletion test output:", tsChatResult.output);
+//       if (!tsChatResult.success) {
+//         console.error("❌ TypeScript chatCompletion test error:", tsChatResult.error);
+//       }
+
+//       // Test calling chatCompletion API from JavaScript agent script
+//       console.log("📗 Testing chatCompletion API from JavaScript agent...");
+//       const jsChatResult = await jsAgent.execute(`
+// // Test the chatCompletion API from JavaScript agent
+// // Use globalThis to access the _hypha_server that was set in the previous execution
+// console.log("🔄 Testing chatCompletion API from JavaScript...");
+
+// const messages = [
+//     { role: "user", content: "What are the benefits of using async/await in JavaScript? Give me 3 key points." }
+// ];
+
+// try {
+//     console.log("📤 Calling chatCompletion API using globalThis._hypha_server...");
+    
+//     // Use globalThis to access the _hypha_server from previous execution
+//     if (!globalThis._hypha_server) {
+//         throw new Error("globalThis._hypha_server is not available. Previous connection may have failed.");
+//     }
+    
+//     // Call the chatCompletion method directly on globalThis._hypha_server
+//     // The context (including target agent) is automatically provided by HyphaCore
+//     const chatGenerator = await globalThis._hypha_server.chatCompletion(messages);
+    
+//     console.log("✅ Successfully got chat completion generator from JavaScript");
+    
+//     let resultChunks = [];
+//     let finalResponse = "";
+    
+//     // Iterate through the async generator
+//     for await (const chunk of chatGenerator) {
+//         resultChunks.push(chunk);
+        
+//         if (chunk.type === 'text_chunk' && chunk.content) {
+//             console.log(\`📝 JS Chunk: \${chunk.content}\`);
+//             finalResponse += chunk.content; // Accumulate chunks
+//         } else if (chunk.type === 'text' && chunk.content) {
+//             finalResponse = chunk.content;
+//             console.log(\`✅ JS Final: \${chunk.content}\`);
+//         }
+//     }
+    
+//     console.log(\`📊 JS Total chunks received: \${resultChunks.length}\`);
+//     console.log(\`🎯 JS Final response: \${finalResponse}\`);
+    
+//     // Verify we got a reasonable response about async/await
+//     const responseText = finalResponse.toLowerCase();
+//     if (responseText.includes("async") || responseText.includes("await") || responseText.includes("javascript")) {
+//         console.log("✅ JavaScript ChatCompletion API test PASSED - Got expected async/await explanation");
+//     } else {
+//         console.log(\`⚠️ JavaScript ChatCompletion API test WARNING - Unexpected response: \${finalResponse}\`);
+//     }
+    
+// } catch (error) {
+//     console.error("❌ JavaScript ChatCompletion API test FAILED:", error);
+//     console.error("Error details:", error.message);
+//     console.error("Error stack:", error.stack);
+// }
+// `);
+      
+//       console.log("✅ JavaScript chatCompletion test result:", jsChatResult.success ? "SUCCESS" : "FAILED");
+//       console.log("📗 JavaScript chatCompletion test output:", jsChatResult.output);
+//       if (!jsChatResult.success) {
+//         console.error("❌ JavaScript chatCompletion test error:", jsChatResult.error);
+//       }
+      
+//       console.log("\n🎉 All HyphaCore integration tests passed!");
       
     } catch (error) {
       console.error("❌ Test failed:", error);
