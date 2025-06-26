@@ -316,6 +316,7 @@ await micropip.install(ipykernel_url)
       'ipykernel',
       'comm',
       'pyodide_kernel',
+      'prompt_toolkit',  // Required by jedi and ipython
       'jedi',
       'ipython',
       'nbformat',
@@ -326,18 +327,31 @@ await micropip.install(ipykernel_url)
     console.log("Loading Pyodide packages...");
     await this.pyodide.loadPackage(['pure-eval', 'stack-data', 'pygments']);
     
-    // Use piplite to install required packages
-    const scriptLines: string[] = [];
-
+    // Use piplite to install required packages with better error handling
+    console.log("Installing Python packages...");
+    
     for (const pkgName of toLoad) {
-      scriptLines.push(`await piplite.install('${pkgName}', keep_going=True)`);
+      try {
+        console.log(`Installing ${pkgName}...`);
+        await this.pyodide.runPythonAsync(`
+try:
+    await piplite.install('${pkgName}', keep_going=True)
+    print(f"✅ Successfully installed {pkgName}")
+except Exception as e:
+    print(f"⚠️ Warning: Failed to install ${pkgName}: {e}")
+    import traceback
+    traceback.print_exc()
+`);
+      } catch (error) {
+        console.warn(`Failed to install ${pkgName}:`, error);
+        // Continue with other packages even if one fails
+        continue;
+      }
     }
     
     // Import the kernel
-    scriptLines.push('import pyodide_kernel');
-    
-    // Execute the installation
-    await this.pyodide.runPythonAsync(scriptLines.join('\n'));
+    console.log("Importing pyodide_kernel...");
+    await this.pyodide.runPythonAsync('import pyodide_kernel');
   }
   
   /**

@@ -2312,11 +2312,10 @@ async function startHyphaService(options: {
       try {
         console.log("📋 Listing all deno-apps...");
         
-        // Get all kernels in the deno-apps namespace
-        const allKernels = kernelManager.getKernelIds();
-        const appKernels = allKernels.filter(id => id.startsWith('deno-apps:'));
+        // Get all kernels in the deno-apps namespace using proper namespace filtering
+        const appKernelList = kernelManager.listKernels("deno-apps");
         
-        console.log(`Found ${appKernels.length} app kernels in deno-apps namespace`);
+        console.log(`Found ${appKernelList.length} app kernels in deno-apps namespace`);
         
         const apps = [];
         
@@ -2328,13 +2327,13 @@ async function startHyphaService(options: {
           console.warn("⚠️ Could not access artifact manager for app metadata:", error);
         }
         
-        for (const kernelId of appKernels) {
+        for (const kernelInfo of appKernelList) {
           try {
-            const kernel = kernelManager.getKernel(kernelId);
+            const kernel = kernelManager.getKernel(kernelInfo.id);
             if (!kernel) continue;
             
             // Extract app ID from kernel ID (format: deno-apps:appId)
-            const appId = kernelId.split(':')[1];
+            const appId = kernelInfo.id.split(':')[1];
             
             let appName = appId;
             let appDescription = "";
@@ -2356,7 +2355,7 @@ async function startHyphaService(options: {
             // Determine kernel status
             let status = "unknown";
             try {
-              const execInfo = kernelManager.getExecutionInfo(kernelId);
+              const execInfo = kernelManager.getExecutionInfo(kernelInfo.id);
               if (execInfo.isStuck) {
                 status = "stuck";
               } else if (execInfo.count > 0) {
@@ -2365,7 +2364,7 @@ async function startHyphaService(options: {
                 status = "idle";
               }
             } catch (error) {
-              console.warn(`⚠️ Could not get execution info for ${kernelId}:`, error);
+              console.warn(`⚠️ Could not get execution info for ${kernelInfo.id}:`, error);
               status = "error";
             }
             
@@ -2374,13 +2373,13 @@ async function startHyphaService(options: {
               name: appName,
               description: appDescription,
               status: status,
-              kernelId: kernelId,
+              kernelId: kernelInfo.id,
               language: kernel.language,
-              created: kernel.created.toISOString()
+              created: kernel.created ? kernel.created.toISOString() : new Date().toISOString()
             });
             
           } catch (error) {
-            console.error(`❌ Error processing app kernel ${kernelId}:`, error);
+            console.error(`❌ Error processing app kernel ${kernelInfo.id}:`, error);
             continue;
           }
         }
@@ -2444,12 +2443,11 @@ async function startHyphaService(options: {
       try {
         console.log("📊 Getting deno-app statistics...");
         
-        // Get all kernels in the deno-apps namespace
-        const allKernels = kernelManager.getKernelIds();
-        const appKernels = allKernels.filter(id => id.startsWith('deno-apps:'));
+        // Get all kernels in the deno-apps namespace using proper namespace filtering
+        const appKernelList = kernelManager.listKernels("deno-apps");
         
         const stats = {
-          totalApps: appKernels.length,
+          totalApps: appKernelList.length,
           runningApps: 0,
           idleApps: 0,
           executingApps: 0,
@@ -2460,9 +2458,9 @@ async function startHyphaService(options: {
           apps: [] as any[]
         };
         
-        for (const kernelId of appKernels) {
+        for (const kernelInfo of appKernelList) {
           try {
-            const kernel = kernelManager.getKernel(kernelId);
+            const kernel = kernelManager.getKernel(kernelInfo.id);
             if (!kernel) {
               stats.errorApps++;
               continue;
@@ -2471,13 +2469,13 @@ async function startHyphaService(options: {
             stats.runningApps++;
             
             // Extract app ID from kernel ID (format: deno-apps:appId)
-            const appId = kernelId.split(':')[1];
+            const appId = kernelInfo.id.split(':')[1];
             
             let status = "unknown";
             let execInfo = { count: 0, isStuck: false };
             
             try {
-              execInfo = kernelManager.getExecutionInfo(kernelId);
+              execInfo = kernelManager.getExecutionInfo(kernelInfo.id);
               if (execInfo.isStuck) {
                 status = "stuck";
                 stats.stuckApps++;
@@ -2490,29 +2488,29 @@ async function startHyphaService(options: {
               }
               stats.totalExecutions += execInfo.count;
             } catch (error) {
-              console.warn(`⚠️ Could not get execution info for ${kernelId}:`, error);
+              console.warn(`⚠️ Could not get execution info for ${kernelInfo.id}:`, error);
               status = "error";
               stats.errorApps++;
               stats.runningApps--; // Don't count error apps as running
             }
             
             // Get kernel history count
-            const history = kernelHistory.get(kernelId) || [];
+            const history = kernelHistory.get(kernelInfo.id) || [];
             
             stats.apps.push({
               id: appId,
               status: status,
-              kernelId: kernelId,
+              kernelId: kernelInfo.id,
               language: kernel.language,
-              created: kernel.created.toISOString(),
+              created: kernel.created ? kernel.created.toISOString() : new Date().toISOString(),
               activeExecutions: execInfo.count,
               isStuck: execInfo.isStuck,
               historyCount: history.length,
-              uptime: Date.now() - kernel.created.getTime()
+              uptime: kernel.created ? Date.now() - kernel.created.getTime() : 0
             });
             
           } catch (error) {
-            console.error(`❌ Error processing app kernel ${kernelId}:`, error);
+            console.error(`❌ Error processing app kernel ${kernelInfo.id}:`, error);
             stats.errorApps++;
             continue;
           }
@@ -2586,7 +2584,7 @@ async function startHyphaService(options: {
         const history = kernelHistory.get(appKernelId) || [];
         
         // Calculate uptime
-        const uptime = Date.now() - kernel.created.getTime();
+        const uptime = kernel.created ? Date.now() - kernel.created.getTime() : 0;
         
         const appInfo = {
           id: appId,
@@ -2595,7 +2593,7 @@ async function startHyphaService(options: {
           status: status,
           kernelId: appKernelId,
           language: kernel.language,
-          created: kernel.created.toISOString(),
+          created: kernel.created ? kernel.created.toISOString() : new Date().toISOString(),
           uptime: uptime,
           uptimeFormatted: formatUptime(uptime / 1000),
           activeExecutions: execInfo.count,
