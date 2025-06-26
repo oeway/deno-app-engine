@@ -298,6 +298,110 @@ function getKernelManagerOptions(): IKernelManagerOptions {
   return options;
 }
 
+/**
+ * Load and execute deno-app artifacts from the artifact manager
+ */
+async function loadDenoApps(server: any, kernelManager: KernelManager) {
+  try {
+    console.log("🔍 Loading deno-app artifacts from artifact manager...");
+    
+    // Get the artifact manager service
+    const artifactManager = await server.getService('public/artifact-manager');
+    
+    // List all artifacts with type 'deno-app' from 'hypha-agents/agents'
+    const artifacts = await artifactManager.list({
+      parent_id: "hypha-agents/agents",
+      filters: { type: 'deno-app' },
+      limit: 100,
+      _rkwargs: true
+    });
+    
+    console.log(`📦 Found ${artifacts.length} deno-app artifacts`);
+    
+    for (const artifact of artifacts) {
+      try {
+        console.log(`🚀 Loading deno-app: ${artifact.id} (${artifact.name})`);
+        
+        // Read the artifact to get the manifest
+        const artifactData = await artifactManager.read(artifact.id);
+        
+        if (!artifactData.manifest || !artifactData.manifest.startup_script) {
+          console.log(`⚠️  Skipping ${artifact.id}: No startup script found`);
+          continue;
+        }
+        
+        const startupScript = artifactData.manifest.startup_script;
+        console.log(`📝 Startup script length: ${startupScript.length} characters`);
+        
+        // Determine kernel language from manifest.lang field
+        let kernelLanguage = KernelLanguage.PYTHON; // Default to Python
+        if (artifactData.manifest.lang) {
+          switch (artifactData.manifest.lang.toLowerCase()) {
+            case 'typescript':
+            case 'ts':
+              kernelLanguage = KernelLanguage.TYPESCRIPT;
+              break;
+            case 'javascript':
+            case 'js':
+              kernelLanguage = KernelLanguage.JAVASCRIPT;
+              break;
+            case 'python':
+            case 'py':
+            default:
+              kernelLanguage = KernelLanguage.PYTHON;
+              break;
+          }
+        }
+        
+        console.log(`🔧 Creating ${artifactData.manifest.lang || 'python'} kernel for app ${artifact.id}`);
+        
+        // Create a kernel with the artifact ID as kernel ID
+        const kernelId = await kernelManager.createKernel({
+          id: artifact.id,
+          mode: KernelMode.WORKER,
+          lang: kernelLanguage,
+          namespace: "deno-apps", // Use a special namespace for deno apps
+          inactivityTimeout: 1000 * 60 * 60 * 24, // 24 hours - apps should run long
+          maxExecutionTime: 1000 * 60 * 60 * 24 * 365 // 1 year - essentially unlimited
+        });
+        
+        console.log(`🔧 Created kernel ${kernelId} for app ${artifact.id}`);
+        
+        // Execute the startup script
+        console.log(`▶️  Executing startup script for ${artifact.id}...`);
+        
+        let hasOutput = false;
+        for await (const output of kernelManager.executeStream(kernelId, startupScript)) {
+          hasOutput = true;
+          console.log(`📤 [${artifact.id}] Output:`, output);
+          
+          // If there's an error, log it but continue with other apps
+          if (output.type === 'error') {
+            console.error(`❌ [${artifact.id}] Execution error:`, output);
+          }
+        }
+        
+        if (!hasOutput) {
+          console.log(`✅ [${artifact.id}] Startup script executed (no output)`);
+        } else {
+          console.log(`✅ [${artifact.id}] Startup script completed`);
+        }
+        
+      } catch (error) {
+        console.error(`❌ Failed to load deno-app ${artifact.id}:`, error);
+        // Continue with other apps even if one fails
+        continue;
+      }
+    }
+    
+    console.log(`🎉 Finished loading ${artifacts.length} deno-app artifacts`);
+    
+  } catch (error) {
+    console.error("❌ Failed to load deno-apps:", error);
+    throw error;
+  }
+}
+
 async function startHyphaService(options: {
   skipLogin?: boolean;
   serverUrl?: string;
@@ -2006,11 +2110,419 @@ async function startHyphaService(options: {
           error: error instanceof Error ? error.message : String(error)
         };
       }
+    },
+
+    // ===== DENO APP MANAGEMENT METHODS =====
+
+    async notifyAppUpdates(context: {user: any, ws: string}) {
+      try {
+        // Check permission - only hypha-agents workspace can manage apps
+        if (context.ws !== "hypha-agents") {
+          throw new Error(`Permission denied: Only hypha-agents workspace can manage deno-apps. Current workspace: ${context.ws}`);
+        }
+        
+        console.log("🔄 Checking for deno-app updates...");
+        
+        // Get the artifact manager service
+        const artifactManager = await server.getService('public/artifact-manager');
+        
+        // List all artifacts with type 'deno-app' from 'hypha-agents/agents'
+        const artifacts = await artifactManager.list({
+          parent_id: "hypha-agents/agents",
+          filters: { type: 'deno-app' },
+          limit: 100,
+          _rkwargs: true
+        });
+        
+        console.log(`📦 Found ${artifacts.length} deno-app artifacts`);
+        
+        const results = {
+          totalApps: artifacts.length,
+          skippedApps: [] as string[],
+          startedApps: [] as string[],
+          failedApps: [] as {id: string, error: string}[]
+        };
+        
+        for (const artifact of artifacts) {
+          try {
+            const appKernelId = `deno-apps:${artifact.id}`;
+            
+            // Check if kernel already exists
+            const existingKernel = kernelManager.getKernel(appKernelId);
+            if (existingKernel) {
+              console.log(`⏭️  Skipping ${artifact.id}: Kernel already running`);
+              results.skippedApps.push(artifact.id);
+              continue;
+            }
+            
+            console.log(`🚀 Starting new deno-app: ${artifact.id} (${artifact.name})`);
+            
+            // Read the artifact to get the manifest
+            const artifactData = await artifactManager.read(artifact.id);
+            
+            if (!artifactData.manifest || !artifactData.manifest.startup_script) {
+              console.log(`⚠️  Skipping ${artifact.id}: No startup script found`);
+              results.failedApps.push({
+                id: artifact.id,
+                error: "No startup script found"
+              });
+              continue;
+            }
+            
+            const startupScript = artifactData.manifest.startup_script;
+            console.log(`📝 Startup script length: ${startupScript.length} characters`);
+            
+            // Determine kernel language from manifest.lang field
+            let kernelLanguage = KernelLanguage.PYTHON; // Default to Python
+            if (artifactData.manifest.lang) {
+              switch (artifactData.manifest.lang.toLowerCase()) {
+                case 'typescript':
+                case 'ts':
+                  kernelLanguage = KernelLanguage.TYPESCRIPT;
+                  break;
+                case 'javascript':
+                case 'js':
+                  kernelLanguage = KernelLanguage.JAVASCRIPT;
+                  break;
+                case 'python':
+                case 'py':
+                default:
+                  kernelLanguage = KernelLanguage.PYTHON;
+                  break;
+              }
+            }
+            
+            console.log(`🔧 Creating ${artifactData.manifest.lang || 'python'} kernel for app ${artifact.id}`);
+            
+            // Create a kernel with the artifact ID as kernel ID
+            const kernelId = await kernelManager.createKernel({
+              id: artifact.id,
+              mode: KernelMode.WORKER,
+              lang: kernelLanguage,
+              namespace: "deno-apps", // Use a special namespace for deno apps
+              inactivityTimeout: 1000 * 60 * 60 * 24, // 24 hours - apps should run long
+              maxExecutionTime: 1000 * 60 * 60 * 24 * 365 // 1 year - essentially unlimited
+            });
+            
+            console.log(`🔧 Created kernel ${kernelId} for app ${artifact.id}`);
+            
+            // Execute the startup script
+            console.log(`▶️  Executing startup script for ${artifact.id}...`);
+            
+            let hasOutput = false;
+            for await (const output of kernelManager.executeStream(kernelId, startupScript)) {
+              hasOutput = true;
+              console.log(`📤 [${artifact.id}] Output:`, output);
+              
+              // If there's an error, log it but continue with other apps
+              if (output.type === 'error') {
+                console.error(`❌ [${artifact.id}] Execution error:`, output);
+              }
+            }
+            
+            if (!hasOutput) {
+              console.log(`✅ [${artifact.id}] Startup script executed (no output)`);
+            } else {
+              console.log(`✅ [${artifact.id}] Startup script completed`);
+            }
+            
+            results.startedApps.push(artifact.id);
+            
+          } catch (error) {
+            console.error(`❌ Failed to start deno-app ${artifact.id}:`, error);
+            results.failedApps.push({
+              id: artifact.id,
+              error: error instanceof Error ? error.message : String(error)
+            });
+            continue;
+          }
+        }
+        
+        console.log(`🎉 App update check completed. Started: ${results.startedApps.length}, Skipped: ${results.skippedApps.length}, Failed: ${results.failedApps.length}`);
+        
+        return {
+          success: true,
+          message: `App update check completed`,
+          results,
+          timestamp: new Date().toISOString()
+        };
+        
+      } catch (error) {
+        console.error("❌ Failed to check for app updates:", error);
+        throw error;
+      }
+    },
+
+    async reloadApp({appId}: {appId: string}, context: {user: any, ws: string}) {
+      try {
+        // Check permission - only hypha-agents workspace can manage apps
+        if (context.ws !== "hypha-agents") {
+          throw new Error(`Permission denied: Only hypha-agents workspace can reload deno-apps. Current workspace: ${context.ws}`);
+        }
+        
+        console.log(`🔄 Reloading deno-app: ${appId}`);
+        
+        const appKernelId = `deno-apps:${appId}`;
+        
+        // Check if kernel exists
+        const existingKernel = kernelManager.getKernel(appKernelId);
+        if (!existingKernel) {
+          throw new Error(`App ${appId} is not currently running (kernel not found)`);
+        }
+        
+        console.log(`🔧 Restarting kernel for app ${appId}`);
+        
+        // Restart the kernel to clear any stuck or dead state
+        const success = await kernelManager.restartKernel(appKernelId);
+        
+        if (!success) {
+          throw new Error(`Failed to restart kernel for app ${appId}`);
+        }
+        
+        console.log(`✅ Successfully reloaded app ${appId}`);
+        
+        return {
+          success: true,
+          message: `App ${appId} reloaded successfully`,
+          appId,
+          kernelId: appKernelId,
+          timestamp: new Date().toISOString()
+        };
+        
+      } catch (error) {
+        console.error(`❌ Failed to reload app ${appId}:`, error);
+        throw error;
+      }
+    },
+
+    async listApps() {
+      try {
+        console.log("📋 Listing all deno-apps...");
+        
+        // Get all kernels in the deno-apps namespace
+        const allKernels = kernelManager.getKernelIds();
+        const appKernels = allKernels.filter(id => id.startsWith('deno-apps:'));
+        
+        console.log(`Found ${appKernels.length} app kernels in deno-apps namespace`);
+        
+        const apps = [];
+        
+        // Try to get artifact manager to fetch app metadata
+        let artifactManager = null;
+        try {
+          artifactManager = await server.getService('public/artifact-manager');
+        } catch (error) {
+          console.warn("⚠️ Could not access artifact manager for app metadata:", error);
+        }
+        
+        for (const kernelId of appKernels) {
+          try {
+            const kernel = kernelManager.getKernel(kernelId);
+            if (!kernel) continue;
+            
+            // Extract app ID from kernel ID (format: deno-apps:appId)
+            const appId = kernelId.split(':')[1];
+            
+            let appName = appId;
+            let appDescription = "";
+            
+            // Try to get metadata from artifact manager
+            if (artifactManager) {
+              try {
+                const artifactData = await artifactManager.read(appId);
+                if (artifactData && artifactData.manifest) {
+                  appName = artifactData.manifest.name || artifactData.name || appId;
+                  appDescription = artifactData.manifest.description || artifactData.description || "";
+                }
+              } catch (error) {
+                console.warn(`⚠️ Could not get metadata for app ${appId}:`, error);
+                // Continue with default values
+              }
+            }
+            
+            // Determine kernel status
+            let status = "unknown";
+            try {
+              const execInfo = kernelManager.getExecutionInfo(kernelId);
+              if (execInfo.isStuck) {
+                status = "stuck";
+              } else if (execInfo.count > 0) {
+                status = "executing";
+              } else {
+                status = "idle";
+              }
+            } catch (error) {
+              console.warn(`⚠️ Could not get execution info for ${kernelId}:`, error);
+              status = "error";
+            }
+            
+            apps.push({
+              id: appId,
+              name: appName,
+              description: appDescription,
+              status: status,
+              kernelId: kernelId,
+              language: kernel.language,
+              created: kernel.created.toISOString()
+            });
+            
+          } catch (error) {
+            console.error(`❌ Error processing app kernel ${kernelId}:`, error);
+            continue;
+          }
+        }
+        
+        console.log(`📋 Listed ${apps.length} deno-apps`);
+        
+        return {
+          apps,
+          totalCount: apps.length,
+          timestamp: new Date().toISOString()
+        };
+        
+      } catch (error) {
+        console.error("❌ Failed to list apps:", error);
+        throw error;
+      }
+    },
+
+    async getAppKernelLogs({appId, lines}: {appId: string, lines?: number}, context: {user: any, ws: string}) {
+      try {
+        console.log(`📜 Getting kernel logs for app: ${appId}`);
+        
+        const appKernelId = `deno-apps:${appId}`;
+        
+        // Check if kernel exists
+        const kernel = kernelManager.getKernel(appKernelId);
+        if (!kernel) {
+          throw new Error(`App ${appId} is not currently running (kernel not found)`);
+        }
+        
+        // Get execution history for this kernel
+        const history = kernelHistory.get(appKernelId) || [];
+        const maxLines = Math.min(lines || 100, 1000); // Default 100 lines, max 1000
+        
+        // Collect all outputs from execution history
+        const allLogs = [];
+        
+        for (const execution of history) {
+          for (const output of execution.outputs) {
+            // Extract console output from different output types
+            let logEntry = null;
+            
+            if (output && typeof output === 'object') {
+              const outputObj = output as any;
+              
+              // Handle different output types
+              if (outputObj.type === 'stream' && outputObj.data) {
+                logEntry = {
+                  timestamp: new Date().toISOString(),
+                  type: 'stream',
+                  stream: outputObj.data.name || 'stdout',
+                  content: outputObj.data.text || outputObj.data.content || String(outputObj.data),
+                  executionId: execution.id
+                };
+              } else if (outputObj.type === 'display_data' && outputObj.data) {
+                // Handle display data (like print statements)
+                const content = outputObj.data['text/plain'] || outputObj.data.content || String(outputObj.data);
+                logEntry = {
+                  timestamp: new Date().toISOString(),
+                  type: 'display',
+                  content: content,
+                  executionId: execution.id
+                };
+              } else if (outputObj.type === 'execute_result' && outputObj.data) {
+                // Handle execution results
+                const content = outputObj.data['text/plain'] || outputObj.data.content || String(outputObj.data);
+                logEntry = {
+                  timestamp: new Date().toISOString(),
+                  type: 'result',
+                  content: content,
+                  executionId: execution.id
+                };
+              } else if (outputObj.type === 'error') {
+                // Handle errors
+                logEntry = {
+                  timestamp: new Date().toISOString(),
+                  type: 'error',
+                  content: outputObj.message || outputObj.error || String(outputObj),
+                  executionId: execution.id
+                };
+              } else if (outputObj.message || outputObj.content) {
+                // Generic message handling
+                logEntry = {
+                  timestamp: new Date().toISOString(),
+                  type: 'message',
+                  content: outputObj.message || outputObj.content,
+                  executionId: execution.id
+                };
+              }
+            }
+            
+            if (logEntry) {
+              allLogs.push(logEntry);
+            }
+          }
+        }
+        
+        // Sort by timestamp and take the most recent entries
+        allLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        const recentLogs = allLogs.slice(0, maxLines);
+        
+        // Also get current kernel status for additional context
+        let kernelStatus = "unknown";
+        let currentExecution = null;
+        
+        try {
+          const execInfo = kernelManager.getExecutionInfo(appKernelId);
+          if (execInfo.isStuck) {
+            kernelStatus = "stuck";
+          } else if (execInfo.count > 0) {
+            kernelStatus = "executing";
+            currentExecution = {
+              activeExecutions: execInfo.count,
+              isStuck: execInfo.isStuck
+            };
+          } else {
+            kernelStatus = "idle";
+          }
+        } catch (error) {
+          console.warn(`⚠️ Could not get execution info for ${appKernelId}:`, error);
+          kernelStatus = "error";
+        }
+        
+        console.log(`📜 Retrieved ${recentLogs.length} log entries for app ${appId}`);
+        
+        return {
+          appId,
+          kernelId: appKernelId,
+          logs: recentLogs,
+          totalLogEntries: allLogs.length,
+          requestedLines: maxLines,
+          kernelStatus,
+          currentExecution,
+          timestamp: new Date().toISOString()
+        };
+        
+      } catch (error) {
+        console.error(`❌ Failed to get kernel logs for app ${appId}:`, error);
+        throw error;
+      }
     }
   });
   
   console.log("Service registered successfully!");
   console.log(`Service is available (id: ${svc.id}), you can try it at: ${server.config.public_base_url}/${server.config.workspace}/services/${svc.id.split("/")[1]}`);
+  
+  // Load deno-app artifacts if requested
+  if (Deno.env.get("LOAD_APPS") === "true") {
+    console.log("🔄 Loading deno-app artifacts...");
+    try {
+      await loadDenoApps(server, kernelManager);
+    } catch (error) {
+      console.error("⚠️ Failed to load deno-apps, but service will continue running:", error);
+    }
+  }
   
   // Keep the connection alive
   return { server, service: svc };

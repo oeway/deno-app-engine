@@ -34,6 +34,7 @@ interface AgentInfo {
   status?: string;
   created?: string;
   workspace?: string;
+  type?: 'agent' | 'deno-app';
 }
 
 interface VectorDocument {
@@ -47,6 +48,15 @@ interface SearchResult {
   text: string;
   score: number;
   metadata?: Record<string, unknown>;
+}
+
+interface DenoAppInfo {
+  id: string;
+  name: string;
+  startup_script?: string;
+  created?: string;
+  status?: string;
+  type?: 'deno-app';
 }
 
 // Parse command line arguments
@@ -107,9 +117,10 @@ async function runRemoteServiceTest() {
     console.error("Failed to get service info:", error);
   }
   
-  // Test Agent functionality with namespace support
-  console.log("\n========== TESTING AGENTS WITH NAMESPACE SUPPORT ==========");
+  // Test Agent and Deno-App functionality with namespace support
+  console.log("\n========== TESTING AGENTS AND DENO-APPS WITH NAMESPACE SUPPORT ==========");
   const agents = [];
+  const denoApps = [];
   
   if ('createAgent' in service) {
     console.log(`Creating ${numAgents} agents in different workspaces...`);
@@ -132,18 +143,68 @@ async function runRemoteServiceTest() {
     
     console.log(`Successfully created ${agents.length}/${numAgents} agents across workspaces`);
     
+    // Test creating Deno applications
+    console.log(`Creating ${numAgents} Deno applications...`);
+    
+    for (let i = 0; i < numAgents; i++) {
+      try {
+        const appConfig = {
+          id: `test-deno-app-${i}`,
+          name: `Test Deno App ${i + 1}`,
+          type: 'deno-app',
+          startup_script: `
+// Deno app ${i + 1} startup script
+console.log("Deno app ${i + 1} starting up...");
+
+// Create a simple greeting function
+function appGreet(name: string): string {
+  return \`Hello from Deno App ${i + 1}, \${name}!\`;
+}
+
+// Test the function
+const greeting = appGreet("Remote Tester");
+console.log(greeting);
+
+// Make it available globally for testing
+globalThis.appGreet${i} = appGreet;
+
+// Define app-specific utilities
+globalThis.APP_${i}_UTILS = {
+  version: "1.0.0",
+  created: new Date().toISOString(),
+  test: () => console.log("App ${i + 1} utilities working!")
+};
+`,
+          license: 'MIT',
+          description: `Test Deno application ${i + 1} for remote service validation`
+        };
+        
+        const app = await service.createAgent(appConfig) as DenoAppInfo;
+        denoApps.push(app);
+        console.log(`Created Deno app ${i + 1}/${numAgents}: ${app.id}`);
+      } catch (error) {
+        console.error(`Failed to create Deno app ${i + 1}/${numAgents}:`, error);
+      }
+    }
+    
+    console.log(`Successfully created ${denoApps.length}/${numAgents} Deno apps across workspaces`);
+    
     // Test workspace isolation (now handled internally by the service)
     console.log("Testing internal namespace isolation...");
     try {
       const allAgents = await service.listAgents() as AgentInfo[];
-      console.log(`Total agents found in this workspace: ${allAgents.length}`);
+      console.log(`Total items found in this workspace: ${allAgents.length}`);
       
-      // Since namespace is now internal, all agents should be accessible within the same workspace
+      // Since namespace is now internal, all items should be accessible within the same workspace
       const testAgents = allAgents.filter(a => a.id.includes('test-agent-'));
-      console.log(`Test agents in this workspace: ${testAgents.length}`);
+      const testApps = allAgents.filter(a => a.id.includes('test-deno-app-') || a.type === 'deno-app');
       
-      if (testAgents.length > 0) {
-        console.log(`✅ Internal namespace isolation working - agents are scoped to workspace`);
+      console.log(`Test agents in this workspace: ${testAgents.length}`);
+      console.log(`Test Deno apps in this workspace: ${testApps.length}`);
+      
+      if (testAgents.length > 0 || testApps.length > 0) {
+        console.log(`✅ Internal namespace isolation working - items are scoped to workspace`);
+        console.log(`✅ Dual agent/app types working - found ${testAgents.length} agents and ${testApps.length} apps`);
       }
     } catch (error) {
       console.error("Failed to test namespace isolation:", error);
@@ -239,6 +300,87 @@ async function runRemoteServiceTest() {
           
         } catch (error) {
           console.error(`  Failed to test agent ${agent.id}:`, error);
+        }
+      }
+    }
+    
+    // Test Deno app functionality
+    if (denoApps.length > 0) {
+      console.log("Testing Deno app functionality...");
+      
+      for (const app of denoApps.slice(0, Math.min(2, denoApps.length))) {
+        try {
+          console.log(`Testing Deno app ${app.id}...`);
+          
+          // Test if the app has created TypeScript kernels for execution
+          if ('listKernels' in service) {
+            const allKernels = await service.listKernels();
+            const appKernel = allKernels.find((k: any) => 
+              k.id === app.id || k.id.includes(app.id) || k.name?.includes(app.name)
+            );
+            
+            if (appKernel) {
+              console.log(`  Found kernel for app: ${appKernel.id}`);
+              
+              // Test executing code in the app's context
+              if ('executeCode' in service) {
+                const testCode = `
+// Test if startup script executed and functions are available
+const appIndex = ${app.id.split('-').pop()};
+const greetFuncName = \`appGreet\${appIndex}\`;
+const utilsName = \`APP_\${appIndex}_UTILS\`;
+
+if (typeof globalThis[greetFuncName] === 'function') {
+  console.log("✅ Startup script functions loaded successfully!");
+  console.log(globalThis[greetFuncName]("Remote Test"));
+} else {
+  console.log("⚠️ Startup script functions not found");
+  console.log("Available globals:", Object.keys(globalThis).filter(k => k.includes('app') || k.includes('APP')));
+}
+
+if (globalThis[utilsName]) {
+  console.log("✅ App utilities loaded successfully!");
+  globalThis[utilsName].test();
+  console.log("App version:", globalThis[utilsName].version);
+} else {
+  console.log("⚠️ App utilities not found");
+}
+
+// Test Deno-specific functionality
+console.log("Deno version check:", typeof Deno !== 'undefined' ? 'Available' : 'Not available');
+`;
+                
+                try {
+                  const execResult = await service.executeCode({
+                    kernelId: appKernel.id,
+                    code: testCode
+                  });
+                  
+                  console.log(`  ✅ App code execution initiated: ${execResult.execution_id}`);
+                  
+                  // Wait for execution to complete
+                  await new Promise(resolve => setTimeout(resolve, 2000));
+                  
+                  // Get execution results
+                  if ('getExecutionResult' in service) {
+                    const outputs = await service.getExecutionResult({
+                      kernelId: appKernel.id,
+                      executionId: execResult.execution_id
+                    });
+                    
+                    console.log(`  ✅ App execution completed with ${outputs.length} outputs`);
+                  }
+                } catch (error) {
+                  console.error(`  ❌ Failed to execute code in app ${app.id}:`, error);
+                }
+              }
+            } else {
+              console.log(`  ⚠️ No kernel found for app ${app.id} - app may not have startup script execution`);
+            }
+          }
+          
+        } catch (error) {
+          console.error(`  Failed to test app ${app.id}:`, error);
         }
       }
     }
@@ -570,6 +712,21 @@ async function runRemoteServiceTest() {
     }
   }
   
+  // Cleanup Deno apps
+  if (denoApps.length > 0 && 'destroyAgent' in service) {
+    console.log("Cleaning up Deno apps...");
+    for (const app of denoApps) {
+      try {
+        await service.destroyAgent({
+          agentId: app.id
+        });
+        console.log(`  Destroyed Deno app ${app.id}`);
+      } catch (error) {
+        console.error(`  Failed to destroy Deno app ${app.id}:`, error);
+      }
+    }
+  }
+  
   // Cleanup vector index
   if (vectorIndexId && 'destroyVectorIndex' in service) {
     console.log("Cleaning up vector index...");
@@ -591,10 +748,17 @@ async function runRemoteServiceTest() {
       const remainingAgents = await service.listAgents() as AgentInfo[];
       const testAgentsRemaining = remainingAgents.filter((a: AgentInfo) => 
         a.id.includes('test-agent-'));
+      const testAppsRemaining = remainingAgents.filter((a: AgentInfo) => 
+        a.id.includes('test-deno-app-'));
       
       console.log(`Remaining test agents: ${testAgentsRemaining.length}`);
+      console.log(`Remaining test Deno apps: ${testAppsRemaining.length}`);
+      
       if (testAgentsRemaining.length > 0) {
         console.log(`Warning: Some test agents were not properly destroyed: ${testAgentsRemaining.map((a: AgentInfo) => a.id).join(', ')}`);
+      }
+      if (testAppsRemaining.length > 0) {
+        console.log(`Warning: Some test Deno apps were not properly destroyed: ${testAppsRemaining.map((a: AgentInfo) => a.id).join(', ')}`);
       }
     } catch (error) {
       console.error("Failed to verify agent cleanup:", error);
@@ -617,10 +781,55 @@ async function runRemoteServiceTest() {
     }
   }
 
+  // Test new app management functions
+  console.log("\n========== TESTING APP MANAGEMENT FUNCTIONS ==========");
+  
+  if ('listApps' in service) {
+    try {
+      console.log("Testing listApps function...");
+      const appsResult = await service.listApps();
+      console.log(`✅ Listed ${appsResult.totalCount} total deno-apps`);
+      
+      if (appsResult.apps && appsResult.apps.length > 0) {
+        console.log("📋 Found apps:");
+        for (const app of appsResult.apps.slice(0, 3)) { // Show first 3 apps
+          console.log(`  - ${app.name} (${app.id}): ${app.status} [${app.language}]`);
+          console.log(`    Description: ${app.description || 'No description'}`);
+          
+          // Test getting kernel logs for this app
+          if ('getAppKernelLogs' in service) {
+            try {
+              const logsResult = await service.getAppKernelLogs({
+                appId: app.id,
+                lines: 5
+              });
+              
+              console.log(`    📜 Retrieved ${logsResult.logs.length} log entries`);
+              console.log(`    🔧 Kernel status: ${logsResult.kernelStatus}`);
+              
+              if (logsResult.logs.length > 0) {
+                console.log(`    📄 Recent log: ${logsResult.logs[0].content?.substring(0, 60)}...`);
+              }
+            } catch (error) {
+              console.log(`    ⚠️ Could not get logs for app ${app.id}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+      } else {
+        console.log("ℹ️ No deno-apps found in the system");
+      }
+    } catch (error) {
+      console.error("❌ Failed to test app management functions:", error);
+    }
+  } else {
+    console.log("⚠️ listApps function not available in service");
+  }
+
   // Summary
   console.log("\n========== TEST SUMMARY ==========");
   console.log(`Service: ${serviceId}`);
   console.log(`Agents created: ${agents.length}/${numAgents}`);
+  console.log(`Deno apps created: ${denoApps.length}/${numAgents}`);
   console.log(`Vector index created: ${vectorIndexId ? 1 : 0}/1`);
   console.log(`Documents added: ${testDocuments.length}/${numVectorOperations}`);
   console.log("==========================================\n");

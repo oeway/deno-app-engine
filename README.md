@@ -33,49 +33,179 @@ cd deno-app-engine
 
 ## Features
 
-- **Dual Execution Modes**
-  - Main Thread Mode: Direct Pyodide execution
-  - Worker Mode: Isolated execution in Web Workers
+- **Kernel Management**: Multiple kernel execution modes (main thread, worker) supporting Python, TypeScript, and JavaScript
+- **Vector Database**: Built-in vector storage and retrieval system with multiple provider support
+- **Agent System**: Create, manage, and interact with AI agents
+- **Deno App Engine**: Load and execute Deno applications from artifacts with the `--load-apps` flag
+- **HTTP API**: RESTful endpoints for kernel, agent, and vector database operations
+- **Streaming Support**: Real-time execution output and agent communication
+- **Security**: Configurable permissions and secure execution environments
 
-- **Intelligent Agent System**
-  - Advanced agent management with configurable environment variables
-  - Namespace support for workspace isolation and multi-tenancy
-  - Per-namespace resource limits and automatic cleanup (configurable, default: 10 agents per namespace)
-  - Automatic kernel attachment and lifecycle management
-  - Conversation history and memory management
-  - Event-driven architecture with comprehensive monitoring
+## Quick Start
 
-- **Comprehensive Environment Variables Support**
-  - Agent-level environment configuration
-  - Kernel environment variable inheritance
-  - Cross-language environment support (Python/TypeScript)
-  - Secure environment variable handling and validation
+### Basic Server
 
-- **Vector Database Integration**
-  - High-performance vector search and storage
-  - Concurrent operations and memory management
-  - Automatic offloading and resource optimization
-  - Event-driven monitoring and statistics
+```bash
+# Start server on default port 8000
+./scripts/start-server.sh
 
-- **Filesystem Integration**
-  - Mount local directories into the Python environment
-  - Cross-mode file access and manipulation
-  - Secure filesystem permissions management
+# Start server on custom port
+./scripts/start-server.sh --port 3000
 
-- **Event System**
-  - Jupyter-compatible event bus
-  - Stream, display, and execution result events
-  - Cross-thread event forwarding
+# Show help
+./scripts/start-server.sh --help
+```
 
-- **Security**
-  - Granular permission control for workers
-  - Filesystem access restrictions
-  - Network access management
+### Deno App Engine
 
-- **Execution Management**
-  - Automatic tracking of code execution
-  - Inactivity timeout for idle kernels
-  - Detection of stalled/deadlocked executions
+The server can automatically load and execute Deno applications from the Hypha artifact manager:
+
+```bash
+# Load and execute deno-app artifacts on startup
+./scripts/start-server.sh --load-apps
+
+# Set Hypha connection environment variables (optional)
+export HYPHA_SERVER_URL="https://hypha.aicell.io"
+export HYPHA_WORKSPACE="your-workspace"
+export HYPHA_TOKEN="your-token"
+./scripts/start-server.sh --load-apps
+```
+
+When `--load-apps` is enabled, the server will:
+1. Connect to the Hypha artifact manager
+2. List all artifacts with type `deno-app` from `hypha-agents/agents`
+3. For each artifact, create a kernel and execute its `startup_script`
+4. Keep the applications running in the background
+
+### Environment Variables
+
+The following environment variables can be used to configure the server:
+
+#### Hypha Integration (for --load-apps)
+- `HYPHA_SERVER_URL`: Hypha server URL (default: https://hypha.aicell.io)
+- `HYPHA_WORKSPACE`: Hypha workspace (optional)
+- `HYPHA_TOKEN`: Hypha auth token (optional, will prompt if not set)
+- `HYPHA_CLIENT_ID`: Hypha client ID (optional)
+
+#### Kernel Configuration
+- `ALLOWED_KERNEL_TYPES`: Comma-separated list of allowed kernel types (e.g., "worker-python,main_thread-typescript")
+- `KERNEL_POOL_ENABLED`: Enable kernel pooling (default: true)
+- `KERNEL_POOL_SIZE`: Number of pre-created kernels in pool (default: 2)
+- `KERNEL_POOL_AUTO_REFILL`: Auto-refill pool when kernels are used (default: true)
+- `KERNEL_POOL_PRELOAD_CONFIGS`: Kernel types to preload in pool
+
+#### Agent Configuration
+- `AGENT_MODEL_BASE_URL`: Base URL for agent model API
+- `AGENT_MODEL_API_KEY`: API key for agent model
+- `AGENT_MODEL_NAME`: Model name to use for agents
+- `AGENT_MODEL_TEMPERATURE`: Model temperature setting
+
+#### Vector Database Configuration  
+- `VECTORDB_OFFLOAD_DIRECTORY`: Directory for vector DB persistence
+- `VECTORDB_DEFAULT_INACTIVITY_TIMEOUT`: Timeout for inactive vector DBs
+- `VECTORDB_ACTIVITY_MONITORING`: Enable activity monitoring
+- `MAX_VECTOR_DB_INSTANCES`: Maximum number of vector DB instances
+- `EMBEDDING_MODEL`: Default embedding model to use
+
+## Creating Deno Applications
+
+You can create Deno applications using the Agent Lab interface:
+
+1. Open Agent Lab in your browser
+2. Click on "Edit Agent" in the canvas panel
+3. Select "Deno Application" as the type
+4. Fill in the application details:
+   - **Name**: Your app name
+   - **Description**: What your app does
+   - **License**: License for your app
+   - **Startup Script**: TypeScript/JavaScript code to run when the app starts
+5. Publish your app
+
+### Example Deno App Startup Script
+
+```typescript
+// Example: Simple HTTP server
+import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
+
+const handler = (req: Request): Response => {
+  const url = new URL(req.url);
+  
+  if (url.pathname === '/') {
+    return new Response('Hello from Deno App!', {
+      headers: { 'content-type': 'text/plain' },
+    });
+  }
+  
+  if (url.pathname === '/api/status') {
+    return new Response(JSON.stringify({ 
+      status: 'running',
+      timestamp: new Date().toISOString() 
+    }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  
+  return new Response('Not Found', { status: 404 });
+};
+
+console.log('Starting Deno app server on port 8080...');
+serve(handler, { port: 8080 });
+```
+
+Published Deno applications with type `deno-app` will be automatically loaded and executed when the server starts with the `--load-apps` flag.
+
+## Hypha Service
+
+The Deno App Engine can also run as a Hypha service, providing kernel management, vector database, and AI agent capabilities through a WebSocket interface.
+
+### Starting the Hypha Service
+
+```bash
+# Start the Hypha service
+./scripts/start-hypha-service.sh
+
+# Start with deno-app loading enabled
+./scripts/start-hypha-service.sh --load-apps
+```
+
+### Environment Variables for Hypha Service
+
+Create a `.env` file in the project root with the following variables:
+
+```env
+# Required: Hypha server connection
+HYPHA_SERVER_URL=https://hypha.aicell.io
+HYPHA_WORKSPACE=your-workspace-name
+HYPHA_TOKEN=your-workspace-token
+HYPHA_CLIENT_ID=deno-app-engine
+
+# Optional: Kernel Manager Configuration
+ALLOWED_KERNEL_TYPES=worker-python,worker-typescript,main_thread-python
+KERNEL_POOL_ENABLED=true
+KERNEL_POOL_SIZE=2
+
+# Optional: Vector Database Configuration
+EMBEDDING_MODEL=mock-model
+OLLAMA_HOST=http://localhost:11434
+
+# Optional: AI Agent Model Settings
+AGENT_MODEL_BASE_URL=http://localhost:11434/v1/
+AGENT_MODEL_API_KEY=ollama
+AGENT_MODEL_NAME=qwen2.5-coder:7b
+AGENT_MODEL_TEMPERATURE=0.7
+```
+
+### Deno App Loading
+
+When the `--load-apps` flag is used, the Hypha service will:
+
+1. Connect to the Hypha artifact manager
+2. Search for artifacts with type `deno-app` in the `hypha-agents/agents` collection
+3. Create TypeScript kernels for each found application
+4. Execute the `startup_script` from each application's manifest
+5. Keep the applications running in dedicated kernel instances
+
+This allows you to publish Deno applications through the Agent Lab interface and have them automatically loaded and executed when the service starts.
 
 ## Prerequisites
 
