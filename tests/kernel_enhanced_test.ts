@@ -62,11 +62,11 @@ Deno.test("Enhanced Kernels - Environment Variables Support", async () => {
     // Capture output through events
     let capturedOutput = '';
     const handleKernelEvent = (data: any) => {
-      if (data.kernelId === pythonKernelId && data.data) {
-        if (data.data.name === 'stdout') {
-          capturedOutput += data.data.text;
-        } else if (data.data.data && data.data.data['text/plain']) {
-          capturedOutput += data.data.data['text/plain'] + '\n';
+      if (data) {
+        if (data.name === 'stdout') {
+          capturedOutput += data.text;
+        } else if (data.data && data.data['text/plain']) {
+          capturedOutput += data.data['text/plain'] + '\n';
         }
       }
     };
@@ -120,11 +120,11 @@ print("Max retries as int:", max_retries_int)
 
     let tsCapturedOutput = '';
     const handleTsKernelEvent = (data: any) => {
-      if (data.kernelId === tsKernelId && data.data) {
-        if (data.data.name === 'stdout') {
-          tsCapturedOutput += data.data.text;
-        } else if (data.data.data && data.data.data['text/plain']) {
-          tsCapturedOutput += data.data.data['text/plain'] + '\n';
+      if (data) {
+        if (data.name === 'stdout') {
+          tsCapturedOutput += data.text;
+        } else if (data.data && data.data['text/plain']) {
+          tsCapturedOutput += data.data['text/plain'] + '\n';
         }
       }
     };

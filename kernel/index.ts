@@ -1179,7 +1179,7 @@ except Exception as e:
 
   /**
    * Set environment variables with performance optimization
-   * OPTIMIZED: Parallel variable setting and validation
+   * OPTIMIZED: Parallel variable setting and validation with proper escaping and edge case handling
    */
   private async setEnvironmentVariables(): Promise<void> {
     if (Object.keys(this.environmentVariables).length === 0) {
@@ -1190,19 +1190,23 @@ except Exception as e:
     console.log(`🌍 Setting ${Object.keys(this.environmentVariables).length} environment variables...`);
     
     try {
-      // Set all environment variables in a single optimized call
-      const envVarsJson = JSON.stringify(this.environmentVariables);
-      await this.pyodide.runPythonAsync(`
+      // Set each environment variable individually to avoid escaping issues
+      for (const [key, value] of Object.entries(this.environmentVariables)) {
+        // Handle edge cases: null, undefined, etc.
+        let processedValue: string;
+        if (value === null) {
+          processedValue = '';  // Convert null to empty string
+        } else if (value === undefined) {
+          processedValue = '';  // Convert undefined to empty string
+        } else {
+          processedValue = String(value);  // Convert everything else to string
+        }
+        
+        await this.pyodide.runPythonAsync(`
 import os
-import json
-
-# Set environment variables efficiently
-env_vars = json.loads('${envVarsJson}')
-for key, value in env_vars.items():
-    os.environ[key] = str(value)
-    
-print(f"✅ Set {len(env_vars)} environment variables")
+os.environ[${JSON.stringify(key)}] = ${JSON.stringify(processedValue)}
 `);
+      }
       
       const duration = Date.now() - startTime;
       console.log(`⚡ Environment variables set in ${duration}ms`);
