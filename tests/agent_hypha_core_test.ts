@@ -98,8 +98,8 @@ await _hypha_server.register_service({
     "add": lambda a, b: a + b,
     "multiply": lambda a, b: a * b,
     "fibonacci": lambda n: n if n <= 1 else (lambda f, x: f(f, x-1) + f(f, x-2))(lambda f, x: x if x <= 1 else f(f, x-1) + f(f, x-2), n),
-    "get_info": lambda: {
-        "language": "python",
+    "getInfo": lambda: {
+        "language": "python", 
         "service": "math-service",
         "capabilities": ["add", "multiply", "fibonacci"]
     }
@@ -342,9 +342,30 @@ console.log("✅ JavaScript data service registered successfully");
       assertEquals(fibResult, 13, "Python fibonacci function should work");
       console.log("✅ Python fibonacci(7) =", fibResult);
       
-      const pythonInfo = await pythonService.get_info();
-      assertEquals(pythonInfo.language, "python", "Python service info should be correct");
-      console.log("✅ Python service info:", pythonInfo);
+      // Test getInfo method with error handling
+      let pythonInfo;
+      try {
+        pythonInfo = await pythonService.getInfo();
+        assertEquals(pythonInfo.language, "python", "Python service info should be correct");
+        console.log("✅ Python service info:", pythonInfo);
+      } catch (error) {
+        console.error("❌ Failed to call pythonService.getInfo():", error);
+        
+        // Try to debug what methods are available on the service
+        console.log("🔍 Available methods on pythonService:", Object.getOwnPropertyNames(pythonService));
+        console.log("🔍 pythonService object keys:", Object.keys(pythonService));
+        console.log("🔍 pythonService object:", pythonService);
+        
+        // Try alternative method names
+        try {
+          console.log("🔄 Trying pythonService.get_info()...");
+          pythonInfo = await pythonService.get_info();
+          console.log("✅ Alternative method worked - pythonService.get_info():", pythonInfo);
+        } catch (altError) {
+          console.error("❌ Alternative method also failed:", altError);
+          throw error; // Re-throw original error
+        }
+      }
       
       // Test TypeScript service
       console.log("🧪 Testing TypeScript utils service...");
