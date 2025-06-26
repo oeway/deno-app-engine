@@ -11,37 +11,38 @@ import { encodeBase64 } from "jsr:@std/encoding/base64";
 class ConsoleCapture {
   private originalMethods: Record<string, (...args: any[]) => void> = {};
   private eventEmitter: EventEmitter;
+  private isEmitting = false; // Recursion guard
   
   constructor(eventEmitter: EventEmitter) {
     this.eventEmitter = eventEmitter;
+    this.originalMethods = {
+      log: console.log.bind(console),
+      error: console.error.bind(console),
+      warn: console.warn.bind(console),
+      info: console.info.bind(console)
+    };
   }
   
   start(): void {
-    // Store original methods
-    this.originalMethods.log = console.log;
-    this.originalMethods.error = console.error;
-    this.originalMethods.warn = console.warn;
-    this.originalMethods.info = console.info;
-    
     // Override console methods
     console.log = (...args: any[]) => {
       this.originalMethods.log.apply(console, args);
-      this.emit('stdout', args);
+      this.safeEmit('stdout', args);
     };
     
     console.error = (...args: any[]) => {
       this.originalMethods.error.apply(console, args);
-      this.emit('stderr', args);
+      this.safeEmit('stderr', args);
     };
     
     console.warn = (...args: any[]) => {
       this.originalMethods.warn.apply(console, args);
-      this.emit('stderr', args);
+      this.safeEmit('stderr', args);
     };
     
     console.info = (...args: any[]) => {
       this.originalMethods.info.apply(console, args);
-      this.emit('stdout', args);
+      this.safeEmit('stdout', args);
     };
   }
   
@@ -53,12 +54,38 @@ class ConsoleCapture {
     console.info = this.originalMethods.info;
   }
   
+  private safeEmit(stream: 'stdout' | 'stderr', args: any[]): void {
+    // Guard against recursion
+    if (this.isEmitting) {
+      return;
+    }
+    
+    try {
+      this.isEmitting = true;
+      this.emit(stream, args);
+    } catch (error) {
+      // If emit fails, use original console methods to avoid recursion
+      this.originalMethods.error('[ConsoleCapture] Failed to emit:', error);
+    } finally {
+      this.isEmitting = false;
+    }
+  }
+  
   private emit(stream: 'stdout' | 'stderr', args: any[]): void {
-    const text = args.map(arg => 
-      typeof arg === 'string' ? arg : 
-      (arg instanceof Error ? `${arg.name}: ${arg.message}` : 
-      JSON.stringify(arg, null, 2))
-    ).join(' ');
+    const text = args.map(arg => {
+      try {
+        if (typeof arg === 'string') {
+          return arg;
+        } else if (arg instanceof Error) {
+          return `${arg.name}: ${arg.message}`;
+        } else {
+          return JSON.stringify(arg, null, 2);
+        }
+      } catch (jsonError) {
+        // Handle circular references and other JSON.stringify errors
+        return String(arg);
+      }
+    }).join(' ');
     
     this.eventEmitter.emit(KernelEvents.STREAM, {
       name: stream,

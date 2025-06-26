@@ -102,7 +102,7 @@ Create a standalone HTML file:
 <html>
 <head>
     <title>My Standalone App</title>
-    <script src="https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.26/dist/hypha-rpc-websocket.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.56/dist/hypha-rpc-websocket.min.js"></script>
 </head>
 <body>
     <h1>My Standalone Hypha App</h1>
@@ -175,7 +175,7 @@ Create a custom web worker file (`computational-worker.js`):
 
 ```javascript
 // Import Hypha RPC client in the worker
-importScripts('https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.26/dist/hypha-rpc-websocket.min.js');
+importScripts('https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.56/dist/hypha-rpc-websocket.min.js');
 
 console.log('🔧 Custom Computational Worker: Starting...');
 
@@ -455,7 +455,7 @@ await server.export({
 
 1. **Script Loading**: Always load the Hypha RPC WebSocket client for JavaScript:
    ```html
-   <script src="https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.26/dist/hypha-rpc-websocket.min.js"></script>
+   <script src="https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.56/dist/hypha-rpc-websocket.min.js"></script>
    ```
 
 2. **Enable Execution**: Use `{enable_execution: true}` when setting up the local client to allow execution of scripts sent from the hypha core. Normally, this should be set to false.
