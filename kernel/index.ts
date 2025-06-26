@@ -191,17 +191,24 @@ export class Kernel extends EventEmitter implements IKernel {
       // Load Pyodide
       this.pyodide = await pyodideModule.loadPyodide();
       
-      // Mount filesystem if enabled
-      if (this.filesystemOptions.enabled) {
-        await this.mountFilesystem();
-      }
+      // Mount filesystem if enabled (can run in parallel with package initialization)
+      const filesystemPromise = this.filesystemOptions.enabled ? 
+        this.mountFilesystem() : 
+        Promise.resolve();
       
-      // Initialize the components in order, following PyodideRemoteKernel
-      await this.initPackageManager();
+      // Initialize the components in parallel where possible
+      const [, ,] = await Promise.all([
+        filesystemPromise,
+        this.initPackageManager(),
+        // Environment variables can be prepared while other things load
+        Promise.resolve() // Placeholder for future optimizations
+      ]);
+      
+      // These must run sequentially after package manager is ready
       await this.initKernel();
       await this.initGlobals();
       
-      // Set environment variables if provided
+      // Set environment variables if provided (can run after globals are set up)
       if (Object.keys(this.environmentVariables).length > 0) {
         await this.setEnvironmentVariables();
       }
@@ -253,7 +260,7 @@ export class Kernel extends EventEmitter implements IKernel {
     console.log("Initializing package manager...");
     
     try {
-      // Load micropip
+      // Load micropip and packaging in parallel
       console.log("Loading micropip, packaging");
       await this.pyodide.loadPackage(['micropip', 'packaging']);
       console.log("Loaded micropip, packaging");
@@ -266,16 +273,18 @@ export class Kernel extends EventEmitter implements IKernel {
         new URL(pyodide_kernelWheelUrl, baseUrl).href,
         new URL(ipykernelWheelUrl, baseUrl).href
       ];
-      // Install the packages using micropip directly with local file URLs
-      // First make our URLs available to Python
+      
+      // Make URLs available to Python
       this.pyodide.globals.set("piplite_wheel_url", wheelFiles[0]);
       this.pyodide.globals.set("pyodide_kernel_wheel_url", wheelFiles[1]);
       this.pyodide.globals.set("ipykernel_wheel_url", wheelFiles[2]);
       this.pyodide.globals.set("all_json_url", allJsonPath);
       
+      // Install packages with optimized parallel approach
       await this.pyodide.runPythonAsync(`
 import micropip
 import sys
+import asyncio
 
 # Get the URLs from the globals
 piplite_url = piplite_wheel_url
@@ -283,18 +292,16 @@ pyodide_kernel_url = pyodide_kernel_wheel_url
 ipykernel_url = ipykernel_wheel_url
 all_json_url = all_json_url
 
-# Install piplite first (wheel needs to be available at a URL)
+# Install piplite first (required for other packages)
 await micropip.install(piplite_url)
 
-# Now import piplite and use it
+# Import piplite and configure it
 import piplite
-
-# Set the all.json URL
 piplite.piplite._PIPLITE_URLS = [all_json_url]
 
-# Install other packages directly from wheel URLs
-await micropip.install(pyodide_kernel_url)
-await micropip.install(ipykernel_url)
+# Install remaining wheel packages in parallel
+wheel_packages = [pyodide_kernel_url, ipykernel_url]
+await asyncio.gather(*[micropip.install(url) for url in wheel_packages])
 `);
     } catch (error) {
       console.error("Error in initPackageManager:", error);
@@ -309,28 +316,40 @@ await micropip.install(ipykernel_url)
   private async initKernel(): Promise<void> {
     console.log("Initializing kernel packages...");
     
-    // List of packages to load (matches PyodideRemoteKernel)
-    const toLoad = [
-      'ssl',
-      'sqlite3',
-      'ipykernel',
-      'comm',
-      'pyodide_kernel',
-      'prompt_toolkit',  // Required by jedi and ipython
-      'jedi',
-      'ipython',
-      'nbformat',
-      'hypha-rpc',
-    ];
+    // Group packages by dependencies for parallel installation
+    const pyodidePackages = ['pure-eval', 'stack-data', 'pygments'];
+    const independentPackages = ['ssl', 'sqlite3', 'comm', 'prompt_toolkit', 'nbformat', 'hypha-rpc'];
+    const dependentPackages = ['ipykernel', 'pyodide_kernel', 'jedi', 'ipython']; // These may have dependencies
 
-    // First, load packages that are available in Pyodide distribution
-    console.log("Loading Pyodide packages...");
-    await this.pyodide.loadPackage(['pure-eval', 'stack-data', 'pygments']);
-    
-    // Use piplite to install required packages with better error handling
-    console.log("Installing Python packages...");
-    
-    for (const pkgName of toLoad) {
+    try {
+      // Load Pyodide distribution packages in parallel (fastest)
+      console.log("Loading Pyodide packages...");
+      await this.pyodide.loadPackage(pyodidePackages);
+      console.log(`Loaded ${pyodidePackages.join(', ')}`);
+      
+      // Install independent packages in parallel
+      console.log("Installing independent packages...");
+      await this.installPackagesInParallel(independentPackages);
+      
+      // Install dependent packages in parallel (they can usually handle parallel installation)
+      console.log("Installing dependent packages...");
+      await this.installPackagesInParallel(dependentPackages);
+      
+      // Import the kernel
+      console.log("Importing pyodide_kernel...");
+      await this.pyodide.runPythonAsync('import pyodide_kernel');
+      
+    } catch (error) {
+      console.error("Error in initKernel:", error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Install multiple packages in parallel with error handling
+   */
+  private async installPackagesInParallel(packages: string[]): Promise<void> {
+    const installPromises = packages.map(async (pkgName) => {
       try {
         console.log(`Installing ${pkgName}...`);
         await this.pyodide.runPythonAsync(`
@@ -344,14 +363,12 @@ except Exception as e:
 `);
       } catch (error) {
         console.warn(`Failed to install ${pkgName}:`, error);
-        // Continue with other packages even if one fails
-        continue;
+        // Don't throw - let other packages continue installing
       }
-    }
+    });
     
-    // Import the kernel
-    console.log("Importing pyodide_kernel...");
-    await this.pyodide.runPythonAsync('import pyodide_kernel');
+    // Wait for all installations to complete
+    await Promise.all(installPromises);
   }
   
   /**
