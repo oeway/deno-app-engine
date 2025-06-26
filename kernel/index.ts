@@ -336,9 +336,9 @@ await micropip.install(ipykernel_url)
         await this.pyodide.runPythonAsync(`
 try:
     await piplite.install('${pkgName}', keep_going=True)
-    print(f"✅ Successfully installed {pkgName}")
+    print("✅ Successfully installed ${pkgName}")
 except Exception as e:
-    print(f"⚠️ Warning: Failed to install ${pkgName}: {e}")
+    print("⚠️ Warning: Failed to install ${pkgName}:", e)
     import traceback
     traceback.print_exc()
 `);

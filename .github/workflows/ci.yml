@@ -5,6 +5,18 @@ on:
     branches:
       - main
       - master
+    paths:
+      - 'deno.json'
+      - 'Dockerfile'
+      - '.github/workflows/ci.yml'
+      - 'kernel/**'
+      - 'scripts/**'
+      - 'mod.ts'
+      - 'agents/**'
+      - 'vectordb/**'
+      - 'tests/**'
+      - '*.ts'
+      - '*.js'
   pull_request:
     branches:
       - main

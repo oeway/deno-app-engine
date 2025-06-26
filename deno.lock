@@ -7,6 +7,7 @@
     "npm:hypha-core@0.20.56-pre12": "0.20.56-pre12_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1",
     "npm:hypha-rpc@*": "0.20.56",
     "npm:hypha-rpc@0.20.56": "0.20.56",
+    "npm:lodash@*": "4.17.21",
     "npm:ollama@*": "0.5.16",
     "npm:ollama@0.5": "0.5.16",
     "npm:openai@4": "4.104.0",
