@@ -2690,6 +2690,11 @@ async function startHyphaService(options: {
       try {
         console.log(`📜 Getting kernel logs for app: ${appId}`);
         
+        // check permission
+        if (context.ws !== "hypha-agents") {
+          throw new Error(`Permission denied: Only hypha-agents workspace can get kernel logs for deno-apps. Current workspace: ${context.ws}`);
+        }
+
         const appKernelId = `deno-apps:${appId}`;
         
         // Check if kernel exists
