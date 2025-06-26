@@ -370,9 +370,13 @@ async function loadDenoApps(server: any, kernelManager: KernelManager) {
         // Execute the startup script
         console.log(`▶️  Executing startup script for ${artifact.id}...`);
         
+        const executionId = crypto.randomUUID();
+        const outputs: unknown[] = [];
+        
         let hasOutput = false;
         for await (const output of kernelManager.executeStream(kernelId, startupScript)) {
           hasOutput = true;
+          outputs.push(output);
           console.log(`📤 [${artifact.id}] Output:`, output);
           
           // If there's an error, log it but continue with other apps
@@ -380,6 +384,15 @@ async function loadDenoApps(server: any, kernelManager: KernelManager) {
             console.error(`❌ [${artifact.id}] Execution error:`, output);
           }
         }
+        
+        // Store the startup script execution in history
+        const history = kernelHistory.get(kernelId) || [];
+        history.push({
+          id: executionId,
+          script: startupScript,
+          outputs,
+        });
+        kernelHistory.set(kernelId, history);
         
         if (!hasOutput) {
           console.log(`✅ [${artifact.id}] Startup script executed (no output)`);
@@ -2295,7 +2308,7 @@ async function startHyphaService(options: {
       }
     },
 
-    async listApps() {
+    async listApps(context: {user: any, ws: string}) {
       try {
         console.log("📋 Listing all deno-apps...");
         
@@ -2386,6 +2399,295 @@ async function startHyphaService(options: {
       }
     },
 
+    async killApp({appId}: {appId: string}, context: {user: any, ws: string}) {
+      try {
+        // Check permission - only hypha-agents workspace can kill apps
+        if (context.ws !== "hypha-agents") {
+          throw new Error(`Permission denied: Only hypha-agents workspace can kill deno-apps. Current workspace: ${context.ws}`);
+        }
+        
+        console.log(`🔪 Killing deno-app: ${appId}`);
+        
+        const appKernelId = `deno-apps:${appId}`;
+        
+        // Check if kernel exists
+        const existingKernel = kernelManager.getKernel(appKernelId);
+        if (!existingKernel) {
+          throw new Error(`App ${appId} is not currently running (kernel not found)`);
+        }
+        
+        console.log(`🔧 Destroying kernel for app ${appId}`);
+        
+        // Clean up history
+        kernelHistory.delete(appKernelId);
+        
+        // Destroy the kernel to stop the app
+        await kernelManager.destroyKernel(appKernelId);
+        
+        console.log(`✅ Successfully killed app ${appId}`);
+        
+        return {
+          success: true,
+          message: `App ${appId} killed successfully`,
+          appId,
+          kernelId: appKernelId,
+          timestamp: new Date().toISOString()
+        };
+        
+      } catch (error) {
+        console.error(`❌ Failed to kill app ${appId}:`, error);
+        throw error;
+      }
+    },
+
+    async getAppStats(context: {user: any, ws: string}) {
+      try {
+        console.log("📊 Getting deno-app statistics...");
+        
+        // Get all kernels in the deno-apps namespace
+        const allKernels = kernelManager.getKernelIds();
+        const appKernels = allKernels.filter(id => id.startsWith('deno-apps:'));
+        
+        const stats = {
+          totalApps: appKernels.length,
+          runningApps: 0,
+          idleApps: 0,
+          executingApps: 0,
+          stuckApps: 0,
+          errorApps: 0,
+          totalExecutions: 0,
+          memoryUsage: 0,
+          apps: [] as any[]
+        };
+        
+        for (const kernelId of appKernels) {
+          try {
+            const kernel = kernelManager.getKernel(kernelId);
+            if (!kernel) {
+              stats.errorApps++;
+              continue;
+            }
+            
+            stats.runningApps++;
+            
+            // Extract app ID from kernel ID (format: deno-apps:appId)
+            const appId = kernelId.split(':')[1];
+            
+            let status = "unknown";
+            let execInfo = { count: 0, isStuck: false };
+            
+            try {
+              execInfo = kernelManager.getExecutionInfo(kernelId);
+              if (execInfo.isStuck) {
+                status = "stuck";
+                stats.stuckApps++;
+              } else if (execInfo.count > 0) {
+                status = "executing";
+                stats.executingApps++;
+              } else {
+                status = "idle";
+                stats.idleApps++;
+              }
+              stats.totalExecutions += execInfo.count;
+            } catch (error) {
+              console.warn(`⚠️ Could not get execution info for ${kernelId}:`, error);
+              status = "error";
+              stats.errorApps++;
+              stats.runningApps--; // Don't count error apps as running
+            }
+            
+            // Get kernel history count
+            const history = kernelHistory.get(kernelId) || [];
+            
+            stats.apps.push({
+              id: appId,
+              status: status,
+              kernelId: kernelId,
+              language: kernel.language,
+              created: kernel.created.toISOString(),
+              activeExecutions: execInfo.count,
+              isStuck: execInfo.isStuck,
+              historyCount: history.length,
+              uptime: Date.now() - kernel.created.getTime()
+            });
+            
+          } catch (error) {
+            console.error(`❌ Error processing app kernel ${kernelId}:`, error);
+            stats.errorApps++;
+            continue;
+          }
+        }
+        
+        // Calculate average memory usage per app
+        const memoryUsage = Deno.memoryUsage();
+        stats.memoryUsage = stats.runningApps > 0 ? Math.round(memoryUsage.heapUsed / stats.runningApps) : 0;
+        
+        console.log(`📊 App statistics: ${stats.totalApps} total, ${stats.runningApps} running, ${stats.idleApps} idle, ${stats.executingApps} executing, ${stats.stuckApps} stuck, ${stats.errorApps} error`);
+        
+        return {
+          ...stats,
+          timestamp: new Date().toISOString()
+        };
+        
+      } catch (error) {
+        console.error("❌ Failed to get app statistics:", error);
+        throw error;
+      }
+    },
+
+    async getAppInfo({appId}: {appId: string}, context: {user: any, ws: string}) {
+      try {
+        console.log(`ℹ️ Getting info for deno-app: ${appId}`);
+        
+        const appKernelId = `deno-apps:${appId}`;
+        
+        // Check if kernel exists
+        const kernel = kernelManager.getKernel(appKernelId);
+        if (!kernel) {
+          throw new Error(`App ${appId} is not currently running (kernel not found)`);
+        }
+        
+        let appName = appId;
+        let appDescription = "";
+        let appManifest = null;
+        
+        // Try to get metadata from artifact manager
+        try {
+          const artifactManager = await server.getService('public/artifact-manager');
+          const artifactData = await artifactManager.read(appId);
+          if (artifactData && artifactData.manifest) {
+            appName = artifactData.manifest.name || artifactData.name || appId;
+            appDescription = artifactData.manifest.description || artifactData.description || "";
+            appManifest = artifactData.manifest;
+          }
+        } catch (error) {
+          console.warn(`⚠️ Could not get metadata for app ${appId}:`, error);
+        }
+        
+        // Get kernel status and execution info
+        let status = "unknown";
+        let execInfo = { count: 0, isStuck: false };
+        
+        try {
+          execInfo = kernelManager.getExecutionInfo(appKernelId);
+          if (execInfo.isStuck) {
+            status = "stuck";
+          } else if (execInfo.count > 0) {
+            status = "executing";
+          } else {
+            status = "idle";
+          }
+        } catch (error) {
+          console.warn(`⚠️ Could not get execution info for ${appKernelId}:`, error);
+          status = "error";
+        }
+        
+        // Get execution history
+        const history = kernelHistory.get(appKernelId) || [];
+        
+        // Calculate uptime
+        const uptime = Date.now() - kernel.created.getTime();
+        
+        const appInfo = {
+          id: appId,
+          name: appName,
+          description: appDescription,
+          status: status,
+          kernelId: appKernelId,
+          language: kernel.language,
+          created: kernel.created.toISOString(),
+          uptime: uptime,
+          uptimeFormatted: formatUptime(uptime / 1000),
+          activeExecutions: execInfo.count,
+          isStuck: execInfo.isStuck,
+          historyCount: history.length,
+          manifest: appManifest,
+          mode: kernel.mode
+        };
+        
+        console.log(`ℹ️ Retrieved info for app ${appId}: ${status}`);
+        
+        return {
+          ...appInfo,
+          timestamp: new Date().toISOString()
+        };
+        
+      } catch (error) {
+        console.error(`❌ Failed to get app info for ${appId}:`, error);
+        throw error;
+      }
+    },
+
+    async executeInApp({appId, code}: {appId: string, code: string}, context: {user: any, ws: string}) {
+      try {
+        // Check permission - only hypha-agents workspace can execute code in apps
+        if (context.ws !== "hypha-agents") {
+          throw new Error(`Permission denied: Only hypha-agents workspace can execute code in deno-apps. Current workspace: ${context.ws}`);
+        }
+        
+        console.log(`🔧 Executing code in deno-app: ${appId}`);
+        
+        if (!code) {
+          throw new Error("No code provided");
+        }
+        
+        const appKernelId = `deno-apps:${appId}`;
+        
+        // Check if kernel exists
+        const kernel = kernelManager.getKernel(appKernelId);
+        if (!kernel) {
+          throw new Error(`App ${appId} is not currently running (kernel not found)`);
+        }
+        
+        const executionId = crypto.randomUUID();
+        
+        // Execute in background and store result in history when complete
+        (async () => {
+          try {
+            const outputs: unknown[] = [];
+            for await (const output of kernelManager.executeStream(appKernelId, code)) {
+              outputs.push(output);
+            }
+            
+            // Add to kernel history after completion
+            const history = kernelHistory.get(appKernelId) || [];
+            history.push({
+              id: executionId,
+              script: code,
+              outputs,
+            });
+            kernelHistory.set(appKernelId, history);
+          } catch (error) {
+            console.error(`Execution error for ${appKernelId}:`, error);
+            // Still record the execution with error
+            const history = kernelHistory.get(appKernelId) || [];
+            history.push({
+              id: executionId,
+              script: code,
+              outputs: [{
+                type: "error",
+                data: { message: error instanceof Error ? error.message : String(error) }
+              }],
+            });
+            kernelHistory.set(appKernelId, history);
+          }
+        })();
+        
+        console.log(`🔧 Started code execution in app ${appId} with execution ID: ${executionId}`);
+        
+        return { 
+          executionId,
+          appId,
+          message: "Code execution started",
+          timestamp: new Date().toISOString()
+        };
+        
+      } catch (error) {
+        console.error(`❌ Failed to execute code in app ${appId}:`, error);
+        throw error;
+      }
+    },
+
     async getAppKernelLogs({appId, lines}: {appId: string, lines?: number}, context: {user: any, ws: string}) {
       try {
         console.log(`📜 Getting kernel logs for app: ${appId}`);
@@ -2402,10 +2704,20 @@ async function startHyphaService(options: {
         const history = kernelHistory.get(appKernelId) || [];
         const maxLines = Math.min(lines || 100, 1000); // Default 100 lines, max 1000
         
+        console.log(`📜 Found ${history.length} execution entries in history for app ${appId}`);
+        
         // Collect all outputs from execution history
         const allLogs = [];
         
         for (const execution of history) {
+          // Add execution start log
+          allLogs.push({
+            timestamp: new Date().toISOString(),
+            type: 'execution_start',
+            content: `--- Execution ${execution.id} started ---\nScript: ${execution.script.substring(0, 200)}${execution.script.length > 200 ? '...' : ''}`,
+            executionId: execution.id
+          });
+          
           for (const output of execution.outputs) {
             // Extract console output from different output types
             let logEntry = null;
@@ -2456,13 +2768,68 @@ async function startHyphaService(options: {
                   content: outputObj.message || outputObj.content,
                   executionId: execution.id
                 };
+              } else {
+                // Handle any other output types by stringifying
+                logEntry = {
+                  timestamp: new Date().toISOString(),
+                  type: 'raw_output',
+                  content: JSON.stringify(outputObj, null, 2),
+                  executionId: execution.id
+                };
               }
+            } else {
+              // Handle primitive outputs
+              logEntry = {
+                timestamp: new Date().toISOString(),
+                type: 'raw_output',
+                content: String(output),
+                executionId: execution.id
+              };
             }
             
             if (logEntry) {
               allLogs.push(logEntry);
             }
           }
+          
+          // Add execution end log
+          allLogs.push({
+            timestamp: new Date().toISOString(),
+            type: 'execution_end',
+            content: `--- Execution ${execution.id} completed with ${execution.outputs.length} outputs ---`,
+            executionId: execution.id
+          });
+        }
+        
+        // Also get current execution information from kernel manager
+        try {
+          const execInfo = kernelManager.getExecutionInfo(appKernelId);
+          if (execInfo.count > 0) {
+            allLogs.push({
+              timestamp: new Date().toISOString(),
+              type: 'current_executions',
+              content: `--- Currently running ${execInfo.count} executions ---\nExecution IDs: ${execInfo.executionIds.join(', ')}\nLongest running: ${execInfo.longestRunningTime}ms`,
+              executionId: 'current'
+            });
+            
+            // Add details for each current execution
+            for (const exec of execInfo.executions) {
+              allLogs.push({
+                timestamp: new Date().toISOString(),
+                type: exec.isStuck ? 'stuck_execution' : 'active_execution',
+                content: `Execution ${exec.id}: running for ${exec.runtime}ms${exec.isStuck ? ' (STUCK)' : ''}${exec.code ? `\nCode: ${exec.code.substring(0, 100)}${exec.code.length > 100 ? '...' : ''}` : ''}`,
+                executionId: exec.id
+              });
+            }
+          }
+        } catch (error) {
+          console.warn(`⚠️ Could not get current execution info for logs:`, error);
+          allLogs.push({
+            timestamp: new Date().toISOString(),
+            type: 'error',
+            content: `Failed to get current execution info: ${error instanceof Error ? error.message : String(error)}`,
+            executionId: 'system'
+          });
         }
         
         // Sort by timestamp and take the most recent entries

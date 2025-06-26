@@ -781,48 +781,245 @@ console.log("Deno version check:", typeof Deno !== 'undefined' ? 'Available' : '
     }
   }
 
-  // Test new app management functions
-  console.log("\n========== TESTING APP MANAGEMENT FUNCTIONS ==========");
+  // Test comprehensive app management functions
+  console.log("\n========== TESTING COMPREHENSIVE APP MANAGEMENT FUNCTIONS ==========");
   
+  let availableApps: any[] = [];
+  let testAppId: string | null = null;
+  
+  // Test 1: List all apps
   if ('listApps' in service) {
     try {
-      console.log("Testing listApps function...");
+      console.log("1. Testing listApps function...");
       const appsResult = await service.listApps();
       console.log(`✅ Listed ${appsResult.totalCount} total deno-apps`);
       
-      if (appsResult.apps && appsResult.apps.length > 0) {
+      availableApps = appsResult.apps || [];
+      
+      if (availableApps.length > 0) {
         console.log("📋 Found apps:");
-        for (const app of appsResult.apps.slice(0, 3)) { // Show first 3 apps
+        for (const app of availableApps.slice(0, 3)) { // Show first 3 apps
           console.log(`  - ${app.name} (${app.id}): ${app.status} [${app.language}]`);
           console.log(`    Description: ${app.description || 'No description'}`);
+          console.log(`    Created: ${app.created}`);
           
-          // Test getting kernel logs for this app
-          if ('getAppKernelLogs' in service) {
-            try {
-              const logsResult = await service.getAppKernelLogs({
-                appId: app.id,
-                lines: 5
-              });
-              
-              console.log(`    📜 Retrieved ${logsResult.logs.length} log entries`);
-              console.log(`    🔧 Kernel status: ${logsResult.kernelStatus}`);
-              
-              if (logsResult.logs.length > 0) {
-                console.log(`    📄 Recent log: ${logsResult.logs[0].content?.substring(0, 60)}...`);
-              }
-            } catch (error) {
-              console.log(`    ⚠️ Could not get logs for app ${app.id}: ${error instanceof Error ? error.message : String(error)}`);
-            }
+          // Save first app for detailed testing
+          if (!testAppId) {
+            testAppId = app.id;
           }
         }
       } else {
         console.log("ℹ️ No deno-apps found in the system");
       }
     } catch (error) {
-      console.error("❌ Failed to test app management functions:", error);
+      console.error("❌ Failed to test listApps:", error);
     }
   } else {
     console.log("⚠️ listApps function not available in service");
+  }
+  
+  // Test 2: Get app statistics
+  if ('getAppStats' in service) {
+    try {
+      console.log("\n2. Testing getAppStats function...");
+      const statsResult = await service.getAppStats();
+      console.log(`✅ App Statistics Retrieved:`);
+      console.log(`  📊 Total apps: ${statsResult.totalApps}`);
+      console.log(`  🏃 Running apps: ${statsResult.runningApps}`);
+      console.log(`  😴 Idle apps: ${statsResult.idleApps}`);
+      console.log(`  ⚙️ Executing apps: ${statsResult.executingApps}`);
+      console.log(`  🔴 Stuck apps: ${statsResult.stuckApps}`);
+      console.log(`  ❌ Error apps: ${statsResult.errorApps}`);
+      console.log(`  🔢 Total executions: ${statsResult.totalExecutions}`);
+      console.log(`  💾 Average memory per app: ${formatBytes(statsResult.memoryUsage)}`);
+      
+      if (statsResult.apps && statsResult.apps.length > 0) {
+        console.log(`  📋 App details available for ${statsResult.apps.length} apps`);
+      }
+    } catch (error) {
+      console.error("❌ Failed to test getAppStats:", error);
+    }
+  } else {
+    console.log("⚠️ getAppStats function not available in service");
+  }
+  
+  // Test 3: Get detailed app info (if we have an app to test)
+  if (testAppId && 'getAppInfo' in service) {
+    try {
+      console.log(`\n3. Testing getAppInfo function for app: ${testAppId}...`);
+      const appInfoResult = await service.getAppInfo({ appId: testAppId });
+      console.log(`✅ App Info Retrieved:`);
+      console.log(`  📛 Name: ${appInfoResult.name}`);
+      console.log(`  📝 Description: ${appInfoResult.description || 'No description'}`);
+      console.log(`  📊 Status: ${appInfoResult.status}`);
+      console.log(`  🗣️ Language: ${appInfoResult.language}`);
+      console.log(`  🕐 Created: ${appInfoResult.created}`);
+      console.log(`  ⏱️ Uptime: ${appInfoResult.uptimeFormatted}`);
+      console.log(`  🔄 Active executions: ${appInfoResult.activeExecutions}`);
+      console.log(`  🚨 Is stuck: ${appInfoResult.isStuck}`);
+      console.log(`  📚 History count: ${appInfoResult.historyCount}`);
+      console.log(`  🏗️ Mode: ${appInfoResult.mode}`);
+      
+      if (appInfoResult.manifest) {
+        console.log(`  📄 Manifest available with ${Object.keys(appInfoResult.manifest).length} properties`);
+      }
+    } catch (error) {
+      console.error(`❌ Failed to test getAppInfo for ${testAppId}:`, error);
+    }
+  } else if (!testAppId) {
+    console.log("⚠️ No app available to test getAppInfo");
+  } else {
+    console.log("⚠️ getAppInfo function not available in service");
+  }
+  
+  // Test 4: Get app kernel logs (enhanced testing)
+  if (testAppId && 'getAppKernelLogs' in service) {
+    try {
+      console.log(`\n4. Testing getAppKernelLogs function for app: ${testAppId}...`);
+      
+      // Test with different line limits
+      const lineLimits = [5, 20, 50];
+      
+      for (const lines of lineLimits) {
+        try {
+          const logsResult = await service.getAppKernelLogs({
+            appId: testAppId,
+            lines: lines
+          });
+          
+          console.log(`✅ Retrieved logs (${lines} lines requested):`);
+          console.log(`  📜 Log entries returned: ${logsResult.logs.length}`);
+          console.log(`  📊 Total log entries available: ${logsResult.totalLogEntries}`);
+          console.log(`  🔧 Kernel status: ${logsResult.kernelStatus}`);
+          
+          if (logsResult.currentExecution) {
+            console.log(`  ⚙️ Current executions: ${logsResult.currentExecution.activeExecutions}`);
+            console.log(`  🚨 Is stuck: ${logsResult.currentExecution.isStuck}`);
+          }
+          
+          if (logsResult.logs.length > 0) {
+                         console.log(`  📄 Log types found: ${[...new Set(logsResult.logs.map((log: any) => log.type))].join(', ')}`);
+             console.log(`  📝 Sample log: ${logsResult.logs[0].content?.substring(0, 80)}...`);
+             
+             // Show execution start/end logs if present
+             const executionLogs = logsResult.logs.filter((log: any) => 
+               log.type === 'execution_start' || log.type === 'execution_end'
+             );
+            if (executionLogs.length > 0) {
+              console.log(`  🔄 Found ${executionLogs.length} execution lifecycle logs`);
+            }
+          }
+          
+          break; // Only test the first line limit to avoid spam
+        } catch (error) {
+          console.log(`  ⚠️ Could not get logs (${lines} lines) for app ${testAppId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    } catch (error) {
+      console.error(`❌ Failed to test getAppKernelLogs for ${testAppId}:`, error);
+    }
+  } else if (!testAppId) {
+    console.log("⚠️ No app available to test getAppKernelLogs");
+  } else {
+    console.log("⚠️ getAppKernelLogs function not available in service");
+  }
+  
+  // Test 5: Management operations (may fail due to workspace restrictions)
+  console.log("\n5. Testing app management operations (may fail due to workspace restrictions)...");
+  
+  // Test notifyAppUpdates
+  if ('notifyAppUpdates' in service) {
+    try {
+      console.log("Testing notifyAppUpdates function...");
+      const updateResult = await service.notifyAppUpdates();
+      console.log(`✅ App updates check completed:`);
+      console.log(`  📦 Total apps found: ${updateResult.results.totalApps}`);
+      console.log(`  ⏭️ Skipped apps: ${updateResult.results.skippedApps.length}`);
+      console.log(`  🚀 Started apps: ${updateResult.results.startedApps.length}`);
+      console.log(`  ❌ Failed apps: ${updateResult.results.failedApps.length}`);
+    } catch (error) {
+      console.log(`⚠️ notifyAppUpdates failed (likely due to workspace restriction): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else {
+    console.log("⚠️ notifyAppUpdates function not available in service");
+  }
+  
+  // Test executeInApp (if we have an app)
+  if (testAppId && 'executeInApp' in service) {
+    try {
+      console.log(`Testing executeInApp function for app: ${testAppId}...`);
+      const testCode = `
+// Test execution in app context
+console.log("Hello from remote test execution!");
+console.log("Current time:", new Date().toISOString());
+console.log("Test execution completed successfully");
+`;
+      
+      const execResult = await service.executeInApp({
+        appId: testAppId,
+        code: testCode
+      });
+      
+      console.log(`✅ Code execution initiated in app ${testAppId}:`);
+      console.log(`  🆔 Execution ID: ${execResult.executionId}`);
+      console.log(`  📝 Message: ${execResult.message}`);
+      
+      // Wait a bit and try to get updated logs
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      if ('getAppKernelLogs' in service) {
+        try {
+          const updatedLogs = await service.getAppKernelLogs({
+            appId: testAppId,
+            lines: 10
+          });
+          
+          console.log(`  📜 Updated logs after execution: ${updatedLogs.logs.length} entries`);
+        } catch (error) {
+          console.log(`  ⚠️ Could not get updated logs: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    } catch (error) {
+      console.log(`⚠️ executeInApp failed (likely due to workspace restriction): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else if (!testAppId) {
+    console.log("⚠️ No app available to test executeInApp");
+  } else {
+    console.log("⚠️ executeInApp function not available in service");
+  }
+  
+  // Test reloadApp (non-destructive, but may fail due to workspace restrictions)
+  if (testAppId && 'reloadApp' in service && availableApps.length > 1) {
+    try {
+      // Only test reload on non-critical apps or if there are multiple apps
+      console.log(`Testing reloadApp function for app: ${testAppId}...`);
+      const reloadResult = await service.reloadApp({ appId: testAppId });
+      console.log(`✅ App reload completed:`);
+      console.log(`  📝 Message: ${reloadResult.message}`);
+      console.log(`  🆔 App ID: ${reloadResult.appId}`);
+    } catch (error) {
+      console.log(`⚠️ reloadApp failed (likely due to workspace restriction): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else if (!testAppId) {
+    console.log("⚠️ No app available to test reloadApp");
+  } else if (availableApps.length <= 1) {
+    console.log("⚠️ Skipping reloadApp test - only one app available (safety measure)");
+  } else {
+    console.log("⚠️ reloadApp function not available in service");
+  }
+  
+  // Note: We intentionally skip killApp testing to avoid disrupting running apps
+  console.log("\n⚠️ Note: killApp function testing skipped to avoid disrupting running deno-apps");
+  
+  console.log("\n✅ App Management Functions Testing completed!");
+  
+  // Helper function for formatting bytes (if not already defined)
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
   // Summary

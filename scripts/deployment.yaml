@@ -51,7 +51,7 @@ spec:
             sizeLimit: "2Gi"
       containers:
         - name: deno-app-engine-container
-          image: ghcr.io/oeway/deno-app-engine:0.1.34
+          image: ghcr.io/oeway/deno-app-engine:0.1.37
           imagePullPolicy: Always
           command: ["deno"]
           args: ["run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "scripts/hypha-service.ts"]
@@ -120,6 +120,8 @@ spec:
               value: "0.5"
             - name: MAX_AGENTS
               value: "1000"
+            - name: LOAD_APPS
+              value: "true"
           livenessProbe:
             exec:
               command:
@@ -180,11 +182,11 @@ spec:
             failureThreshold: 3
           resources:
             limits:
-              cpu: "8"
-              memory: "16G"
-            requests:
               cpu: "4"
-              memory: "14G"
+              memory: "8G"
+            requests:
+              cpu: "1"
+              memory: "4G"
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
