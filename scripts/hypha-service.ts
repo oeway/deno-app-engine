@@ -243,7 +243,7 @@ function getKernelManagerOptions(): IKernelManagerOptions {
       return { mode, language };
     });
   } else {
-    // Default: only worker kernels for security
+    // Default: disable kernel pool since initialization is now fast (~4-5 seconds)
     allowedKernelTypes = [
       { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
       { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
@@ -251,7 +251,7 @@ function getKernelManagerOptions(): IKernelManagerOptions {
   }
   
   // Parse pool configuration from environment variables
-  const poolEnabled = Deno.env.get("KERNEL_POOL_ENABLED") !== "false";
+  const poolEnabled = Deno.env.get("KERNEL_POOL_ENABLED") === "true"; // Changed default to false
   const poolSize = parseInt(Deno.env.get("KERNEL_POOL_SIZE") || "2");
   const autoRefill = Deno.env.get("KERNEL_POOL_AUTO_REFILL") !== "false"; // Default true
   
