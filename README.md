@@ -191,7 +191,7 @@ OLLAMA_HOST=http://localhost:11434
 # Optional: AI Agent Model Settings
 AGENT_MODEL_BASE_URL=http://localhost:11434/v1/
 AGENT_MODEL_API_KEY=ollama
-AGENT_MODEL_NAME=qwen2.5-coder:7b
+AGENT_MODEL_NAME=llama3.2:1b  # Small model for CI, use qwen2.5-coder:7b for production
 AGENT_MODEL_TEMPERATURE=0.7
 ```
 
@@ -387,7 +387,7 @@ import { AgentManager, KernelType } from "./agents/mod.ts";
 const agentManager = new AgentManager({
   maxAgentsPerNamespace: 10, // Maximum agents per namespace
   defaultModelSettings: {
-    model: "qwen2.5-coder:7b"
+    model: "llama3.2:1b" // Small model for CI, use "qwen2.5-coder:7b" for production
   }
 });
 
@@ -488,7 +488,7 @@ const agent = await hyphaService.createAgent({
   id: "analysis-agent",
   name: "Analysis Agent",
   type: "assistant",
-  model: "qwen2.5-coder:7b"
+  model: "llama3.2:1b" // Small model for CI, use "qwen2.5-coder:7b" for production
 });
 // Agent ID will be: "{context.ws}:analysis-agent"
 
@@ -529,7 +529,7 @@ const agentManager = new AgentManager({
   defaultModelSettings: {
     baseURL: "http://localhost:11434/v1/",
     apiKey: "ollama",
-    model: "qwen2.5-coder:7b",
+    model: "llama3.2:1b", // Small model for CI, use "qwen2.5-coder:7b" for production
     temperature: 0.3
   },
   agentDataDirectory: "./agent_data"

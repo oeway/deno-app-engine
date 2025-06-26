@@ -9,7 +9,7 @@ import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
 const OLLAMA_CONFIG = {
   baseURL: "http://localhost:11434/v1/",
   apiKey: "ollama", 
-  model: "qwen2.5-coder:7b",
+  model: "llama3.2:1b", // Small model suitable for CI testing
   temperature: 0.7
 };
 

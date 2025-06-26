@@ -33,7 +33,7 @@ const agentManager = new AgentManager({
     "ollama-qwen": {
       baseURL: "http://localhost:11434/v1/",
       apiKey: "ollama",
-      model: "qwen2.5-coder:7b",
+      model: "llama3.2:1b", // Small model for CI, use "qwen2.5-coder:7b" for production
       temperature: 0.5
     }
   },
@@ -402,7 +402,7 @@ const agentManager = new AgentManager({
     "fast-model": {
       baseURL: "http://localhost:11434/v1/",
       apiKey: "ollama",
-      model: "qwen2.5-coder:7b",
+      model: "llama3.2:1b", // Small model for CI, use "qwen2.5-coder:7b" for production
       temperature: 0.3
     },
     "smart-model": {

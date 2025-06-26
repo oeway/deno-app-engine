@@ -12,8 +12,8 @@ import { Ollama } from "npm:ollama";
 
 // Test configuration
 // OLLAMA_ENDPOINT = "https://hypha-ollama.scilifelab-2-dev.sys.kth.se"
-// OLLAMA_MODEL = "mxbai-embed-large:latest"  # For embeddings - using an available model
-// OLLAMA_LLM_MODEL = "qwen3:8b"  # For generation - using an available model
+// OLLAMA_MODEL = "nomic-embed-text"  # For embeddings - lightweight model suitable for CI
+// OLLAMA_LLM_MODEL = "llama3.2:1b"  # For generation - small model suitable for CI testing
 const TEST_CONFIG = {
   offloadDirectory: "./test_vectordb_ollama_offload",
   inactivityTimeout: 5000, // 5 seconds for quick tests

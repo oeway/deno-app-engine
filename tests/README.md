@@ -151,7 +151,7 @@ deno task test-hypha-client
 The test uses these environment variables when available:
 - `HYPHA_SERVER_URL`: Target server (default: https://hypha.aicell.io)
 - `EMBEDDING_MODEL`: Default embedding model (default: mock-model) 
-- `AGENT_MODEL_NAME`: AI model for agents (default: qwen2.5-coder:7b)
+- `AGENT_MODEL_NAME`: AI model for agents (default: llama3.2:1b for CI, qwen2.5-coder:7b for production)
 - `KERNEL_POOL_*`: Kernel pooling configuration
 - `VECTORDB_*`: Vector database settings
 

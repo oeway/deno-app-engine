@@ -6,14 +6,14 @@ import { AgentManager, AgentEvents, KernelType, type ModelSettings } from "../ag
 const OLLAMA_QWEN_CONFIG: ModelSettings = {
   baseURL: "http://localhost:11434/v1/",
   apiKey: "ollama",
-  model: "qwen2.5-coder:7b",
+  model: "llama3.2:1b", // Small model suitable for CI testing
   temperature: 0.7
 };
 
 const OLLAMA_LLAMA_CONFIG: ModelSettings = {
   baseURL: "http://localhost:11434/v1/",
   apiKey: "ollama", 
-  model: "llama3.1:8b",
+  model: "llama3.2:1b", // Small model suitable for CI testing
   temperature: 0.5
 };
 
@@ -146,7 +146,7 @@ async function main() {
     const newModelSettings: ModelSettings = {
       baseURL: "http://localhost:11434/v1/",
       apiKey: "ollama",
-      model: "codestral:22b",
+      model: "llama3.2:1b", // Small model suitable for CI testing
       temperature: 0.3
     };
 

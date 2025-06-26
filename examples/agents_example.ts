@@ -12,7 +12,7 @@ console.log("=========================================");
 const OLLAMA_CONFIG = {
   baseURL: "http://localhost:11434/v1/",
   apiKey: "ollama",
-  model: "qwen2.5-coder:7b",
+  model: "llama3.2:1b", // Small model suitable for CI testing
   temperature: 0.7
 };
 
@@ -119,7 +119,7 @@ async function main() {
       console.log(); // Add newline after streaming
     } catch (error: unknown) {
       if (error instanceof Error && (error.message.includes("ECONNREFUSED") || error.message.includes("404"))) {
-        console.log("⚠️  Ollama not available. Please make sure Ollama is running with qwen2.5-coder model.");
+        console.log("⚠️  Ollama not available. Please make sure Ollama is running with llama3.2:1b model.");
       } else {
         console.log(`❌ Chat error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }

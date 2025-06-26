@@ -61,6 +61,18 @@ jobs:
           cd kernel
           python3 generate-wheels-js.py
         
+      - name: Setup Ollama
+        uses: ai-action/setup-ollama@v1
+        
+      - name: Pull Ollama models
+        run: |
+          # Pull small models suitable for CI testing
+          echo "📥 Pulling small LLM model for testing..."
+          ollama pull llama3.2:1b
+          echo "📥 Pulling embedding model for testing..."
+          ollama pull nomic-embed-text
+          echo "✅ Ollama models ready"
+          
       - name: Cache Deno dependencies
         uses: actions/cache@v3
         with:
