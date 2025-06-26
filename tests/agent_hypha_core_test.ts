@@ -111,6 +111,11 @@ print("✅ Python math service registered successfully")
       assertEquals(pythonConnectResult.success, true, "Python HyphaCore connection should succeed");
       console.log("🐍 Python output:", pythonConnectResult.output);
       
+      // Verify the service was registered successfully
+      if (!pythonConnectResult.output?.includes("Python math service registered successfully")) {
+        throw new Error("Python service registration failed - expected success message not found in output");
+      }
+      
       // Test 2: Create TypeScript agent and connect to HyphaCore
       console.log("\n📝 Test 2: TypeScript Agent HyphaCore Connection");
       const tsAgentId = await agentManager.createAgent({
@@ -188,6 +193,11 @@ globalThis._hypha_server = _hypha_server;
       
       assertEquals(tsConnectResult.success, true, "TypeScript HyphaCore connection should succeed");
       console.log("📘 TypeScript output:", tsConnectResult.output);
+      
+      // Verify the service was registered successfully
+      if (!tsConnectResult.output?.includes("TypeScript utils service registered successfully")) {
+        throw new Error("TypeScript service registration failed - expected success message not found in output");
+      }
       
       // Test 3: Create JavaScript agent and connect to HyphaCore
       console.log("\n📝 Test 3: JavaScript Agent HyphaCore Connection");
@@ -281,16 +291,43 @@ console.log("✅ JavaScript data service registered successfully");
       assertEquals(jsConnectResult.success, true, "JavaScript HyphaCore connection should succeed");
       console.log("📗 JavaScript output:", jsConnectResult.output);
       
+      // Verify the service was registered successfully
+      if (!jsConnectResult.output?.includes("JavaScript data service registered successfully")) {
+        throw new Error("JavaScript service registration failed - expected success message not found in output");
+      }
+      
       // Test 4: Call services from HyphaCore API
       console.log("\n📝 Test 4: Testing Service Calls from HyphaCore API");
       
-      // Wait a bit for services to be fully registered
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Helper function to retry service retrieval with exponential backoff
+      const getServiceWithRetry = async (serviceId: string, maxRetries = 10, baseDelay = 1000) => {
+        let lastError: Error | unknown;
+        for (let i = 0; i < maxRetries; i++) {
+          try {
+            console.log(`🔄 Attempting to get service "${serviceId}" (attempt ${i + 1}/${maxRetries})`);
+            const service = await hyphaAPI.getService(serviceId);
+            console.log(`✅ Successfully retrieved service "${serviceId}"`);
+            return service;
+          } catch (error) {
+            lastError = error;
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.log(`⚠️ Service "${serviceId}" not found (attempt ${i + 1}/${maxRetries}):`, errorMessage);
+            
+            if (i < maxRetries - 1) {
+              const delay = baseDelay * Math.pow(1.5, i); // Exponential backoff
+              console.log(`⏳ Waiting ${delay}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+            }
+          }
+        }
+        const lastErrorMessage = lastError instanceof Error ? lastError.message : String(lastError);
+        throw new Error(`Failed to get service "${serviceId}" after ${maxRetries} attempts. Last error: ${lastErrorMessage}`);
+      };
       
       // Test Python service
       console.log("🧪 Testing Python math service...");
       // Service is registered as test-workspace/python-hypha-test:python-math-service
-      const pythonService = await hyphaAPI.getService("test-workspace/python-hypha-test:python-math-service");
+      const pythonService = await getServiceWithRetry("test-workspace/python-hypha-test:python-math-service");
       assertExists(pythonService, "Python service should be accessible");
       
       const addResult = await pythonService.add(5, 3);
@@ -312,7 +349,7 @@ console.log("✅ JavaScript data service registered successfully");
       // Test TypeScript service
       console.log("🧪 Testing TypeScript utils service...");
       // Service is registered as test-workspace/typescript-hypha-test:typescript-utils-service
-      const tsService = await hyphaAPI.getService("test-workspace/typescript-hypha-test:typescript-utils-service");
+      const tsService = await getServiceWithRetry("test-workspace/typescript-hypha-test:typescript-utils-service");
       assertExists(tsService, "TypeScript service should be accessible");
       
       const reverseResult = await tsService.reverseString("hello");
@@ -334,7 +371,7 @@ console.log("✅ JavaScript data service registered successfully");
       // Test JavaScript service
       console.log("🧪 Testing JavaScript data service...");
       // Service is registered as test-workspace/javascript-hypha-test:javascript-data-service
-      const jsService = await hyphaAPI.getService("test-workspace/javascript-hypha-test:javascript-data-service");
+      const jsService = await getServiceWithRetry("test-workspace/javascript-hypha-test:javascript-data-service");
       assertExists(jsService, "JavaScript service should be accessible");
       
       const dataResult = await jsService.processData([1, 2, 3, 4, 5]);
