@@ -2,7 +2,7 @@
 // Run with: deno test -A --no-check tests/kernel_enhanced_test.ts
 
 import { assertEquals, assertExists, assert, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { KernelManager, KernelMode, KernelLanguage } from "../kernel/mod.ts";
+import { KernelManager, KernelMode, KernelLanguage, KernelEvents } from "../kernel/mod.ts";
 import { join } from "https://deno.land/std@0.208.0/path/mod.ts";
 
 // Test configuration
@@ -71,8 +71,8 @@ Deno.test("Enhanced Kernels - Environment Variables Support", async () => {
       }
     };
 
-    manager.on('stream', handleKernelEvent);
-    manager.on('execute_result', handleKernelEvent);
+    manager.onKernelEvent(pythonKernelId, KernelEvents.STREAM, handleKernelEvent);
+    manager.onKernelEvent(pythonKernelId, KernelEvents.EXECUTE_RESULT, handleKernelEvent);
 
     try {
       // Test environment variables are accessible
@@ -99,8 +99,8 @@ print("Max retries as int:", max_retries_int)
       assert(capturedOutput.includes("API Key: secret123") || capturedOutput.includes("secret123"), `Should show TEST_API_KEY. Output: ${capturedOutput}`);
       assert(capturedOutput.includes("Debug Mode: true") || capturedOutput.includes("true"), "Should show DEBUG_MODE");
     } finally {
-      manager.off('stream', handleKernelEvent);
-      manager.off('execute_result', handleKernelEvent);
+      manager.offKernelEvent(pythonKernelId, KernelEvents.STREAM, handleKernelEvent);
+      manager.offKernelEvent(pythonKernelId, KernelEvents.EXECUTE_RESULT, handleKernelEvent);
     }
 
     // Test TypeScript kernel with environment variables
@@ -129,8 +129,8 @@ print("Max retries as int:", max_retries_int)
       }
     };
 
-    manager.on('stream', handleTsKernelEvent);
-    manager.on('execute_result', handleTsKernelEvent);
+    manager.onKernelEvent(tsKernelId, KernelEvents.STREAM, handleTsKernelEvent);
+    manager.onKernelEvent(tsKernelId, KernelEvents.EXECUTE_RESULT, handleTsKernelEvent);
 
     try {
       const tsEnvResult = await manager.execute(tsKernelId, `
@@ -158,8 +158,8 @@ console.log("All environment variables:", JSON.stringify(environs, null, 2));
       assert(tsEnvResult.success, "TypeScript environment variable test should succeed");
       assert(tsCapturedOutput.includes("TS API Key: typescript_secret") || tsCapturedOutput.includes("typescript_secret"), `Should show TS_API_KEY. Output: ${tsCapturedOutput}`);
     } finally {
-      manager.off('stream', handleTsKernelEvent);
-      manager.off('execute_result', handleTsKernelEvent);
+      manager.offKernelEvent(tsKernelId, KernelEvents.STREAM, handleTsKernelEvent);
+      manager.offKernelEvent(tsKernelId, KernelEvents.EXECUTE_RESULT, handleTsKernelEvent);
     }
 
     await manager.destroyKernel(pythonKernelId);
