@@ -1,6 +1,6 @@
 {
   "name": "deno-app-engine",
-  "version": "0.1.43",
+  "version": "0.1.44",
   "exports": {
     ".": "./mod.ts"
   },

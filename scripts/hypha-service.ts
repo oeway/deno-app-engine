@@ -2127,7 +2127,7 @@ async function startHyphaService(options: {
 
     // ===== LOAD BALANCING METHODS =====
 
-    getActiveKernelCount() {
+    getActiveKernelCount(context: {user: any, ws: string}) {
       // Return the total number of active kernels for load balancing
       // This function must return a number (int or float) for Hypha load balancing
       const allKernels = kernelManager.getKernelIds();
