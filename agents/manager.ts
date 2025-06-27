@@ -1244,7 +1244,7 @@ print(f"✅ Connected to HyphaCore server: {_hypha_server.config.public_base_url
       } else if (kernelType === KernelType.JAVASCRIPT || kernelType === KernelType.TYPESCRIPT) {
         return `
 // Import hypha-rpc from CDN
-const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.56/dist/hypha-rpc-websocket.mjs");
+const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.58/dist/hypha-rpc-websocket.mjs");
 
 // Connect to HyphaCore server with authentication token
 const _hypha_server = await hyphaWebsocketClient.connectToServer({

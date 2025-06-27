@@ -48,9 +48,9 @@ Added to `deno.json`:
 ```json
 {
   "imports": {
-    "hypha-core": "npm:hypha-core@0.20.56-pre9",
-    "hypha-core/deno-websocket-server": "npm:hypha-core@0.20.56-pre9/deno-websocket-server",
-    "hypha-rpc": "npm:hypha-rpc@0.20.54"
+    "hypha-core": "npm:hypha-core@0.20.58",
+    "hypha-core/deno-websocket-server": "npm:hypha-core@0.20.58/deno-websocket-server",
+    "hypha-rpc": "npm:hypha-rpc@0.20.58"
   }
 }
 ```
@@ -156,9 +156,9 @@ deno task test-hypha-core-minimal
 - **Registration**: Service configuration and registration pattern validated
 - **Manager Connection**: hypha-rpc client connection pattern implemented
 
-### ✅ Recent Update (hypha-core@0.20.56-pre9)
+### ✅ Recent Update (hypha-core@0.20.58)
 
-**WebSocket Issue RESOLVED**: The WebSocket handshake issue has been completely fixed in hypha-core@0.20.56-pre9! Native Deno WebSocket API support is now working perfectly. 🎉
+**WebSocket Issue RESOLVED**: The WebSocket handshake issue has been completely fixed in hypha-core@0.20.58! Native Deno WebSocket API support is now working perfectly. 🎉
 
 ## Example Use Cases
 
@@ -222,4 +222,4 @@ console.log(prediction); // {prediction: 0.85, confidence: 0.92}
 
 ## Conclusion
 
-The HyphaCore integration provides a robust foundation for service-oriented communication between Deno App Engine and Python kernels. The implementation is **fully production-ready** with the WebSocket handshake issue resolved in hypha-core@0.20.56-pre9! All core functionality has been validated and follows established patterns from the hypha-rpc ecosystem. 
+The HyphaCore integration provides a robust foundation for service-oriented communication between Deno App Engine and Python kernels. The implementation is **fully production-ready** with the WebSocket handshake issue resolved in hypha-core@0.20.58! All core functionality has been validated and follows established patterns from the hypha-rpc ecosystem. 
