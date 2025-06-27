@@ -2125,6 +2125,16 @@ async function startHyphaService(options: {
       }
     },
 
+    // ===== LOAD BALANCING METHODS =====
+
+    getActiveKernelCount() {
+      // Return the total number of active kernels for load balancing
+      // This function must return a number (int or float) for Hypha load balancing
+      const allKernels = kernelManager.getKernelIds();
+      const totalKernels = allKernels.length;
+      return totalKernels;
+    },
+
     // ===== DENO APP MANAGEMENT METHODS =====
 
     async notifyAppUpdates(context: {user: any, ws: string}) {
