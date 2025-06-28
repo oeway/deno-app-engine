@@ -1079,12 +1079,9 @@ export class AgentManager extends EventEmitter {
         WebSocketClass: DenoWebSocketClient,
         jwtSecret: this.hyphaCoreJwtSecret,
         defaultService: {
+          // camelCase version (for direct API calls)
           async *chatCompletion(messages: ChatMessage[], context: any) {
             const agentId = context.from.split("/")[1];
-            console.log(`🔄 Agent ID: ${agentId}`);
-            console.log(`🔍 Available agents: ${Array.from(agentManager.agents.keys()).join(', ')}`);
-            console.log(`🔍 Context from: ${context.from}, to: ${context.to}`);
-            // get the agent then call the chatCompletion method
             const agent = agentManager.getAgent(agentId);
             if (!agent) {
               throw new Error(`Agent with ID "${agentId}" not found`);
@@ -1105,7 +1102,69 @@ export class AgentManager extends EventEmitter {
               throw error;
             }
           },
+          
+          // snake_case version (for JavaScript/TypeScript clients that auto-convert)
+          async *chat_completion(messages: ChatMessage[], context: any) {
+            const agentId = context.from.split("/")[1];
+            
+            const agent = agentManager.getAgent(agentId);
+            if (!agent) {
+              throw new Error(`Agent with ID "${agentId}" not found`);
+            }
+            
+            // Stream the response from the generator
+            const generator = agent.chatCompletion(messages, {
+              stream: true, // Enable streaming for API calls
+              maxSteps: context.max_steps || 5 // Use max_steps from context or default
+            });
+            
+            try {
+              for await (const chunk of generator) {
+                yield chunk;
+              }
+            } catch (error) {
+              console.error(`❌ Chat completion failed for agent ${agentId}:`, error);
+              throw error;
+            }
+          },
+          
           async *inspectImages(options: InspectImagesOptions, context: any) {
+            const agentId = context.from.split("/")[1];
+            console.log(`🔄 Agent ID for image inspection: ${agentId}`);
+            
+            // Get the agent to access its model settings for the API call
+            const agent = agentManager.getAgent(agentId);
+            if (!agent) {
+              throw new Error(`Agent with ID "${agentId}" not found`);
+            }
+            
+            // Import the vision utilities
+            const { inspectImages } = await import('./vision.ts');
+            
+            // Use the agent's model settings for the vision API call
+            const inspectionOptions = {
+              images: options.images || [],
+              query: options.query || '',
+              contextDescription: options.contextDescription || '',
+              model: agent.ModelSettings.model,
+              maxTokens: options.max_tokens || options.maxTokens || 1024,
+              baseURL: agent.ModelSettings.baseURL,
+              apiKey: agent.ModelSettings.apiKey,
+              outputSchema: options.outputSchema
+            };
+            
+            try {
+              for await (const chunk of inspectImages(inspectionOptions)) {
+                yield chunk;
+              }
+            } catch (error) {
+              console.error(`❌ Image inspection failed for agent ${agentId}:`, error);
+              throw error;
+            }
+          },
+          
+          // snake_case version (for JavaScript/TypeScript clients that auto-convert)
+          async *inspect_images(options: InspectImagesOptions, context: any) {
             const agentId = context.from.split("/")[1];
             console.log(`🔄 Agent ID for image inspection: ${agentId}`);
             
@@ -1255,9 +1314,6 @@ const _hypha_server = await hyphaWebsocketClient.connectToServer({
 });
 
 console.log("✅ Connected to HyphaCore server:", _hypha_server.config.public_base_url);
-
-// Make _hypha_server globally available for use in subsequent code executions
-globalThis._hypha_server = _hypha_server;
 `;
       } else {
         console.warn(`❌ Unsupported kernel type for HyphaCore integration: ${kernelType}`);
