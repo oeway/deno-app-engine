@@ -8,10 +8,9 @@
     "npm:@babel/core@*": "7.27.7",
     "npm:@babel/parser@*": "7.27.7",
     "npm:@babel/traverse@*": "7.27.7",
-    "npm:hypha-core@0.20.58": "0.20.58_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1",
+    "npm:hypha-core@0.20.58-post2": "0.20.58-post2_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1",
     "npm:hypha-rpc@*": "0.20.58",
     "npm:hypha-rpc@0.20.58": "0.20.58",
-    "npm:lodash@*": "4.17.21",
     "npm:ollama@*": "0.5.16",
     "npm:ollama@0.5": "0.5.16",
     "npm:openai@4": "4.104.0",
@@ -931,8 +930,8 @@
         "ms@2.1.3"
       ]
     },
-    "hypha-core@0.20.58_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1": {
-      "integrity": "sha512-ZW8FUBMIHBkZUk4vOU/8n+hGPpk+lR1yZq4Es9EambfTZB/9YVoguWsxlzbWC9TgT8No95d3UtWipPlIZqpisA==",
+    "hypha-core@0.20.58-post2_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1": {
+      "integrity": "sha512-0fz5hhu5sxevIU+oPVaJisuymtBuebvhg9AY+y7ZX2WW1JOsgMFIkEnoBn0DmKDcMhLttE4TeBluoI8SIitmGA==",
       "dependencies": [
         "@babel/standalone",
         "@monaco-editor/react",
@@ -2257,7 +2256,7 @@
   },
   "workspace": {
     "dependencies": [
-      "npm:hypha-core@0.20.58",
+      "npm:hypha-core@0.20.58-post2",
       "npm:hypha-rpc@0.20.58",
       "npm:ollama@0.5",
       "npm:openai@^4.65.0",

@@ -172,7 +172,7 @@ class TypeScriptKernel {
     }
   }
   
-  async execute(code: string, parent?: any): Promise<{ success: boolean, result?: any, error?: Error }> {
+  async execute(code: string, parent?: any): Promise<{ success: boolean, execution_count: number }> {
     if (!this.initialized) {
       await this.initialize();
     }
@@ -185,22 +185,22 @@ class TypeScriptKernel {
       const { result, mod } = await this.tseval(code);
       
       // Emit execution result if we have a meaningful result
+      // This is the proper Jupyter way - results go through events, not return values
       if (result !== undefined) {
         this.emitExecutionResult(result);
       }
       
-      return { success: true, result };
+      // Return only simple execution metadata, not the actual result
+      return { success: true, execution_count: this.executionCount };
     } catch (error) {
       console.error("[TS_WORKER] Execution error:", error);
       
       this.emitExecutionError(error);
       
-      // Ensure error is properly structured
-      const structuredError = error instanceof Error ? error : new Error(String(error));
-      
+      // Return only simple execution metadata, not the actual error
       return { 
         success: false, 
-        error: structuredError
+        execution_count: this.executionCount
       };
     } finally {
       this.consoleCapture.stop();

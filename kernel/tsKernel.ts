@@ -214,7 +214,7 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     return path;
   }
   
-  async execute(code: string, parent?: any): Promise<{ success: boolean, result?: any, error?: Error }> {
+  async execute(code: string, parent?: any): Promise<{ success: boolean, execution_count: number }> {
     if (!this.initialized) {
       await this.initialize();
     }
@@ -234,11 +234,13 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
       const { result, mod } = await this.executeWithInterruptSupport(code);
       
       // Emit execution result if we have a meaningful result
+      // This is the proper Jupyter way - results go through events, not return values
       if (result !== undefined) {
         this.emitExecutionResult(result);
       }
       
-      return { success: true, result };
+      // Return only simple execution metadata, not the actual result
+      return { success: true, execution_count: this.executionCount };
     } catch (error) {
       // Check if this was an interrupt
       if (error instanceof Error && error.message.includes('KeyboardInterrupt')) {
@@ -262,9 +264,10 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
         this.emitExecutionError(error);
       }
       
+      // Return only simple execution metadata, not the actual error
       return { 
         success: false, 
-        error: error instanceof Error ? error : new Error(String(error))
+        execution_count: this.executionCount
       };
     } finally {
       this._isExecuting = false;
@@ -295,7 +298,7 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     return result;
   }
   
-  async* executeStream(code: string, parent?: any): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void> {
+  async* executeStream(code: string, parent?: any): AsyncGenerator<any, { success: boolean, execution_count: number }, void> {
     try {
       if (!this.initialized) {
         await this.initialize();
@@ -329,7 +332,7 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
       console.error("Error in executeStream:", error);
       return {
         success: false,
-        error: error instanceof Error ? error : new Error(String(error))
+        execution_count: this.executionCount
       };
     }
   }

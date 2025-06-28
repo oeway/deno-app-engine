@@ -440,6 +440,12 @@ async function startHyphaService(options: {
     "client_id": options.clientId || Deno.env.get("HYPHA_CLIENT_ID") || undefined,
   });
   
+  await registerService(server);
+  
+  return server;
+}
+
+async function registerService(server: any) {
   console.log("Connected to hypha server, registering service...");
   // Create a global kernel manager instance with configuration
   const kernelManager = new KernelManager(getKernelManagerOptions());
@@ -3011,7 +3017,7 @@ async function startHyphaService(options: {
 }
 
 // Export for testing
-export { startHyphaService };
+export { startHyphaService, registerService };
 
 // Start the service if this is the main module
 if (import.meta.main) {
