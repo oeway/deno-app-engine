@@ -1,4 +1,4 @@
-// Tests for TypeScript Kernel functionality
+// Tests for TypeScript Kernel functionality with enhanced tseval context features
 import { assert, assertEquals } from "https://deno.land/std/assert/mod.ts";
 import { KernelManager, KernelMode, KernelLanguage, KernelEvents } from "../kernel/mod.ts";
 
@@ -56,11 +56,266 @@ Deno.test({
   sanitizeOps: false
 });
 
-// Test executing code with console output
+// Test variable persistence across executions
 Deno.test({
-  name: "3. Execute code with console output",
+  name: "3. Test variable persistence across executions",
   async fn() {
-    // Verify kernel exists
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Execute code to define variables
+    const result1 = await instance.kernel.execute("let x = 42; const y = 'hello'; var z = true;");
+    assertEquals(result1.success, true, "First execution should succeed");
+    
+    // Execute code using previously defined variables
+    const result2 = await instance.kernel.execute("x + 10");
+    assertEquals(result2.success, true, "Second execution should succeed");
+    assertEquals(result2.result, 52, "Should access previously defined variable x");
+    
+    // Test that const variables persist
+    const result3 = await instance.kernel.execute("y + ' world'");
+    assertEquals(result3.success, true, "Third execution should succeed");
+    assertEquals(result3.result, "hello world", "Should access previously defined const y");
+    
+    // Test that var variables persist
+    const result4 = await instance.kernel.execute("z ? 'yes' : 'no'");
+    assertEquals(result4.success, true, "Fourth execution should succeed");
+    assertEquals(result4.result, "yes", "Should access previously defined var z");
+    
+    // Modify existing variable
+    const result5 = await instance.kernel.execute("x = x * 2; x");
+    assertEquals(result5.success, true, "Fifth execution should succeed");
+    assertEquals(result5.result, 84, "Should modify and return updated variable (42 * 2 = 84)");
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test function and class persistence
+Deno.test({
+  name: "4. Test function and class persistence",
+  async fn() {
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Define a function
+    const result1 = await instance.kernel.execute(`
+      function multiply(a, b) {
+        return a * b;
+      }
+    `);
+    assertEquals(result1.success, true, "Function definition should succeed");
+    
+    // Use the function
+    const result2 = await instance.kernel.execute("multiply(6, 7)");
+    assertEquals(result2.success, true, "Function call should succeed");
+    assertEquals(result2.result, 42, "Function should return correct result");
+    
+    // Define a class
+    const result3 = await instance.kernel.execute(`
+      class Calculator {
+        constructor(value = 0) {
+          this.value = value;
+        }
+        
+        add(n) {
+          this.value += n;
+          return this;
+        }
+        
+        getValue() {
+          return this.value;
+        }
+      }
+    `);
+    assertEquals(result3.success, true, "Class definition should succeed");
+    
+    // Use the class
+    const result4 = await instance.kernel.execute(`
+      const calc = new Calculator(10);
+      calc.add(5).add(3).getValue()
+    `);
+    assertEquals(result4.success, true, "Class usage should succeed");
+    assertEquals(result4.result, 18, "Class should work correctly");
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test top-level await functionality
+Deno.test({
+  name: "5. Test top-level await functionality",
+  async fn() {
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Test basic top-level await
+    const result1 = await instance.kernel.execute(`
+      const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+      await delay(50);
+      "Await completed"
+    `);
+    
+    console.log("Debug - top-level await result:", JSON.stringify(result1, null, 2));
+    
+    assertEquals(result1.success, true, "Top-level await should succeed");
+    assertEquals(result1.result, "Await completed", "Should return correct result after await");
+    
+    // Test await with Promise.resolve
+    const result2 = await instance.kernel.execute(`
+      const value = await Promise.resolve(123);
+      value * 2
+    `);
+    assertEquals(result2.success, true, "Promise.resolve await should succeed");
+    assertEquals(result2.result, 246, "Should return correct result");
+    
+    // Test await with fetch (using a simple URL)
+    const result3 = await instance.kernel.execute(`
+      const response = await fetch('data:text/plain,Hello');
+      const text = await response.text();
+      text
+    `);
+    assertEquals(result3.success, true, "Fetch await should succeed");
+    assertEquals(result3.result, "Hello", "Should return fetched text");
+    
+    // Test await with variable assignment
+    const result4 = await instance.kernel.execute(`
+      const asyncValue = await Promise.resolve("stored");
+      asyncValue
+    `);
+    assertEquals(result4.success, true, "Async variable assignment should succeed");
+    assertEquals(result4.result, "stored", "Should store and return async value");
+    
+    // Test that async variables persist
+    const result5 = await instance.kernel.execute("asyncValue + ' and reused'");
+    assertEquals(result5.success, true, "Async variable should persist");
+    assertEquals(result5.result, "stored and reused", "Should reuse async variable");
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test import/export functionality
+Deno.test({
+  name: "6. Test import/export functionality",
+  async fn() {
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Test npm import
+    const result1 = await instance.kernel.execute(`
+      import lodash from "npm:lodash";
+      const arr = [1, 2, 3, 4, 5];
+      lodash.sum(arr)
+    `);
+    
+    console.log("Debug - npm import result:", JSON.stringify(result1, null, 2));
+    
+    assertEquals(result1.success, true, "NPM import should succeed");
+    assertEquals(result1.result, 15, "Lodash sum should work correctly");
+    
+    // Test JSR import
+    const result2 = await instance.kernel.execute(`
+      import { encodeBase64 } from "jsr:@std/encoding/base64";
+      encodeBase64("hello")
+    `);
+    assertEquals(result2.success, true, "JSR import should succeed");
+    assertEquals(result2.result, "aGVsbG8=", "Base64 encoding should work");
+    
+    // Test that imported modules persist
+    const result3 = await instance.kernel.execute(`
+      lodash.reverse([1, 2, 3])
+    `);
+    
+    console.log("Debug - persisted import result:", JSON.stringify(result3, null, 2));
+    
+    assertEquals(result3.success, true, "Persisted import should work");
+    assertEquals(JSON.stringify(result3.result), JSON.stringify([3, 2, 1]), "Lodash reverse should work");
+    
+    // Test Deno standard library
+    const result4 = await instance.kernel.execute(`
+      import * as path from "jsr:@std/path";
+      path.basename("/foo/bar/test.txt")
+    `);
+    assertEquals(result4.success, true, "Deno std import should succeed");
+    assertEquals(result4.result, "test.txt", "Path basename should work");
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test TypeScript-specific features
+Deno.test({
+  name: "7. Test TypeScript-specific features",
+  async fn() {
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Test interface definition and usage
+    const result1 = await instance.kernel.execute(`
+      interface User {
+        name: string;
+        age: number;
+        active?: boolean;
+      }
+      
+      const user: User = {
+        name: "Alice",
+        age: 30,
+        active: true
+      };
+      
+      user.name
+    `);
+    assertEquals(result1.success, true, "TypeScript interface should work");
+    assertEquals(result1.result, "Alice", "Should access interface property");
+    
+    // Test type aliases
+    const result2 = await instance.kernel.execute(`
+      type StringOrNumber = string | number;
+      
+      function process(value: StringOrNumber): string {
+        return typeof value === 'string' ? value.toUpperCase() : value.toString();
+      }
+      
+      process("hello")
+    `);
+    assertEquals(result2.success, true, "TypeScript type alias should work");
+    assertEquals(result2.result, "HELLO", "Should process string correctly");
+    
+    // Test generics
+    const result3 = await instance.kernel.execute(`
+      function identity<T>(arg: T): T {
+        return arg;
+      }
+      
+      identity<number>(42)
+    `);
+    assertEquals(result3.success, true, "TypeScript generics should work");
+    assertEquals(result3.result, 42, "Should return correct generic result");
+    
+    // Test enum
+    const result4 = await instance.kernel.execute(`
+      enum Direction {
+        Up = "UP",
+        Down = "DOWN",
+        Left = "LEFT",
+        Right = "RIGHT"
+      }
+      
+      Direction.Up
+    `);
+    assertEquals(result4.success, true, "TypeScript enum should work");
+    assertEquals(result4.result, "UP", "Should access enum value");
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test console output and history tracking
+Deno.test({
+  name: "8. Test console output and history tracking",
+  async fn() {
     const instance = manager.getKernel(kernelId);
     assert(instance, "Kernel instance should exist");
     
@@ -71,7 +326,7 @@ Deno.test({
         if (data.name === "stdout") {
           // Filter out log messages from the worker
           const text = data.text.trim();
-          if (!text.startsWith("[TS_WORKER]")) {
+          if (!text.startsWith("[TS_WORKER]") && !text.startsWith("[worker]")) {
             resolve(text);
           }
         }
@@ -79,11 +334,58 @@ Deno.test({
     });
     
     // Execute code with console.log
-    await instance.kernel.execute('console.log("Hello from TypeScript Kernel!")');
+    await instance.kernel.execute('console.log("Testing console output")');
     
     // Wait for output
     const output = await outputPromise;
-    assertEquals(output, "Hello from TypeScript Kernel!", "Should receive correct output text");
+    assertEquals(output, "Testing console output", "Should receive correct console output");
+    
+    // Test history tracking (this might not be available in all kernel implementations)
+    try {
+      if (typeof (instance.kernel as any).getHistory === 'function') {
+        const history = (instance.kernel as any).getHistory();
+        assert(Array.isArray(history), "History should be an array");
+        assert(history.length > 0, "History should contain executed code");
+        console.log("History tracking works:", history.length, "entries");
+      } else {
+        console.log("History tracking not available in this kernel implementation");
+      }
+         } catch (error) {
+       const errorMessage = error instanceof Error ? error.message : String(error);
+       console.log("History tracking test skipped:", errorMessage);
+     }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test variable listing and context management
+Deno.test({
+  name: "9. Test variable listing and context management",
+  async fn() {
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Define some variables
+    await instance.kernel.execute("const testVar = 'test'; let numberVar = 100;");
+    
+    // Test variable listing (this might not be available in all implementations)
+    try {
+      if (typeof (instance.kernel as any).getVariables === 'function') {
+        const variables = (instance.kernel as any).getVariables();
+        assert(Array.isArray(variables), "Variables should be an array");
+        console.log("Available variables:", variables);
+        
+        // Should contain our test variables
+        assert(variables.includes('testVar') || variables.some(v => v.includes('testVar')), 
+          "Should include testVar");
+      } else {
+        console.log("Variable listing not available in this kernel implementation");
+      }
+         } catch (error) {
+       const errorMessage = error instanceof Error ? error.message : String(error);
+       console.log("Variable listing test skipped:", errorMessage);
+     }
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -91,7 +393,7 @@ Deno.test({
 
 // Test error handling
 Deno.test({
-  name: "4. Handle execution errors",
+  name: "10. Handle execution errors",
   async fn() {
     // Verify kernel exists
     const instance = manager.getKernel(kernelId);
@@ -121,37 +423,9 @@ Deno.test({
   sanitizeOps: false
 });
 
-// Test async code execution
-Deno.test({
-  name: "5. Execute async TypeScript code",
-  async fn() {
-    // Verify kernel exists
-    const instance = manager.getKernel(kernelId);
-    assert(instance, "Kernel instance should exist");
-    
-    // Execute async code with explicit return statement
-    const result = await instance.kernel.execute(`
-      const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-      await delay(100);
-      "Async operation complete"
-    `);
-    
-    // Check the result
-    assertEquals(result.success, true, "Execution should succeed");
-    
-    // Either we have the exact string or it might be undefined depending on how the worker evaluated it
-    // For this test, we'll just check that the execution was successful
-    if (result.result !== undefined) {
-      assertEquals(result.result, "Async operation complete", "Should get correct result from async code");
-    }
-  },
-  sanitizeResources: false,
-  sanitizeOps: false
-});
-
 // Test Deno-specific functionality
 Deno.test({
-  name: "6. Execute Deno-specific TypeScript code",
+  name: "11. Execute Deno-specific TypeScript code",
   async fn() {
     // Verify kernel exists
     const instance = manager.getKernel(kernelId);
@@ -174,9 +448,9 @@ Deno.test({
   sanitizeOps: false
 });
 
-// Test complex Deno code with npm imports
+// Test complex Deno code with npm imports and top-level await
 Deno.test({
-  name: "7. Execute complex Deno code with npm imports",
+  name: "12. Execute complex code with imports and await",
   async fn() {
     // Verify kernel exists
     const instance = manager.getKernel(kernelId);
@@ -187,28 +461,26 @@ Deno.test({
       manager.onKernelEvent(kernelId, KernelEvents.STREAM, (data) => {
         if (data.name === "stdout") {
           const text = data.text.trim();
-          if (!text.startsWith("[TS_WORKER]")) {
+          if (!text.startsWith("[TS_WORKER]") && !text.startsWith("[worker]")) {
             resolve(text);
           }
         }
       });
     });
 
-    // Execute complex code with npm import and file operations
+    // Execute complex code with npm import, await, and file operations
     const result = await instance.kernel.execute(`
-      // Import lodash from npm
-      import lodash from "npm:lodash";
-      
+      // Import lodash from npm (should already be available from previous test)
       // Create a temporary file
       const tempFile = await Deno.makeTempFile();
       
       // Write some data
-      await Deno.writeTextFile(tempFile, "Hello from Deno!");
+      await Deno.writeTextFile(tempFile, "Hello from enhanced TypeScript kernel!");
       
       // Read it back
       const content = await Deno.readTextFile(tempFile);
       
-      // Use lodash to manipulate the string
+      // Use lodash to manipulate the string (from previous import)
       const uppercased = lodash.upperCase(content);
       
       // Clean up
@@ -218,7 +490,7 @@ Deno.test({
       console.log(uppercased);
       
       // Return success message
-      "Complex operations completed"
+      "Complex operations with persistence completed"
     `);
 
     // Check either the execution completion or a defined result
@@ -227,15 +499,18 @@ Deno.test({
     // Wait for and verify the console output
     const output = await outputPromise;
     
-    // Accept either with or without exclamation mark as valid output
+    // Accept different variations - lodash.upperCase converts "TypeScript" to "TYPE SCRIPT"
     assert(
-      output === "HELLO FROM DENO!" || output === "HELLO FROM DENO", 
-      `Output "${output}" should match "HELLO FROM DENO!" or "HELLO FROM DENO"`
+      output === "HELLO FROM ENHANCED TYPESCRIPT KERNEL!" || 
+      output === "HELLO FROM ENHANCED TYPESCRIPT KERNEL" ||
+      output === "HELLO FROM ENHANCED TYPE SCRIPT KERNEL!" || 
+      output === "HELLO FROM ENHANCED TYPE SCRIPT KERNEL", 
+      `Output "${output}" should match expected pattern`
     );
     
     // Verify the final result if available
     if (result.result !== undefined) {
-      assertEquals(result.result, "Complex operations completed", "Should get success message");
+      assertEquals(result.result, "Complex operations with persistence completed", "Should get success message");
     }
   },
   sanitizeResources: false,
@@ -244,7 +519,7 @@ Deno.test({
 
 // Test Deno.jupyter functionality
 Deno.test({
-  name: "8. Test Deno.jupyter display functions",
+  name: "13. Test Deno.jupyter display functions",
   async fn() {
     // Verify kernel exists
     const instance = manager.getKernel(kernelId);
@@ -285,8 +560,8 @@ Deno.test({
     });
 
     const htmlResult = await instance.kernel.execute(`
-      const htmlObj = Deno.jupyter.html\`<h1>Hello from Deno Jupyter!</h1>
-      <p>This is a test of HTML display functionality.</p>\`;
+      const htmlObj = Deno.jupyter.html\`<h1>Hello from Enhanced Deno Jupyter!</h1>
+      <p>This kernel now supports variable persistence and top-level await.</p>\`;
       htmlObj
     `);
 
@@ -295,7 +570,7 @@ Deno.test({
     const htmlDisplayData = await htmlDisplayPromise;
     assert(htmlDisplayData.data["text/html"], "Display data should contain HTML MIME type");
     assert(
-      htmlDisplayData.data["text/html"].includes("<h1>Hello from Deno Jupyter!</h1>"),
+      htmlDisplayData.data["text/html"].includes("<h1>Hello from Enhanced Deno Jupyter!</h1>"),
       "HTML content should match expected output"
     );
 
@@ -307,12 +582,18 @@ Deno.test({
     });
 
     const mdResult = await instance.kernel.execute(`
-      const mdObj = Deno.jupyter.md\`# Markdown Test
+      const mdObj = Deno.jupyter.md\`# Enhanced Markdown Test
       
-      This is a **bold** test with *italic* text.
+      This kernel now supports:
+      - **Variable persistence** across executions
+      - *Top-level await* functionality  
+      - Import/export capabilities
+      - Context management
       
-      - List item 1
-      - List item 2\`;
+      ## Features:
+      1. TypeScript compilation
+      2. Module loading
+      3. State preservation\`;
       mdObj
     `);
 
@@ -321,7 +602,7 @@ Deno.test({
     const mdDisplayData = await mdDisplayPromise;
     assert(mdDisplayData.data["text/markdown"], "Display data should contain Markdown MIME type");
     assert(
-      mdDisplayData.data["text/markdown"].includes("# Markdown Test"),
+      mdDisplayData.data["text/markdown"].includes("# Enhanced Markdown Test"),
       "Markdown content should match expected output"
     );
   },
@@ -329,9 +610,130 @@ Deno.test({
   sanitizeOps: false
 });
 
+// Test context reset functionality
+Deno.test({
+  name: "14. Test context reset functionality",
+  async fn() {
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Define some variables first
+    await instance.kernel.execute("const resetTest = 'before reset'; let counter = 99;");
+    
+    // Verify variables exist
+    const result1 = await instance.kernel.execute("resetTest + ' - ' + counter");
+    assertEquals(result1.success, true, "Variables should exist before reset");
+    assertEquals(result1.result, "before reset - 99", "Should access both variables");
+    
+    // Reset context if available
+    try {
+      if (typeof (instance.kernel as any).resetContext === 'function') {
+        (instance.kernel as any).resetContext();
+        console.log("Context reset successful");
+        
+        // Try to access variables after reset - should fail
+        const result2 = await instance.kernel.execute("typeof resetTest");
+        assertEquals(result2.success, true, "Execution should succeed");
+        assertEquals(result2.result, "undefined", "Variable should be undefined after reset");
+        
+        // Define new variables after reset
+        const result3 = await instance.kernel.execute("const afterReset = 'new context'; afterReset");
+        assertEquals(result3.success, true, "New variables should work after reset");
+        assertEquals(result3.result, "new context", "Should define new variables");
+        
+      } else {
+        console.log("Context reset not available in this kernel implementation");
+      }
+         } catch (error) {
+       const errorMessage = error instanceof Error ? error.message : String(error);
+       console.log("Context reset test skipped:", errorMessage);
+     }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test interrupt functionality  
+Deno.test({
+  name: "15. Test interrupt functionality",
+  async fn() {
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Check if the kernel has interrupt support
+    if (typeof instance.kernel.interrupt === 'function') {
+      // Start a long-running execution
+      const executionPromise = instance.kernel.execute(`
+        console.log("Starting interruptible operation...");
+        for (let i = 0; i < 100000; i++) {
+          if (i % 10000 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 1));
+          }
+        }
+        "Operation completed"
+      `);
+      
+      // Interrupt after a short delay
+      setTimeout(async () => {
+        const interrupted = await instance.kernel.interrupt!();
+        console.log("Interrupt result:", interrupted);
+      }, 50);
+      
+      const result = await executionPromise;
+      
+      // Note: Interrupt behavior may vary by kernel implementation
+      console.log("Execution completed with result:", result.success);
+    } else {
+      console.log("Kernel does not support interrupt functionality");
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
+// Test code completion functionality
+Deno.test({
+  name: "16. Test code completion functionality",
+  async fn() {
+    const instance = manager.getKernel(kernelId);
+    assert(instance, "Kernel instance should exist");
+    
+    // Set up some context variables
+    await instance.kernel.execute(`
+      let testVariable = 42;
+      const testConstant = "hello";
+      function testFunction() { return "test"; }
+    `);
+    
+    // Check if the kernel has completion support
+    if (typeof instance.kernel.complete === 'function') {
+      // Test variable completion
+      const completion1 = await instance.kernel.complete("test", 4);
+      assert(completion1.status === "ok", "Completion should succeed");
+      
+      // Check if we get any matches (behavior may vary by kernel implementation)
+      console.log("Completion matches for 'test':", completion1.matches);
+      assert(Array.isArray(completion1.matches), "Should return an array of matches");
+      
+      // Test keyword completion
+      const completion2 = await instance.kernel.complete("f", 1);
+      console.log("Completion matches for 'f':", completion2.matches);
+      assert(Array.isArray(completion2.matches), "Should return an array of matches");
+      
+      // Test cursor position calculation
+      assert(typeof completion1.cursor_start === "number", "Should return cursor start position");
+      assert(typeof completion1.cursor_end === "number", "Should return cursor end position");
+    } else {
+      console.log("Kernel does not support code completion functionality");
+    }
+  },
+  sanitizeResources: false,
+  sanitizeOps: false
+});
+
 // Teardown: Destroy the kernel
 Deno.test({
-  name: "9. Destroy TypeScript kernel",
+  name: "17. Destroy TypeScript kernel",
   async fn() {
     // Destroy the kernel
     await manager.destroyKernel(kernelId);

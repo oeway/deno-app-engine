@@ -36,7 +36,7 @@
     "kernel/pypi/**/*"
   ],
   "unstable": ["worker-options", "webgpu"],
-  "nodeModulesDir": "none",
+  "nodeModulesDir": "auto",
   "compilerOptions": {
     "lib": ["deno.ns", "dom", "esnext"]
   }

@@ -1,11 +1,11 @@
 // TypeScript Web Worker for Deno App Engine
-// Supports both JavaScript and TypeScript execution
+// Enhanced implementation using tseval context for variable persistence and top-level await
 import * as Comlink from "comlink";
 // @ts-ignore Importing from npm
 import { EventEmitter } from 'node:events';
 import { KernelEvents } from "./index.ts";
 import { jupyter, hasDisplaySymbol } from "./jupyter.ts";
-import { encodeBase64 } from "jsr:@std/encoding/base64";
+import { createTSEvalContext } from "./tseval.ts";
 
 // Console capture utility
 class ConsoleCapture {
@@ -94,439 +94,11 @@ class ConsoleCapture {
   }
 }
 
-// Code execution engine
-class CodeExecutor {
-  private executionCount = 0;
-  
-  async execute(code: string): Promise<any> {
-    this.executionCount++;
-    
-    // Detect language type
-    const isTypeScript = this.isTypeScript(code);
-    const hasImports = this.hasImports(code);
-    
-    if (isTypeScript) {
-      return await this.executeTypeScript(code);
-    } else if (hasImports) {
-      return await this.executeJavaScriptWithImports(code);
-    } else {
-      return await this.executeJavaScript(code);
-    }
-  }
-  
-  private isTypeScript(code: string): boolean {
-    // Check for TypeScript-specific syntax
-    const tsPatterns = [
-      /\b(interface|type)\s+\w+/,                          // interface/type declarations
-      /\w+\s*:\s*\w+(\[\]|<[^>]+>)?\s*[=;,)]/,            // type annotations
-      /\(\s*\w+\s*:\s*\w+/,                                // function parameter types
-      /\)\s*:\s*\w+(\[\]|<[^>]+>)?\s*[{=>]/,              // function return types
-      /<\w+(\s*,\s*\w+)*>/,                                // generic type parameters
-      /\bas\s+\w+/,                                        // type assertions
-      /\w+\s*\?\s*:/,                                      // optional properties
-      /\bpublic\s+|private\s+|protected\s+|readonly\s+/,  // access modifiers
-      /\benum\s+\w+/,                                      // enum declarations
-      /\bnamespace\s+\w+/,                                 // namespace declarations
-      /\bimport\s+.*\s+from\s+['"][^'"]*\.ts['"]/, // TypeScript imports
-      /\bexport\s+(interface|type|enum|namespace)/         // TypeScript exports
-    ];
-    
-    return tsPatterns.some(pattern => pattern.test(code));
-  }
-  
-  private hasImports(code: string): boolean {
-    return /^\s*import\s+/m.test(code) || /^\s*export\s+/m.test(code);
-  }
-  
-  private async executeTypeScript(code: string): Promise<any> {
-    // For complex TypeScript code, prefer the file approach as it's more reliable
-    // Use data URL only for simple cases
-    const isComplexCode = this.isComplexTypeScriptCode(code);
-    
-    if (isComplexCode) {
-      // Use file approach for complex code (more reliable)
-      try {
-        return await this.tsevalFile(code);
-      } catch (fileError) {
-        console.warn("[TS_WORKER] File approach failed, trying data URL approach:", fileError);
-        // Fallback to data URL approach
-        try {
-          return await this.tseval(code);
-        } catch (dataUrlError) {
-          console.error("[TS_WORKER] Both file and data URL approaches failed");
-          throw fileError; // Report the file error as it's usually more informative
-        }
-      }
-    } else {
-      // Use data URL approach for simple code
-      try {
-        return await this.tseval(code);
-      } catch (dataUrlError) {
-        console.warn("[TS_WORKER] Data URL approach failed, trying file approach:", dataUrlError);
-        // Fallback to file approach
-        try {
-          return await this.tsevalFile(code);
-        } catch (fileError) {
-          console.error("[TS_WORKER] Both data URL and file approaches failed");
-          throw fileError;
-        }
-      }
-    }
-  }
-  
-  private isComplexTypeScriptCode(code: string): boolean {
-    // Consider code complex if it has:
-    // - Template literals (backticks)
-    // - Multiple lines with complex logic
-    // - Async/await patterns
-    // - Multiple imports
-    // - Jupyter-specific APIs
-    const complexPatterns = [
-      /`[^`]*`/,                           // Template literals
-      /await\s+\w+/,                       // Await expressions
-      /import.*\n.*import/,                // Multiple imports
-      /Deno\.jupyter/,                     // Jupyter APIs
-      /\{\s*[^}]*\n[^}]*\}/               // Multi-line objects
-    ];
-    
-    const lineCount = code.split('\n').length;
-    
-    // Consider complex if more than 3 lines or matches any complex pattern
-    return lineCount > 3 || complexPatterns.some(pattern => pattern.test(code));
-  }
-  
-  private async tseval(code: string): Promise<any> {
-    // Wrap code to capture result if needed
-    const wrappedCode = this.wrapCodeForResult(code);
-    
-    // Convert string to UTF-8 bytes then encode to base64
-    const utf8Bytes = new TextEncoder().encode(wrappedCode);
-    const base64Code = encodeBase64(utf8Bytes);
-    const dataUrl = `data:application/typescript;charset=utf-8;base64,${base64Code}`;
-    
-    const module = await import(dataUrl + `?t=${Date.now()}`);
-    return this.extractResult(module);
-  }
-  
-  private async tsevalFile(code: string): Promise<any> {
-    const wrappedCode = this.wrapCodeForResult(code);
-    const tempFilename = `temp_ts_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.ts`;
-    
-    await Deno.writeTextFile(tempFilename, wrappedCode);
-    
-    try {
-      const module = await import(`file://${Deno.cwd()}/${tempFilename}?t=${Date.now()}`);
-      return this.extractResult(module);
-    } finally {
-      // Clean up the temporary file
-      try {
-        await Deno.remove(tempFilename);
-      } catch (cleanupError) {
-        console.warn("[TS_WORKER] Failed to clean up temporary file");
-      }
-    }
-  }
-  
-  private wrapCodeForResult(code: string): string {
-    const lines = code.trim().split('\n');
-    
-    // Check if code already has exports
-    if (/^\s*export\s+/m.test(code)) {
-      // Code already has exports, return as-is
-      return code;
-    }
-    
-    // Don't try to capture results from complex multi-line code with await statements
-    // or object literals that span multiple lines
-    const hasAwait = /\bawait\s+/.test(code);
-    const hasMultiLineObjects = /\{\s*$[\s\S]*\}/.test(code);
-    const lineCount = lines.length;
-    
-    if (hasAwait || hasMultiLineObjects || lineCount > 10) {
-      // For complex code, just add a basic export without trying to capture results
-      return `${code}\n\nexport const result = undefined;`;
-    }
-    
-    // For simpler code, try to find a safe expression to capture
-    let modifiedLines = [...lines];
-    let hasResultCapture = false;
-    
-    // Look for the last non-empty, non-comment line
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      if (line && !line.startsWith('//') && !line.startsWith('/*')) {
-        // Check if it's a safe expression to capture
-        if (this.isSafeExpression(line)) {
-          modifiedLines[i] = `const __result = ${line};`;
-          hasResultCapture = true;
-          break;
-        }
-      }
-    }
-    
-    // Add export statement
-    return `${modifiedLines.join('\n')}\n\nexport const result = ${hasResultCapture ? '__result' : 'undefined'};`;
-  }
-  
-  private isSafeExpression(line: string): boolean {
-    // Don't treat as expression if it:
-    // - Contains object literal syntax that can't be standalone
-    // - Is a statement keyword
-    // - Contains complex object patterns
-    // - Contains incomplete syntax
-    
-    const unsafePatterns = [
-      /^['"]\w+['"]:\s*\{/,               // Object property starting with string key
-      /^['"]\w+['"]:\s*[^,}]+$/,          // String key with value but no proper object
-      /^\w+:\s*\{/,                       // Object property
-      /^(const|let|var|function|class|if|for|while|try|switch|return|throw|break|continue)\b/,
-      /^await\s+\w+\.\w+/,                // Await statements
-      /;\s*$/,                            // Ends with semicolon
-      /\{\s*$/,                           // Incomplete object
-      /\}\s*$/,                           // Incomplete object end
-    ];
-    
-    // Also check if it's not a valid standalone expression
-    if (unsafePatterns.some(pattern => pattern.test(line))) {
-      return false;
-    }
-    
-    // Simple heuristic: should look like an expression
-    // Valid expressions typically don't start with keywords and are complete
-    return this.isExpression(line);
-  }
-  
-  private extractResult(module: any): any {
-    // Try different export patterns
-    if ('result' in module) {
-      return module.result;
-    }
-    if ('default' in module) {
-      return module.default;
-    }
-    // If no specific result, return the module itself
-    return module;
-  }
-  
-  private async executeJavaScriptWithImports(code: string): Promise<any> {
-    // Try blob URL approach first
-    try {
-      const moduleCode = this.wrapAsJavaScriptModule(code);
-      const blob = new Blob([moduleCode], { type: 'application/javascript' });
-      const moduleUrl = URL.createObjectURL(blob);
-      
-      try {
-        const module = await import(moduleUrl + `?t=${Date.now()}`);
-        return this.extractResult(module);
-      } finally {
-        URL.revokeObjectURL(moduleUrl);
-      }
-    } catch (blobError) {
-      // Fallback to temporary file approach
-      const moduleCode = this.wrapAsJavaScriptModule(code);
-      const tempFilename = `temp_js_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.js`;
-      
-      await Deno.writeTextFile(tempFilename, moduleCode);
-      
-      try {
-        const module = await import(`file://${Deno.cwd()}/${tempFilename}?t=${Date.now()}`);
-        return this.extractResult(module);
-      } finally {
-        try {
-          await Deno.remove(tempFilename);
-        } catch (cleanupError) {
-          console.warn("[TS_WORKER] Failed to clean up temporary file");
-        }
-      }
-    }
-  }
-  
-  private wrapAsJavaScriptModule(code: string): string {
-    // Similar to wrapCodeForResult but for JavaScript
-    const lines = code.split('\n');
-    
-    // Check if code already has exports
-    if (/^\s*export\s+/m.test(code)) {
-      return code;
-    }
-    
-    let resultExpression = 'undefined';
-    
-    // Look for the last non-empty, non-comment line
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      if (line && !line.startsWith('//') && !line.startsWith('/*')) {
-        if (this.isExpression(line)) {
-          resultExpression = line;
-          lines[i] = `const __result = ${line};`;
-          break;
-        }
-      }
-    }
-    
-    return `${lines.join('\n')}\n\nexport const result = typeof __result !== 'undefined' ? __result : undefined;`;
-  }
-  
-  private async executeJavaScript(code: string): Promise<any> {
-    // Handle async code
-    if (code.includes('await') || code.includes('async')) {
-      return await this.executeAsync(code);
-    }
-    
-    // Check if it's an expression or statement
-    const trimmed = code.trim();
-    if (this.isExpression(trimmed)) {
-      return eval(trimmed);
-    } else {
-      // Execute as statements and try to capture the last expression
-      return this.executeStatements(code);
-    }
-  }
-  
-  private async executeAsync(code: string): Promise<any> {
-    const lines = code.trim().split('\n').map(line => line.trim()).filter(line => line.length > 0);
-    
-    if (lines.length === 0) {
-      return undefined;
-    }
-    
-    let lastLine = lines[lines.length - 1];
-    
-    // Remove comments from the last line for analysis
-    const commentIndex = lastLine.indexOf('//');
-    if (commentIndex !== -1) {
-      lastLine = lastLine.substring(0, commentIndex).trim();
-    }
-    
-    // Check if the last line is a simple expression
-    const isSimpleExpression = this.isSimpleExpression(lastLine);
-    
-    if (isSimpleExpression) {
-      // Remove the last line and add it as a return statement
-      const codeWithoutLastLine = lines.slice(0, -1).join('\n');
-      const asyncWrapper = `
-        (async () => {
-          ${codeWithoutLastLine}
-          return (${lastLine});
-        })()
-      `;
-      return await eval(asyncWrapper);
-    } else {
-      // Execute all code normally
-      const asyncWrapper = `
-        (async () => {
-          ${code}
-          return undefined;
-        })()
-      `;
-      return await eval(asyncWrapper);
-    }
-  }
-  
-  private isExpression(code: string): boolean {
-    const statementKeywords = ['const', 'let', 'var', 'function', 'class', 'if', 'for', 'while', 'try'];
-    const hasStatementKeyword = statementKeywords.some(keyword => 
-      new RegExp(`\\b${keyword}\\b`).test(code)
-    );
-    return !hasStatementKeyword && !code.endsWith(';') && !code.includes('\n');
-  }
-  
-  private isSimpleExpression(line: string): boolean {
-    return !!line && 
-      !line.endsWith(';') && 
-      !line.endsWith('}') && 
-      !line.endsWith(')') &&
-      !line.startsWith('const') && 
-      !line.startsWith('let') && 
-      !line.startsWith('var') && 
-      !line.startsWith('function') &&
-      !line.startsWith('class') && 
-      !line.startsWith('if') &&
-      !line.startsWith('for') && 
-      !line.startsWith('while') &&
-      !line.startsWith('try') && 
-      !line.startsWith('switch') &&
-      !line.startsWith('return') && 
-      !line.startsWith('throw') &&
-      !line.startsWith('break') && 
-      !line.startsWith('continue') &&
-      !line.startsWith('await') &&
-      !line.includes('=') &&
-      !line.includes('{') &&
-      !line.includes('(');
-  }
-  
-  private executeStatements(code: string): any {
-    // Remove common indentation from all lines to handle indented code blocks
-    const cleanedCode = this.removeCommonIndentation(code);
-    
-    // Handle JavaScript code - try to capture last expression
-    const statements = cleanedCode.split(/[;\n]/).map(s => s.trim()).filter(s => s.length > 0);
-    
-    if (statements.length === 0) {
-      return undefined;
-    }
-
-    const lastStatement = statements[statements.length - 1];
-    const codeWithoutLastStatement = statements.slice(0, -1).join(';\n');
-    
-    // If the last statement looks like an expression, capture it
-    if (this.isStatementExpression(lastStatement)) {
-      const wrapper = `
-        (() => {
-          ${codeWithoutLastStatement ? codeWithoutLastStatement + ';' : ''}
-          return (${lastStatement});
-        })()
-      `;
-      return eval(wrapper);
-    } else {
-      // Execute all statements normally
-      return eval(`(() => { ${cleanedCode}; return undefined; })()`);
-    }
-  }
-  
-  private removeCommonIndentation(code: string): string {
-    const lines = code.split('\n');
-    const nonEmptyLines = lines.filter(line => line.trim().length > 0);
-    
-    if (nonEmptyLines.length === 0) {
-      return code;
-    }
-    
-    // Find the minimum indentation level among non-empty lines
-    const minIndent = Math.min(...nonEmptyLines.map(line => {
-      const match = line.match(/^[ \t]*/);
-      return match ? match[0].length : 0;
-    }));
-    
-    // Remove the common indentation from all lines
-    const deindentedLines = lines.map(line => {
-      if (line.trim().length === 0) return line;
-      return line.slice(minIndent);
-    });
-    
-    return deindentedLines.join('\n').trim();
-  }
-  
-  private isStatementExpression(statement: string): boolean {
-    const statementKeywords = [
-      'const', 'let', 'var', 'function', 'class', 'if', 'for', 
-      'while', 'try', 'switch', 'return', 'throw', 'break', 'continue'
-    ];
-    
-    return !!statement && !statementKeywords.some(keyword => statement.startsWith(keyword));
-  }
-  
-  getExecutionCount(): number {
-    return this.executionCount;
-  }
-}
-
 // Main TypeScript Kernel
 class TypeScriptKernel {
   private eventEmitter = new EventEmitter();
   private consoleCapture = new ConsoleCapture(this.eventEmitter);
-  private codeExecutor = new CodeExecutor();
+  private tseval: ReturnType<typeof createTSEvalContext>;
   private eventPort: MessagePort | null = null;
   private initialized = false;
   private pathMappings: Map<string, string> = new Map();
@@ -540,6 +112,20 @@ class TypeScriptKernel {
     this.setupEventForwarding();
     this.setupJupyterEventForwarding();
     this.setupFileSystemInterception();
+    
+    // Initialize tseval context with console proxy
+    const consoleProxy = {
+      log: (...args: any[]) => console.log("[worker]", ...args),
+      error: (...args: any[]) => console.error("[worker]", ...args),
+      warn: (...args: any[]) => console.warn("[worker]", ...args),
+      info: (...args: any[]) => console.info("[worker]", ...args),
+    };
+    
+    this.tseval = createTSEvalContext({
+      context: {
+        console: consoleProxy,
+      }
+    });
   }
   
   setEventPort(port: MessagePort): void {
@@ -564,8 +150,15 @@ class TypeScriptKernel {
     // Handle environment variables if provided
     if (options?.env) {
       this.environmentVariables = { ...options.env };
-      // Set up global ENVIRONS object for TypeScript/JavaScript
+      // Set up global ENVIRONS object for TypeScript/JavaScript and add to context
       (globalThis as any).ENVIRONS = { ...this.environmentVariables };
+      
+      // Add environment variables to tseval context
+      await this.tseval(`
+        globalThis.ENVIRONS = ${JSON.stringify(this.environmentVariables)};
+        const ENVIRONS = globalThis.ENVIRONS;
+      `);
+      
       console.log(`[TS_WORKER] Set ${Object.keys(this.environmentVariables).length} environment variables in ENVIRONS`);
     }
     
@@ -584,10 +177,12 @@ class TypeScriptKernel {
       await this.initialize();
     }
     
+    this.executionCount++;
     this.consoleCapture.start();
     
     try {
-      const result = await this.codeExecutor.execute(code);
+      // Use tseval for execution
+      const { result, mod } = await this.tseval(code);
       
       // Emit execution result if we have a meaningful result
       if (result !== undefined) {
@@ -596,10 +191,16 @@ class TypeScriptKernel {
       
       return { success: true, result };
     } catch (error) {
+      console.error("[TS_WORKER] Execution error:", error);
+      
       this.emitExecutionError(error);
+      
+      // Ensure error is properly structured
+      const structuredError = error instanceof Error ? error : new Error(String(error));
+      
       return { 
         success: false, 
-        error: error instanceof Error ? error : new Error(String(error))
+        error: structuredError
       };
     } finally {
       this.consoleCapture.stop();
@@ -616,6 +217,22 @@ class TypeScriptKernel {
   
   async inputReply(content: { value: string }): Promise<void> {
     console.warn("[TS_WORKER] Input reply not implemented");
+  }
+  
+  // Get execution history from tseval context
+  getHistory(): string[] {
+    return this.tseval.getHistory();
+  }
+  
+  // Get current variables from tseval context
+  getVariables(): string[] {
+    return this.tseval.getVariables();
+  }
+  
+  // Reset the execution context
+  resetContext(): void {
+    this.tseval.reset();
+    this.executionCount = 0;
   }
   
   private setupEventForwarding(): void {
@@ -724,7 +341,7 @@ class TypeScriptKernel {
       const formattedResult = jupyter.formatResult(result);
       
       this.eventEmitter.emit(KernelEvents.EXECUTE_RESULT, {
-        execution_count: this.codeExecutor.getExecutionCount(),
+        execution_count: this.executionCount,
         data: formattedResult,
         metadata: {}
       });
@@ -790,7 +407,10 @@ const kernelInterface = {
   execute: (code: string, parent?: any) => kernel.execute(code, parent),
   isInitialized: () => kernel.isInitialized(),
   inputReply: (content: { value: string }) => kernel.inputReply(content),
-  getStatus: () => kernel.getStatus()
+  getStatus: () => kernel.getStatus(),
+  getHistory: () => kernel.getHistory(),
+  getVariables: () => kernel.getVariables(),
+  resetContext: () => kernel.resetContext()
 };
 
 Comlink.expose(kernelInterface); 

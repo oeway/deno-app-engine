@@ -1,6 +1,5 @@
 // deno run --allow-all tseval.ts
 import { encodeBase64 } from "jsr:@std/encoding/base64";
-import * as babel from "npm:@babel/core";
 import * as parser from "npm:@babel/parser";
 import traverseModule from "npm:@babel/traverse";
 const traverse = traverseModule.default;
@@ -15,111 +14,6 @@ interface EvalContext extends Record<string, any> {
   __meta: Record<string, VariableMeta>;
   __history: string[];
 }
-
-// ✅ Babel plugin that rewrites top-level vars to context assignments with kind tracking
-const rewriteTopLevelToContext = ({ types: t }: { types: any }) => ({
-  visitor: {
-    Program(path: any, state: any) {
-      const contextId = t.identifier(state.opts?.contextIdentifier || "context");
-      const metaId = t.memberExpression(contextId, t.identifier("__meta"));
-      const ensureMeta = t.expressionStatement(
-        t.assignmentExpression(
-          "=",
-          metaId,
-          t.logicalExpression("||", metaId, t.objectExpression([]))
-        )
-      );
-
-      const newBody = [ensureMeta];
-
-      for (const stmt of path.node.body) {
-        if (t.isVariableDeclaration(stmt)) {
-          for (const decl of stmt.declarations) {
-            if (t.isIdentifier(decl.id)) {
-              newBody.push(
-                t.expressionStatement(
-                  t.assignmentExpression(
-                    "=",
-                    t.memberExpression(contextId, decl.id),
-                    decl.init || t.identifier("undefined")
-                  )
-                ),
-                t.expressionStatement(
-                  t.assignmentExpression(
-                    "=",
-                    t.memberExpression(metaId, t.stringLiteral(decl.id.name), true),
-                    t.objectExpression([t.objectProperty(t.identifier("kind"), t.stringLiteral(stmt.kind))])
-                  )
-                )
-              );
-            }
-          }
-        } else if (t.isFunctionDeclaration(stmt) && stmt.id) {
-          newBody.push(
-            t.expressionStatement(
-              t.assignmentExpression(
-                "=",
-                t.memberExpression(contextId, stmt.id),
-                t.functionExpression(stmt.id, stmt.params, stmt.body, stmt.generator, stmt.async)
-              )
-            ),
-            t.expressionStatement(
-              t.assignmentExpression(
-                "=",
-                t.memberExpression(metaId, t.stringLiteral(stmt.id.name), true),
-                t.objectExpression([t.objectProperty(t.identifier("kind"), t.stringLiteral("function"))])
-              )
-            )
-          );
-        } else if (t.isClassDeclaration(stmt) && stmt.id) {
-          newBody.push(
-            t.expressionStatement(
-              t.assignmentExpression(
-                "=",
-                t.memberExpression(contextId, stmt.id),
-                t.classExpression(stmt.id, stmt.superClass, stmt.body)
-              )
-            ),
-            t.expressionStatement(
-              t.assignmentExpression(
-                "=",
-                t.memberExpression(metaId, t.stringLiteral(stmt.id.name), true),
-                t.objectExpression([t.objectProperty(t.identifier("kind"), t.stringLiteral("class"))])
-              )
-            )
-          );
-        } else if (t.isExportNamedDeclaration(stmt) && stmt.declaration) {
-          if (t.isVariableDeclaration(stmt.declaration)) {
-            for (const decl of stmt.declaration.declarations) {
-              if (t.isIdentifier(decl.id)) {
-                newBody.push(
-                  t.expressionStatement(
-                    t.assignmentExpression(
-                      "=",
-                      t.memberExpression(contextId, decl.id),
-                      decl.init || t.identifier("undefined")
-                    )
-                  ),
-                  t.expressionStatement(
-                    t.assignmentExpression(
-                      "=",
-                      t.memberExpression(metaId, t.stringLiteral(decl.id.name), true),
-                      t.objectExpression([t.objectProperty(t.identifier("kind"), t.stringLiteral(stmt.declaration.kind))])
-                    )
-                  )
-                );
-              }
-            }
-          }
-        } else {
-          newBody.push(stmt);
-        }
-      }
-
-      path.node.body = newBody;
-    },
-  },
-});
 
 export function createTSEvalContext(options?: { context?: Record<string, any> }) {
   const context: EvalContext = options?.context as EvalContext ?? {} as EvalContext;
@@ -143,41 +37,122 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
   const evaluate = async function tseval(code: string): Promise<{ result?: any, mod?: any }> {
     context.__history.push(code);
 
-    const prelude = Object.entries(context.__meta)
-      .map(([key, meta]: [string, VariableMeta]) => {
-        if (meta.kind === "function") return `function ${key}(...args) { return context["${key}"].apply(this, args); }`;
-        if (meta.kind === "class") return `const ${key} = context["${key}"];`;
-        return `${meta.kind} ${key} = context["${key}"];`;
-      })
-      .join("\n");
-
-    let lastExprCode = "";
+    // Parse the code to detect new variable declarations and trailing expressions
     const ast = parser.parse(code, {
       sourceType: "module",
       plugins: ["topLevelAwait", "typescript"]
     });
 
+    // Collect variable names that will be defined in this execution
+    const newVariables = new Set<string>();
+    let lastExprCode = "";
+    
     traverse(ast, {
       Program(path: any) {
         const body = path.node.body;
+        
+        // Collect all variable declarations in this execution
+        for (const stmt of body) {
+          if (stmt.type === "VariableDeclaration") {
+            for (const decl of stmt.declarations) {
+              if (decl.id && decl.id.type === "Identifier") {
+                newVariables.add(decl.id.name);
+                // Store the kind of declaration
+                context.__meta[decl.id.name] = { kind: stmt.kind };
+              }
+            }
+          } else if (stmt.type === "FunctionDeclaration" && stmt.id) {
+            newVariables.add(stmt.id.name);
+            context.__meta[stmt.id.name] = { kind: "function" };
+          } else if (stmt.type === "ClassDeclaration" && stmt.id) {
+            newVariables.add(stmt.id.name);
+            context.__meta[stmt.id.name] = { kind: "class" };
+          } else if (stmt.type === "ImportDeclaration") {
+            // Handle different types of import statements
+            for (const specifier of stmt.specifiers) {
+              if (specifier.type === "ImportDefaultSpecifier") {
+                // import lodash from "npm:lodash"
+                newVariables.add(specifier.local.name);
+                context.__meta[specifier.local.name] = { kind: "const" };
+              } else if (specifier.type === "ImportSpecifier") {
+                // import { encodeBase64 } from "jsr:@std/encoding/base64"
+                newVariables.add(specifier.local.name);
+                context.__meta[specifier.local.name] = { kind: "const" };
+              } else if (specifier.type === "ImportNamespaceSpecifier") {
+                // import * as path from "jsr:@std/path"
+                newVariables.add(specifier.local.name);
+                context.__meta[specifier.local.name] = { kind: "const" };
+              }
+            }
+          }
+        }
+        
+        // Check if the last statement is an expression (for return value)
         const lastStmt = body[body.length - 1];
         if (lastStmt?.type === "ExpressionStatement") {
-          lastExprCode = code.slice(lastStmt.start!, lastStmt.end!);
-          body.pop();
+          // Get just the expression part, not the entire statement (which includes semicolon)
+          lastExprCode = code.slice(lastStmt.expression.start!, lastStmt.expression.end!);
         }
       }
     });
 
-    const transformed = await babel.transformFromAstAsync(ast, code, {
-      plugins: [[rewriteTopLevelToContext, { contextIdentifier: "context" }]],
-      parserOpts: { sourceType: "module", plugins: ["topLevelAwait", "typescript"] },
-    });
+    // Build prelude - make existing context variables available as regular variables
+    // But exclude variables that are being redeclared in this execution
+    const prelude = Object.entries(context.__meta)
+      .filter(([key]) => !newVariables.has(key)) // Only include variables NOT being redeclared
+      .map(([key, meta]: [string, VariableMeta]) => {
+        if (meta.kind === "function") {
+          return `function ${key}(...args) { return context["${key}"].apply(this, args); }`;
+        } else if (meta.kind === "class") {
+          return `const ${key} = context["${key}"];`;
+        } else {
+          return `${meta.kind} ${key} = context["${key}"];`;
+        }
+      })
+      .join("\n");
 
-    const trailingCode = lastExprCode ? `context._ = (${lastExprCode});` : "";
-    const finalCode = `const context = globalThis.__tseval_context__;
+    // Build trailing code - capture new variables and result
+    const captureVariables = Array.from(newVariables)
+      .map(varName => `context["${varName}"] = ${varName};`)
+      .join("\n");
+
+    // If there's a trailing expression, modify the code to capture its result without re-executing
+    let finalCode;
+    if (lastExprCode) {
+      // Be more careful about replacement - only replace at the end of the code
+      // and make sure we're not replacing part of an assignment or declaration
+      const codeBeforeExpression = code.slice(0, code.lastIndexOf(lastExprCode));
+      const codeAfterExpression = code.slice(code.lastIndexOf(lastExprCode) + lastExprCode.length);
+      
+      // Only do the replacement if this is truly a trailing expression (no significant code after it)
+      if (codeAfterExpression.trim() === '' || codeAfterExpression.trim() === ';') {
+        const modifiedCode = codeBeforeExpression + `(context._ = (${lastExprCode}))` + codeAfterExpression;
+        finalCode = `const context = globalThis.__tseval_context__;
 ${prelude}
-${transformed?.code}
-${trailingCode}`;
+
+${modifiedCode}
+
+${captureVariables}`;
+      } else {
+        // Fall back to the old approach if the expression is not at the end
+        finalCode = `const context = globalThis.__tseval_context__;
+${prelude}
+
+${code}
+
+${captureVariables}
+context._ = (${lastExprCode});`;
+      }
+    } else {
+      finalCode = `const context = globalThis.__tseval_context__;
+${prelude}
+
+${code}
+
+${captureVariables}`;
+    }
+
+
 
     const encoded = encodeBase64(finalCode);
     (globalThis as any).__tseval_context__ = context;
