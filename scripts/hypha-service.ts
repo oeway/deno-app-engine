@@ -680,7 +680,7 @@ async function startHyphaService(options: {
       return { success: true };
     },
     
-    getKernelInfo({kernelId}: {kernelId: string}, context: {user: any, ws: string}) {
+    async getKernelInfo({kernelId}: {kernelId: string}, context: {user: any, ws: string}) {
         kernelId = ensureKernelId(kernelId, context.ws);
       // Verify kernel belongs to user's namespace
       const kernel = kernelManager.getKernel(kernelId);
@@ -767,6 +767,81 @@ async function startHyphaService(options: {
       return { 
         success: true, 
         message: "Kernel execution interrupted",
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async getInactivityTimerStatus({kernelId}: {kernelId: string}, context: {user: any, ws: string}) {
+      kernelId = ensureKernelId(kernelId, context.ws);
+      
+      // Verify kernel belongs to user's namespace
+      const kernel = kernelManager.getKernel(kernelId);
+      if (!kernel) {
+        throw new Error("Kernel not found or access denied");
+      }
+      
+      const lastActivityTime = kernelManager.getLastActivityTime(kernelId);
+      const timeUntilShutdown = kernelManager.getTimeUntilShutdown(kernelId);
+      const inactivityTimeout = kernelManager.getInactivityTimeout(kernelId);
+      
+      return {
+        lastActivityTime: lastActivityTime ? new Date(lastActivityTime).toISOString() : undefined,
+        timeUntilShutdown: timeUntilShutdown,
+        inactivityTimeout: inactivityTimeout,
+        isTimeoutEnabled: (inactivityTimeout && inactivityTimeout > 0),
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async setInactivityTimeout({kernelId, timeout}: {kernelId: string, timeout: number}, context: {user: any, ws: string}) {
+      // Only ${server.config.workspace} workspace can modify inactivity timeouts
+      if (context.ws !== server.config.workspace) {
+        throw new Error(`Permission denied: Only ${server.config.workspace} workspace can modify inactivity timeouts. Current workspace: ${context.ws}`);
+      }
+      
+      kernelId = ensureKernelId(kernelId, context.ws);
+      
+      // Verify kernel belongs to user's namespace
+      const kernel = kernelManager.getKernel(kernelId);
+      if (!kernel) {
+        throw new Error("Kernel not found or access denied");
+      }
+      
+      const success = kernelManager.setInactivityTimeout(kernelId, timeout);
+      
+      if (!success) {
+        throw new Error("Failed to set inactivity timeout");
+      }
+      
+      return { 
+        success: true, 
+        message: "Inactivity timeout updated",
+        timeout: timeout,
+        timestamp: new Date().toISOString()
+      };
+    },
+
+    async resetInactivityTimer({kernelId}: {kernelId: string}, context: {user: any, ws: string}) {
+      kernelId = ensureKernelId(kernelId, context.ws);
+      
+      // Verify kernel belongs to user's namespace
+      const kernel = kernelManager.getKernel(kernelId);
+      if (!kernel) {
+        throw new Error("Kernel not found or access denied");
+      }
+      
+      // Reset the activity timer by pinging the kernel
+      const success = kernelManager.pingKernel(kernelId);
+      
+      if (!success) {
+        throw new Error("Failed to reset inactivity timer");
+      }
+      
+      console.log(`Inactivity timer reset for kernel ${kernelId} by user in workspace ${context.ws}`);
+      return { 
+        success: true, 
+        message: "Inactivity timer reset successfully",
+        kernelId: kernelId,
         timestamp: new Date().toISOString()
       };
     },
@@ -2139,9 +2214,9 @@ async function startHyphaService(options: {
 
     async notifyAppUpdates(context: {user: any, ws: string}) {
       try {
-        // Check permission - only hypha-agents workspace can manage apps
-        if (context.ws !== "hypha-agents") {
-          throw new Error(`Permission denied: Only hypha-agents workspace can manage deno-apps. Current workspace: ${context.ws}`);
+        // Check permission - only ${server.config.workspace} workspace can manage apps
+        if (context.ws !== server.config.workspace) {
+          throw new Error(`Permission denied: Only ${server.config.workspace} workspace can manage deno-apps. Current workspace: ${context.ws}`);
         }
         
         console.log("🔄 Checking for deno-app updates...");
@@ -2278,9 +2353,9 @@ async function startHyphaService(options: {
 
     async reloadApp({appId}: {appId: string}, context: {user: any, ws: string}) {
       try {
-        // Check permission - only hypha-agents workspace can manage apps
-        if (context.ws !== "hypha-agents") {
-          throw new Error(`Permission denied: Only hypha-agents workspace can reload deno-apps. Current workspace: ${context.ws}`);
+        // Check permission - only ${server.config.workspace} workspace can manage apps
+        if (context.ws !== server.config.workspace) {
+          throw new Error(`Permission denied: Only ${server.config.workspace} workspace can reload deno-apps. Current workspace: ${context.ws}`);
         }
         
         console.log(`🔄 Reloading deno-app: ${appId}`);
@@ -2410,9 +2485,9 @@ async function startHyphaService(options: {
 
     async killApp({appId}: {appId: string}, context: {user: any, ws: string}) {
       try {
-        // Check permission - only hypha-agents workspace can kill apps
-        if (context.ws !== "hypha-agents") {
-          throw new Error(`Permission denied: Only hypha-agents workspace can kill deno-apps. Current workspace: ${context.ws}`);
+        // Check permission - only ${server.config.workspace} workspace can kill apps
+        if (context.ws !== server.config.workspace) {
+          throw new Error(`Permission denied: Only ${server.config.workspace} workspace can kill deno-apps. Current workspace: ${context.ws}`);
         }
         
         console.log(`🔪 Killing deno-app: ${appId}`);
@@ -2628,9 +2703,9 @@ async function startHyphaService(options: {
 
     async executeInApp({appId, code}: {appId: string, code: string}, context: {user: any, ws: string}) {
       try {
-        // Check permission - only hypha-agents workspace can execute code in apps
-        if (context.ws !== "hypha-agents") {
-          throw new Error(`Permission denied: Only hypha-agents workspace can execute code in deno-apps. Current workspace: ${context.ws}`);
+        // Check permission - only ${server.config.workspace} workspace can execute code in apps
+        if (context.ws !== server.config.workspace) {
+          throw new Error(`Permission denied: Only ${server.config.workspace} workspace can execute code in deno-apps. Current workspace: ${context.ws}`);
         }
         
         console.log(`🔧 Executing code in deno-app: ${appId}`);
@@ -2701,8 +2776,8 @@ async function startHyphaService(options: {
         console.log(`📜 Getting kernel logs for app: ${appId}`);
         
         // check permission
-        if (context.ws !== "hypha-agents") {
-          throw new Error(`Permission denied: Only hypha-agents workspace can get kernel logs for deno-apps. Current workspace: ${context.ws}`);
+        if (context.ws !== server.config.workspace) {
+          throw new Error(`Permission denied: Only ${server.config.workspace} workspace can get kernel logs for deno-apps. Current workspace: ${context.ws}`);
         }
 
         const appKernelId = `deno-apps:${appId}`;

@@ -1971,7 +1971,28 @@ export class KernelManager extends EventEmitter {
     // Always clear any existing timer first
     this.clearInactivityTimeout(id);
     
-    // Create a timer to destroy the kernel after the timeout
+    // Calculate remaining time based on last activity
+    const lastActivity = this.lastActivityTime.get(id) || Date.now();
+    const elapsed = Date.now() - lastActivity;
+    const remainingTime = Math.max(0, timeout - elapsed);
+    
+    // If no time remaining, destroy immediately
+    if (remainingTime === 0) {
+      // Check if the kernel has ongoing executions before shutting down
+      if (this.hasOngoingExecutions(id)) {
+        // Reset the timer to check again later
+        this.setupInactivityTimeout(id, timeout);
+        return;
+      }
+      
+      // Destroy immediately
+      this.destroyKernel(id).catch(error => {
+        console.error(`Error destroying inactive kernel ${id}:`, error);
+      });
+      return;
+    }
+    
+    // Create a timer to destroy the kernel after the remaining timeout
     const timer = setTimeout(() => {
       // Check if the kernel has ongoing executions before shutting down
       if (this.hasOngoingExecutions(id)) {
@@ -1983,7 +2004,7 @@ export class KernelManager extends EventEmitter {
       this.destroyKernel(id).catch(error => {
         console.error(`Error destroying inactive kernel ${id}:`, error);
       });
-    }, timeout);
+    }, remainingTime);
     
     // Store the timer ID
     this.inactivityTimers.set(id, timer);
