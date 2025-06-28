@@ -1065,6 +1065,100 @@ export class KernelManager extends EventEmitter {
           } catch (error) {
             return "unknown";
           }
+        },
+        // Map completion methods
+        complete: async (code: string, cursor_pos: number, parent?: any) => {
+          try {
+            if (typeof kernelProxy.complete === 'function') {
+              return await kernelProxy.complete(code, cursor_pos, parent);
+            } else {
+              return { status: 'error', error: 'Completion not supported' };
+            }
+          } catch (error) {
+            return { status: 'error', error: String(error) };
+          }
+        },
+        inspect: async (code: string, cursor_pos: number, detail_level: 0 | 1, parent?: any) => {
+          try {
+            if (typeof kernelProxy.inspect === 'function') {
+              return await kernelProxy.inspect(code, cursor_pos, detail_level, parent);
+            } else {
+              return { status: 'error', error: 'Inspection not supported' };
+            }
+          } catch (error) {
+            return { status: 'error', error: String(error) };
+          }
+        },
+        isComplete: async (code: string, parent?: any) => {
+          try {
+            if (typeof kernelProxy.isComplete === 'function') {
+              return await kernelProxy.isComplete(code, parent);
+            } else {
+              return { status: 'unknown' };
+            }
+          } catch (error) {
+            return { status: 'error', error: String(error) };
+          }
+        },
+        // Map interrupt methods
+        interrupt: async () => {
+          try {
+            if (typeof kernelProxy.interrupt === 'function') {
+              return await kernelProxy.interrupt();
+            } else {
+              return false;
+            }
+          } catch (error) {
+            return false;
+          }
+        },
+        setInterruptBuffer: (buffer: Uint8Array) => {
+          try {
+            if (typeof kernelProxy.setInterruptBuffer === 'function') {
+              kernelProxy.setInterruptBuffer(buffer);
+            }
+          } catch (error) {
+            console.warn('Failed to set interrupt buffer:', error);
+          }
+        },
+        // Map comm methods
+        commInfo: async (target_name: string | null, parent?: any) => {
+          try {
+            if (typeof kernelProxy.commInfo === 'function') {
+              return await kernelProxy.commInfo(target_name, parent);
+            } else {
+              return { comms: {}, status: 'ok' };
+            }
+          } catch (error) {
+            return { comms: {}, status: 'error', error: String(error) };
+          }
+        },
+        commOpen: async (content: any, parent?: any) => {
+          try {
+            if (typeof kernelProxy.commOpen === 'function') {
+              return await kernelProxy.commOpen(content, parent);
+            }
+          } catch (error) {
+            console.warn('Failed to open comm:', error);
+          }
+        },
+        commMsg: async (content: any, parent?: any) => {
+          try {
+            if (typeof kernelProxy.commMsg === 'function') {
+              return await kernelProxy.commMsg(content, parent);
+            }
+          } catch (error) {
+            console.warn('Failed to send comm message:', error);
+          }
+        },
+        commClose: async (content: any, parent?: any) => {
+          try {
+            if (typeof kernelProxy.commClose === 'function') {
+              return await kernelProxy.commClose(content, parent);
+            }
+          } catch (error) {
+            console.warn('Failed to close comm:', error);
+          }
         }
       } as unknown as IKernel,
       mode: KernelMode.WORKER,

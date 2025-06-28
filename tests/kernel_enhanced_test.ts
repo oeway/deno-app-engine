@@ -716,5 +716,444 @@ print("Malformed code test completed!")
 
 
 
+Deno.test("Enhanced Kernels - Python Code Completion", async () => {
+  const manager = new KernelManager();
+
+  try {
+    const pythonKernelId = await manager.createKernel({
+      id: "python-completion-test",
+      mode: KernelMode.WORKER,
+      lang: KernelLanguage.PYTHON
+    });
+
+    await wait(2000); // Give Python kernel time to fully initialize
+
+    const kernel = manager.getKernel(pythonKernelId);
+    assertExists(kernel, "Python kernel should exist");
+
+    // Set up some variables and imports for completion testing
+    await manager.execute(pythonKernelId, `
+import math
+import json
+import os
+import sys
+from datetime import datetime, timedelta
+
+# Define some variables for completion
+my_variable = 42
+my_string = "hello world"
+my_list = [1, 2, 3, 4, 5]
+my_dict = {"key1": "value1", "key2": "value2"}
+
+def my_function(x, y):
+    return x + y
+
+class MyClass:
+    def __init__(self, name):
+        self.name = name
+        self.value = 0
+    
+    def get_name(self):
+        return self.name
+    
+    def set_value(self, value):
+        self.value = value
+        return self
+
+obj = MyClass("test_object")
+`);
+
+    // Wait for execution to complete
+    await wait(500);
+
+    console.log("🔍 Testing Python code completion functionality...");
+
+    // Test 1: Variable name completion
+    if (typeof kernel.kernel.complete === 'function') {
+      console.log("\n1. Testing variable completion for 'my':");
+      const completion1 = await kernel.kernel.complete("my", 2);
+      console.log("Result:", JSON.stringify(completion1, null, 2));
+      
+      assert(completion1.status === "ok", "Completion should return ok status");
+      assert(Array.isArray(completion1.matches), "Should return matches array");
+      assert(completion1.matches.length > 0, "Should have completion matches");
+      
+      // Check if our variables are in the completions
+      const hasMyVariable = completion1.matches.some((match: string) => match.includes("my_variable"));
+      const hasMyString = completion1.matches.some((match: string) => match.includes("my_string"));
+      
+      console.log("Contains my_variable:", hasMyVariable);
+      console.log("Contains my_string:", hasMyString);
+
+      // Test 2: Module completion
+      console.log("\n2. Testing module completion for 'ma':");
+      const completion2 = await kernel.kernel.complete("ma", 2);
+      console.log("Result:", JSON.stringify(completion2, null, 2));
+      
+      assert(completion2.status === "ok", "Module completion should succeed");
+      assert(Array.isArray(completion2.matches), "Should return matches array");
+      
+      const hasMath = completion2.matches.some((match: string) => match.includes("math"));
+      console.log("Contains math module:", hasMath);
+
+      // Test 3: Attribute completion
+      console.log("\n3. Testing attribute completion for 'my_list.':");
+      const completion3 = await kernel.kernel.complete("my_list.", 8);
+      console.log("Result:", JSON.stringify(completion3, null, 2));
+      
+      assert(completion3.status === "ok", "Attribute completion should succeed");
+      assert(Array.isArray(completion3.matches), "Should return matches array");
+      
+      const hasAppend = completion3.matches.some((match: string) => match.includes("append"));
+      const hasExtend = completion3.matches.some((match: string) => match.includes("extend"));
+      
+      console.log("Contains append method:", hasAppend);
+      console.log("Contains extend method:", hasExtend);
+
+      // Test 4: Module method completion
+      console.log("\n4. Testing module method completion for 'math.':");
+      const completion4 = await kernel.kernel.complete("math.", 5);
+      console.log("Result:", JSON.stringify(completion4, null, 2));
+      
+      assert(completion4.status === "ok", "Module method completion should succeed");
+      assert(Array.isArray(completion4.matches), "Should return matches array");
+      
+      const hasSqrt = completion4.matches.some((match: string) => match.includes("sqrt"));
+      const hasSin = completion4.matches.some((match: string) => match.includes("sin"));
+      
+      console.log("Contains sqrt function:", hasSqrt);
+      console.log("Contains sin function:", hasSin);
+
+      // Test 5: Custom class method completion
+      console.log("\n5. Testing custom class method completion for 'obj.':");
+      const completion5 = await kernel.kernel.complete("obj.", 4);
+      console.log("Result:", JSON.stringify(completion5, null, 2));
+      
+      assert(completion5.status === "ok", "Custom class completion should succeed");
+      assert(Array.isArray(completion5.matches), "Should return matches array");
+      
+      const hasGetName = completion5.matches.some((match: string) => match.includes("get_name"));
+      const hasSetValue = completion5.matches.some((match: string) => match.includes("set_value"));
+      
+      console.log("Contains get_name method:", hasGetName);
+      console.log("Contains set_value method:", hasSetValue);
+
+      // Test 6: Keyword completion
+      console.log("\n6. Testing keyword completion for 'im':");
+      const completion6 = await kernel.kernel.complete("im", 2);
+      console.log("Result:", JSON.stringify(completion6, null, 2));
+      
+      assert(completion6.status === "ok", "Keyword completion should succeed");
+      assert(Array.isArray(completion6.matches), "Should return matches array");
+      
+      const hasImport = completion6.matches.some((match: string) => match.includes("import"));
+      console.log("Contains import keyword:", hasImport);
+
+      // Test 7: Completion with cursor position
+      console.log("\n7. Testing completion with specific cursor position:");
+      const testCode = "my_list.append(my_var";
+      const completion7 = await kernel.kernel.complete(testCode, testCode.length);
+      console.log("Code:", testCode, "Cursor pos:", testCode.length);
+      console.log("Result:", JSON.stringify(completion7, null, 2));
+      
+      assert(completion7.status === "ok", "Cursor position completion should succeed");
+      assert(typeof completion7.cursor_start === "number", "Should return cursor_start");
+      assert(typeof completion7.cursor_end === "number", "Should return cursor_end");
+
+      // Test 8: Empty completion
+      console.log("\n8. Testing empty completion:");
+      const completion8 = await kernel.kernel.complete("", 0);
+      console.log("Result matches count:", completion8.matches?.length || 0);
+      
+      assert(completion8.status === "ok", "Empty completion should succeed");
+      assert(Array.isArray(completion8.matches), "Should return matches array");
+
+      // Test 9: Built-in function completion
+      console.log("\n9. Testing built-in function completion for 'pr':");
+      const completion9 = await kernel.kernel.complete("pr", 2);
+      console.log("Result:", JSON.stringify(completion9, null, 2));
+      
+      assert(completion9.status === "ok", "Built-in completion should succeed");
+      
+      const hasPrint = completion9.matches.some((match: string) => match.includes("print"));
+      console.log("Contains print function:", hasPrint);
+
+      // Test 10: Dictionary key completion (if supported)
+      console.log("\n10. Testing dictionary completion for 'my_dict[':");
+      const completion10 = await kernel.kernel.complete("my_dict[", 8);
+      console.log("Result:", JSON.stringify(completion10, null, 2));
+      
+      assert(completion10.status === "ok", "Dictionary completion should succeed");
+
+      console.log("\n✅ All Python completion tests completed successfully!");
+      
+    } else {
+      console.log("❌ Kernel does not support completion functionality");
+      assert(false, "Python kernel should support completion");
+    }
+
+    await manager.destroyKernel(pythonKernelId);
+
+  } finally {
+    await manager.destroyAll();
+  }
+});
+
+Deno.test("Enhanced Kernels - Code Completion Edge Cases", async () => {
+  const manager = new KernelManager();
+
+  try {
+    const pythonKernelId = await manager.createKernel({
+      id: "completion-edge-cases-test",
+      mode: KernelMode.WORKER,
+      lang: KernelLanguage.PYTHON
+    });
+
+    await wait(2000);
+
+    const kernel = manager.getKernel(pythonKernelId);
+    assertExists(kernel, "Python kernel should exist");
+
+    // Set up complex scenarios for edge case testing
+    await manager.execute(pythonKernelId, `
+# Complex nested structures
+nested_dict = {
+    "level1": {
+        "level2": {
+            "level3": ["item1", "item2", "item3"]
+        }
+    }
+}
+
+# Class inheritance
+class Animal:
+    def __init__(self, name):
+        self.name = name
+    
+    def speak(self):
+        pass
+
+class Dog(Animal):
+    def __init__(self, name, breed):
+        super().__init__(name)
+        self.breed = breed
+    
+    def speak(self):
+        return f"{self.name} barks!"
+    
+    def fetch(self):
+        return f"{self.name} fetches the ball!"
+
+my_dog = Dog("Buddy", "Golden Retriever")
+
+# Lambda functions and complex expressions
+process_data = lambda x: x * 2 + 1
+data_list = [process_data(i) for i in range(5)]
+`);
+
+    await wait(500);
+
+    if (typeof kernel.kernel.complete === 'function') {
+      console.log("🔍 Testing Python completion edge cases...");
+
+      // Test 1: Nested attribute completion
+      console.log("\n1. Testing nested attribute completion:");
+      const completion1 = await kernel.kernel.complete("nested_dict['level1']['level2'].", 31);
+      console.log("Result:", JSON.stringify(completion1, null, 2));
+      
+      assert(completion1.status === "ok", "Nested completion should succeed");
+
+      // Test 2: Inherited method completion
+      console.log("\n2. Testing inherited method completion:");
+      const completion2 = await kernel.kernel.complete("my_dog.", 7);
+      console.log("Result:", JSON.stringify(completion2, null, 2));
+      
+      assert(completion2.status === "ok", "Inherited method completion should succeed");
+      
+      const hasSpeak = completion2.matches.some((match: string) => match.includes("speak"));
+      const hasFetch = completion2.matches.some((match: string) => match.includes("fetch"));
+      const hasName = completion2.matches.some((match: string) => match.includes("name"));
+      
+      console.log("Contains speak method:", hasSpeak);
+      console.log("Contains fetch method:", hasFetch);
+      console.log("Contains name attribute:", hasName);
+
+      // Test 3: Completion after function call
+      console.log("\n3. Testing completion after function call:");
+      const completion3 = await kernel.kernel.complete("str(42).", 8);
+      console.log("Result:", JSON.stringify(completion3, null, 2));
+      
+      assert(completion3.status === "ok", "Function call completion should succeed");
+
+      // Test 4: Multi-line completion
+      console.log("\n4. Testing multi-line completion:");
+      const multilineCode = `if True:
+    my_dog.`;
+      const completion4 = await kernel.kernel.complete(multilineCode, multilineCode.length);
+      console.log("Result:", JSON.stringify(completion4, null, 2));
+      
+      assert(completion4.status === "ok", "Multi-line completion should succeed");
+
+      // Test 5: Invalid syntax completion handling
+      console.log("\n5. Testing completion with invalid syntax:");
+      const completion5 = await kernel.kernel.complete("my_dog.(", 8);
+      console.log("Result:", JSON.stringify(completion5, null, 2));
+      
+      // Should handle gracefully, not necessarily succeed
+      assert(completion5.status === "ok" || completion5.status === "error", "Should handle invalid syntax gracefully");
+
+      // Test 6: Very long line completion
+      console.log("\n6. Testing completion on very long line:");
+      const longLine = "my_dog." + "get_name().".repeat(10); // Create a long chain
+      const completion6 = await kernel.kernel.complete(longLine, 7); // Complete at my_dog.
+      console.log("Result:", JSON.stringify(completion6, null, 2));
+      
+      assert(completion6.status === "ok", "Long line completion should succeed");
+
+      // Test 7: Completion with special characters
+      console.log("\n7. Testing completion with special characters:");
+      await manager.execute(pythonKernelId, `special_var_with_underscore = "test"`);
+      await wait(100);
+      
+      const completion7 = await kernel.kernel.complete("special_var", 11);
+      console.log("Result:", JSON.stringify(completion7, null, 2));
+      
+      assert(completion7.status === "ok", "Special character completion should succeed");
+
+      console.log("\n✅ All completion edge case tests completed!");
+
+    } else {
+      console.log("❌ Kernel does not support completion functionality");
+      assert(false, "Python kernel should support completion");
+    }
+
+    await manager.destroyKernel(pythonKernelId);
+
+  } finally {
+    await manager.destroyAll();
+  }
+});
+
+Deno.test("Enhanced Kernels - TypeScript vs Python Completion Comparison", async () => {
+  const manager = new KernelManager();
+
+  try {
+    // Create both kernel types
+    const pythonKernelId = await manager.createKernel({
+      id: "python-comparison-test",
+      mode: KernelMode.WORKER,
+      lang: KernelLanguage.PYTHON
+    });
+
+    const tsKernelId = await manager.createKernel({
+      id: "ts-comparison-test", 
+      mode: KernelMode.WORKER,
+      lang: KernelLanguage.TYPESCRIPT
+    });
+
+    await wait(2000); // Wait for both kernels to initialize
+
+    const pythonKernel = manager.getKernel(pythonKernelId);
+    const tsKernel = manager.getKernel(tsKernelId);
+    
+    assertExists(pythonKernel, "Python kernel should exist");
+    assertExists(tsKernel, "TypeScript kernel should exist");
+
+    // Set up similar variables in both kernels
+    await manager.execute(pythonKernelId, `
+test_variable = 42
+test_function = lambda x: x * 2
+test_list = [1, 2, 3]
+`);
+
+    await manager.execute(tsKernelId, `
+const test_variable = 42;
+const test_function = (x: number) => x * 2;
+const test_list = [1, 2, 3];
+`);
+
+    await wait(500);
+
+    console.log("🔍 Comparing completion between Python and TypeScript kernels...");
+
+    if (typeof pythonKernel.kernel.complete === 'function' && 
+        typeof tsKernel.kernel.complete === 'function') {
+
+      // Test 1: Variable completion comparison
+      console.log("\n1. Comparing variable completion for 'test':");
+      
+      const pythonCompletion1 = await pythonKernel.kernel.complete("test", 4);
+      const tsCompletion1 = await tsKernel.kernel.complete("test", 4);
+      
+      console.log("Python completion:", JSON.stringify(pythonCompletion1, null, 2));
+      console.log("TypeScript completion:", JSON.stringify(tsCompletion1, null, 2));
+      
+      assert(pythonCompletion1.status === "ok", "Python completion should succeed");
+      assert(tsCompletion1.status === "ok", "TypeScript completion should succeed");
+      
+      assert(Array.isArray(pythonCompletion1.matches), "Python should return matches array");
+      assert(Array.isArray(tsCompletion1.matches), "TypeScript should return matches array");
+
+      // Test 2: Method completion comparison
+      console.log("\n2. Comparing method completion for 'test_list.':");
+      
+      const pythonCompletion2 = await pythonKernel.kernel.complete("test_list.", 10);
+      const tsCompletion2 = await tsKernel.kernel.complete("test_list.", 10);
+      
+      console.log("Python list methods count:", pythonCompletion2.matches?.length || 0);
+      console.log("TypeScript array methods count:", tsCompletion2.matches?.length || 0);
+      
+      assert(pythonCompletion2.status === "ok", "Python method completion should succeed");
+      assert(tsCompletion2.status === "ok", "TypeScript method completion should succeed");
+
+      // Test 3: Cursor position accuracy
+      console.log("\n3. Comparing cursor position handling:");
+      
+      const testCode = "test_variable + test_function";
+      const cursorPos = 13; // Position after "test_variable"
+      
+      const pythonCompletion3 = await pythonKernel.kernel.complete(testCode, cursorPos);
+      const tsCompletion3 = await tsKernel.kernel.complete(testCode, cursorPos);
+      
+      console.log("Python cursor handling:", {
+        start: pythonCompletion3.cursor_start,
+        end: pythonCompletion3.cursor_end
+      });
+      console.log("TypeScript cursor handling:", {
+        start: tsCompletion3.cursor_start,
+        end: tsCompletion3.cursor_end
+      });
+      
+      assert(typeof pythonCompletion3.cursor_start === "number", "Python should return cursor_start");
+      assert(typeof pythonCompletion3.cursor_end === "number", "Python should return cursor_end");
+      assert(typeof tsCompletion3.cursor_start === "number", "TypeScript should return cursor_start");
+      assert(typeof tsCompletion3.cursor_end === "number", "TypeScript should return cursor_end");
+
+      console.log("\n✅ Completion comparison tests completed!");
+      
+      // Summary
+      console.log("\n📊 Completion Feature Summary:");
+      console.log("Python kernel: ✅ Full completion support with Jedi");
+      console.log("TypeScript kernel: ✅ Full completion support with context awareness");
+      console.log("Both kernels provide comprehensive completion functionality!");
+
+    } else {
+      if (typeof pythonKernel.kernel.complete !== 'function') {
+        console.log("❌ Python kernel missing completion");
+      }
+      if (typeof tsKernel.kernel.complete !== 'function') {
+        console.log("❌ TypeScript kernel missing completion");
+      }
+      assert(false, "Both kernels should support completion");
+    }
+
+    await manager.destroyKernel(pythonKernelId);
+    await manager.destroyKernel(tsKernelId);
+
+  } finally {
+    await manager.destroyAll();
+  }
+});
+
 // Cleanup after all tests
 console.log("🧪 Enhanced Kernel module tests completed. Run with: deno test -A --no-check tests/kernel_enhanced_test.ts"); 

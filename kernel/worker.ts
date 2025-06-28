@@ -382,6 +382,113 @@ const simpleProxy = {
       console.error("[WORKER] setInterruptBuffer error:", error);
       return false;
     }
+  },
+  
+  // Completion methods
+  complete: async (code: string, cursor_pos: number, parent?: any) => {
+    try {
+      if (typeof kernel.complete === 'function') {
+        const result = await kernel.complete(code, cursor_pos, parent);
+        return result;
+      } else {
+        console.warn("[WORKER] Kernel does not support complete method");
+        return { status: 'error', error: 'Completion not supported' };
+      }
+    } catch (error) {
+      console.error("[WORKER] Complete error:", error);
+      return { status: 'error', error: String(error) };
+    }
+  },
+  
+  inspect: async (code: string, cursor_pos: number, detail_level: 0 | 1, parent?: any) => {
+    try {
+      if (typeof kernel.inspect === 'function') {
+        const result = await kernel.inspect(code, cursor_pos, detail_level, parent);
+        return result;
+      } else {
+        console.warn("[WORKER] Kernel does not support inspect method");
+        return { status: 'error', error: 'Inspection not supported' };
+      }
+    } catch (error) {
+      console.error("[WORKER] Inspect error:", error);
+      return { status: 'error', error: String(error) };
+    }
+  },
+  
+  isComplete: async (code: string, parent?: any) => {
+    try {
+      if (typeof kernel.isComplete === 'function') {
+        const result = await kernel.isComplete(code, parent);
+        return result;
+      } else {
+        console.warn("[WORKER] Kernel does not support isComplete method");
+        return { status: 'unknown' };
+      }
+    } catch (error) {
+      console.error("[WORKER] IsComplete error:", error);
+      return { status: 'error', error: String(error) };
+    }
+  },
+  
+  // Comm methods
+  commInfo: async (target_name: string | null, parent?: any) => {
+    try {
+      if (typeof kernel.commInfo === 'function') {
+        const result = await kernel.commInfo(target_name, parent);
+        return result;
+      } else {
+        console.warn("[WORKER] Kernel does not support commInfo method");
+        return { comms: {}, status: 'ok' };
+      }
+    } catch (error) {
+      console.error("[WORKER] CommInfo error:", error);
+      return { comms: {}, status: 'error', error: String(error) };
+    }
+  },
+  
+  commOpen: async (content: any, parent?: any) => {
+    try {
+      if (typeof kernel.commOpen === 'function') {
+        const result = await kernel.commOpen(content, parent);
+        return result;
+      } else {
+        console.warn("[WORKER] Kernel does not support commOpen method");
+        return undefined;
+      }
+    } catch (error) {
+      console.error("[WORKER] CommOpen error:", error);
+      return undefined;
+    }
+  },
+  
+  commMsg: async (content: any, parent?: any) => {
+    try {
+      if (typeof kernel.commMsg === 'function') {
+        const result = await kernel.commMsg(content, parent);
+        return result;
+      } else {
+        console.warn("[WORKER] Kernel does not support commMsg method");
+        return undefined;
+      }
+    } catch (error) {
+      console.error("[WORKER] CommMsg error:", error);
+      return undefined;
+    }
+  },
+  
+  commClose: async (content: any, parent?: any) => {
+    try {
+      if (typeof kernel.commClose === 'function') {
+        const result = await kernel.commClose(content, parent);
+        return result;
+      } else {
+        console.warn("[WORKER] Kernel does not support commClose method");
+        return undefined;
+      }
+    } catch (error) {
+      console.error("[WORKER] CommClose error:", error);
+      return undefined;
+    }
   }
 };
 

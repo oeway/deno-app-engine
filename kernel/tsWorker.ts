@@ -234,6 +234,214 @@ class TypeScriptKernel {
     this.tseval.reset();
     this.executionCount = 0;
   }
+
+  // Completion methods (from IKernel interface)
+  async complete(code: string, cursor_pos: number, parent?: any): Promise<any> {
+    try {
+      // Implement completion logic directly in worker
+      const completions = this.getCompletions(code, cursor_pos);
+      
+      return {
+        matches: completions.matches,
+        cursor_start: completions.cursor_start,
+        cursor_end: completions.cursor_end,
+        metadata: completions.metadata,
+        status: 'ok'
+      };
+    } catch (error) {
+      console.error("[TS_WORKER] Complete error:", error);
+      return { 
+        matches: [],
+        cursor_start: cursor_pos,
+        cursor_end: cursor_pos,
+        metadata: {},
+        status: 'error'
+      };
+    }
+  }
+
+  private getCompletions(code: string, cursor_pos: number): {
+    matches: string[];
+    cursor_start: number;
+    cursor_end: number;
+    metadata: Record<string, any>;
+  } {
+    // Extract the word being typed at cursor position
+    const beforeCursor = code.slice(0, cursor_pos);
+    const afterCursor = code.slice(cursor_pos);
+    
+    // Find word boundaries
+    const wordMatch = beforeCursor.match(/(\w+)$/);
+    const prefix = wordMatch ? wordMatch[1] : '';
+    const cursor_start = cursor_pos - prefix.length;
+    const cursor_end = cursor_pos;
+    
+    const matches: string[] = [];
+    const metadata: Record<string, any> = {};
+
+    // Get context variables from tseval
+    const contextVariables = this.tseval.getVariables();
+    
+    // Keywords for TypeScript/JavaScript
+    const keywords = [
+      'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue',
+      'debugger', 'default', 'delete', 'do', 'else', 'export', 'extends', 'false',
+      'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'let',
+      'new', 'null', 'return', 'super', 'switch', 'this', 'throw', 'true', 'try',
+      'typeof', 'var', 'void', 'while', 'with', 'yield', 'interface', 'type',
+      'enum', 'namespace', 'module', 'declare', 'readonly', 'public', 'private',
+      'protected', 'static', 'abstract', 'implements', 'keyof', 'unique', 'infer'
+    ];
+    
+    // Global objects and built-ins
+    const globals = [
+      'console', 'Array', 'Object', 'String', 'Number', 'Boolean', 'Date', 'Math',
+      'JSON', 'RegExp', 'Error', 'Promise', 'Symbol', 'Map', 'Set', 'WeakMap',
+      'WeakSet', 'Proxy', 'Reflect', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+      'encodeURI', 'decodeURI', 'encodeURIComponent', 'decodeURIComponent',
+      'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
+      'Deno', 'window', 'document', 'navigator', 'location', 'history',
+      'localStorage', 'sessionStorage', 'fetch', 'XMLHttpRequest'
+    ];
+
+    // Check if we're completing after a dot (method/property completion)
+    const beforePrefix = beforeCursor.slice(0, -prefix.length);
+    const isDotCompletion = beforePrefix.match(/\w+\.$/);
+    
+    if (isDotCompletion) {
+      // Complete methods/properties for common types
+      const arrayMethods = [
+        'push', 'pop', 'shift', 'unshift', 'splice', 'slice', 'concat', 'join',
+        'reverse', 'sort', 'indexOf', 'lastIndexOf', 'includes', 'find', 'findIndex',
+        'filter', 'map', 'reduce', 'reduceRight', 'forEach', 'some', 'every',
+        'length', 'toString', 'valueOf'
+      ];
+      
+      const objectMethods = [
+        'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable',
+        'constructor', 'keys', 'values', 'entries', 'assign', 'create', 'defineProperty',
+        'freeze', 'seal', 'preventExtensions'
+      ];
+      
+      // Add common methods
+      [...arrayMethods, ...objectMethods].forEach(method => {
+        if (!prefix || method.startsWith(prefix)) {
+          matches.push(method);
+          metadata[method] = { type: 'method' };
+        }
+      });
+    } else {
+      // Complete variables, keywords, and globals
+      
+      // Add context variables
+      contextVariables.forEach(variable => {
+        if (!prefix || variable.startsWith(prefix)) {
+          matches.push(variable);
+          metadata[variable] = { type: 'variable' };
+        }
+      });
+      
+      // Add keywords
+      keywords.forEach(keyword => {
+        if (!prefix || keyword.startsWith(prefix)) {
+          matches.push(keyword);
+          metadata[keyword] = { type: 'keyword' };
+        }
+      });
+      
+      // Add globals
+      globals.forEach(global => {
+        if (!prefix || global.startsWith(prefix)) {
+          matches.push(global);
+          metadata[global] = { type: 'global' };
+        }
+      });
+    }
+    
+    // Sort matches: context variables first, then keywords, then globals
+    matches.sort((a, b) => {
+      const aType = metadata[a]?.type || '';
+      const bType = metadata[b]?.type || '';
+      
+      const typeOrder = { 'variable': 0, 'keyword': 1, 'global': 2, 'method': 3 };
+      const aOrder = typeOrder[aType as keyof typeof typeOrder] ?? 4;
+      const bOrder = typeOrder[bType as keyof typeof typeOrder] ?? 4;
+      
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return a.localeCompare(b);
+    });
+    
+    // Remove duplicates while preserving order
+    const uniqueMatches = matches.filter((match, index) => matches.indexOf(match) === index);
+    
+    return {
+      matches: uniqueMatches,
+      cursor_start,
+      cursor_end,
+      metadata
+    };
+  }
+
+  async inspect(code: string, cursor_pos: number, detail_level: 0 | 1, parent?: any): Promise<any> {
+    console.warn("[TS_WORKER] Code inspection not implemented for TypeScript worker");
+    return {
+      status: 'ok',
+      data: {},
+      metadata: {},
+      found: false
+    };
+  }
+
+  async isComplete(code: string, parent?: any): Promise<any> {
+    // Simple heuristic: check for unclosed braces, brackets, or parentheses
+    try {
+      // Try to parse as TypeScript/JavaScript
+      new Function(code);
+      return {
+        status: 'complete'
+      };
+    } catch (error) {
+      // If it's a syntax error, it might be incomplete
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('Unexpected end of input') || 
+          errorMessage.includes('Unexpected token')) {
+        return {
+          status: 'incomplete',
+          indent: '    ' // 4 spaces for continuation
+        };
+      }
+      return {
+        status: 'invalid'
+      };
+    }
+  }
+
+  async interrupt(): Promise<boolean> {
+    console.warn("[TS_WORKER] Interrupt not fully implemented for TypeScript worker");
+    return false;
+  }
+
+  setInterruptBuffer(buffer: Uint8Array): void {
+    console.warn("[TS_WORKER] Interrupt buffer not supported for TypeScript worker");
+  }
+
+  // Comm methods (from IKernel interface)
+  async commInfo(target_name: string | null, parent?: any): Promise<any> {
+    console.warn("[TS_WORKER] Comm functionality not supported for TypeScript worker");
+    return { comms: {}, status: 'ok' };
+  }
+
+  async commOpen(content: any, parent?: any): Promise<void> {
+    console.warn("[TS_WORKER] Comm functionality not supported for TypeScript worker");
+  }
+
+  async commMsg(content: any, parent?: any): Promise<void> {
+    console.warn("[TS_WORKER] Comm functionality not supported for TypeScript worker");
+  }
+
+  async commClose(content: any, parent?: any): Promise<void> {
+    console.warn("[TS_WORKER] Comm functionality not supported for TypeScript worker");
+  }
   
   private setupEventForwarding(): void {
     Object.values(KernelEvents).forEach((eventType) => {
@@ -410,7 +618,20 @@ const kernelInterface = {
   getStatus: () => kernel.getStatus(),
   getHistory: () => kernel.getHistory(),
   getVariables: () => kernel.getVariables(),
-  resetContext: () => kernel.resetContext()
+  resetContext: () => kernel.resetContext(),
+  
+  // Completion methods
+  complete: (code: string, cursor_pos: number, parent?: any) => kernel.complete(code, cursor_pos, parent),
+  inspect: (code: string, cursor_pos: number, detail_level: 0 | 1, parent?: any) => kernel.inspect(code, cursor_pos, detail_level, parent),
+  isComplete: (code: string, parent?: any) => kernel.isComplete(code, parent),
+  interrupt: () => kernel.interrupt(),
+  setInterruptBuffer: (buffer: Uint8Array) => kernel.setInterruptBuffer(buffer),
+  
+  // Comm methods
+  commInfo: (target_name: string | null, parent?: any) => kernel.commInfo(target_name, parent),
+  commOpen: (content: any, parent?: any) => kernel.commOpen(content, parent),
+  commMsg: (content: any, parent?: any) => kernel.commMsg(content, parent),
+  commClose: (content: any, parent?: any) => kernel.commClose(content, parent)
 };
 
 Comlink.expose(kernelInterface); 
