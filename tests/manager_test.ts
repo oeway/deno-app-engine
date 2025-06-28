@@ -112,7 +112,8 @@ Deno.test({
     try {
       // Clean up any existing kernels first
       await manager.destroyAll();
-      assertEquals(manager.listKernels().length, 0, "Should start with no kernels");
+      const initialKernels = await manager.listKernels();
+      assertEquals(initialKernels.length, 0, "Should start with no kernels");
 
       // Create kernels with different namespaces
       const project1KernelId1 = await manager.createKernel({
@@ -134,17 +135,17 @@ Deno.test({
       assert(project2KernelId.startsWith("project2:"), "Kernel ID should have project2 namespace prefix");
 
       // Test listKernels with namespace filtering
-      const project1Kernels = manager.listKernels("project1");
+      const project1Kernels = await manager.listKernels("project1");
       assertEquals(project1Kernels.length, 2, "Should have 2 kernels in project1 namespace");
       assert(project1Kernels.every(k => k.namespace === "project1"), "All kernels should have project1 namespace");
 
-      const project2Kernels = manager.listKernels("project2");
+      const project2Kernels = await manager.listKernels("project2");
       assertEquals(project2Kernels.length, 1, "Should have 1 kernel in project2 namespace");
       assertEquals(project2Kernels[0].namespace, "project2", "Kernel should have project2 namespace");
 
       // Test destroyAll with namespace
       await manager.destroyAll("project1");
-      const remainingKernels = manager.listKernels();
+      const remainingKernels = await manager.listKernels();
       assertEquals(remainingKernels.length, 1, "Should have 1 kernel remaining after destroying project1");
       assert(!remainingKernels.some(k => k.namespace === "project1"), "Should not have any project1 kernels remaining");
 

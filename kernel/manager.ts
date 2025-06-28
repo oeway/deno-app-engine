@@ -1054,11 +1054,11 @@ export class KernelManager extends EventEmitter {
         inputReply: async (content: { value: string }) => {
           return kernelProxy.inputReply(content);
         },
-        // Map getStatus method to status getter for compatibility with IKernel interface
-        get status() {
+        // Map async getStatus method
+        getStatus: async () => {
           try {
             if (typeof kernelProxy.getStatus === 'function') {
-              return kernelProxy.getStatus();
+              return await kernelProxy.getStatus();
             } else {
               return "unknown";
             }
@@ -1129,7 +1129,7 @@ export class KernelManager extends EventEmitter {
    * @param namespace Optional namespace to filter kernels by
    * @returns Array of kernel information objects
    */
-  public listKernels(namespace?: string): Array<{
+  public async listKernels(namespace?: string): Promise<Array<{
     id: string;
     mode: KernelMode;
     language: KernelLanguage;
@@ -1139,42 +1139,47 @@ export class KernelManager extends EventEmitter {
     deno?: {
       permissions?: IDenoPermissions;
     };
-  }> {
-    return Array.from(this.kernels.entries())
-      .filter(([id]) => {
-        // Filter out pool kernels (temporary kernels with IDs starting with "pool-")
-        if (id.startsWith("pool-")) return false;
-        
-        if (!namespace) return true;
-        return id.startsWith(`${namespace}:`);
-      })
-      .map(([id, instance]) => {
-        // Extract namespace from id if present
-        const namespaceMatch = id.match(/^([^:]+):/);
-        const extractedNamespace = namespaceMatch ? namespaceMatch[1] : undefined;
-        
-        // Safely handle potentially incomplete kernel instance
-        let status: "active" | "busy" | "unknown" = "unknown";
-        try {
-          // Check if kernel and status properties exist
-          if (instance && instance.kernel && typeof instance.kernel.status !== 'undefined') {
-            status = instance.kernel.status || "unknown";
+  }>> {
+          const filteredKernels = Array.from(this.kernels.entries())
+        .filter(([id]) => {
+          // Filter out pool kernels (temporary kernels with IDs starting with "pool-")
+          if (id.startsWith("pool-")) return false;
+          
+          if (!namespace) return true;
+          return id.startsWith(`${namespace}:`);
+        });
+
+      // Use Promise.all to get all statuses concurrently
+      const kernelInfos = await Promise.all(
+        filteredKernels.map(async ([id, instance]) => {
+          // Extract namespace from id if present
+          const namespaceMatch = id.match(/^([^:]+):/);
+          const extractedNamespace = namespaceMatch ? namespaceMatch[1] : undefined;
+          
+          // Get status using async getStatus method
+          let status: "active" | "busy" | "unknown" = "unknown";
+          try {
+            if (instance && instance.kernel && typeof instance.kernel.getStatus === 'function') {
+              status = await instance.kernel.getStatus();
+            }
+          } catch (error) {
+            console.warn(`Error getting status for kernel ${id}:`, error);
+            status = "unknown";
           }
-        } catch (error) {
-          console.warn(`Error getting status for kernel ${id}:`, error);
-          status = "unknown";
-        }
-        
-        return {
-          id,
-          mode: instance.mode,
-          language: instance.language,
-          status,
-          created: instance.created || new Date(),
-          namespace: extractedNamespace,
-          deno: instance.options?.deno
-        };
-      });
+          
+          return {
+            id,
+            mode: instance.mode,
+            language: instance.language,
+            status,
+            created: instance.created || new Date(),
+            namespace: extractedNamespace,
+            deno: instance.options?.deno
+          };
+        })
+      );
+
+      return kernelInfos;
   }
   
   /**

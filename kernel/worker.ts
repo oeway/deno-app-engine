@@ -341,10 +341,10 @@ const simpleProxy = {
     }
   },
   
-  // Instead of a getter, use a regular method for status
-  getStatus: () => {
+  // Async method for status
+  getStatus: async () => {
     try {
-      const status = kernel.status;
+      const status = await kernel.getStatus();
       return status;
     } catch (error) {
       console.error("[WORKER] getStatus error:", error);

@@ -76,8 +76,7 @@ export interface IKernel extends EventEmitter {
   executeStream?(code: string, parent?: any): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void>;
   isInitialized(): boolean;
   inputReply(content: { value: string }): Promise<void>;
-  getStatus?(): "active" | "busy" | "unknown";
-  status: "active" | "busy" | "unknown";
+  getStatus(): Promise<"active" | "busy" | "unknown">;
   
   // Interrupt functionality
   interrupt?(): Promise<boolean>;
@@ -153,8 +152,8 @@ export class Kernel extends EventEmitter implements IKernel {
     super.setMaxListeners(20);
   }
 
-  // Getter for kernel status
-  get status(): "active" | "busy" | "unknown" {
+  // Async method for kernel status
+  async getStatus(): Promise<"active" | "busy" | "unknown"> {
     return this._status;
   }
 

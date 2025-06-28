@@ -1086,19 +1086,19 @@ Please analyze correlation, create a linear model, and provide predictions.`
     console.log("\n⚡ Phase 10: Performance and Resource Management");
 
           // Test 10.1: Resource monitoring
-      console.log("   → Monitoring system resources...");
-      const finalStatus = await service.getStatus();
-      assertGreater(finalStatus.kernelStats.total, 0, "Should have active kernels");
-      console.log(`   📊 Final system state: ${finalStatus.kernelStats.total} kernels, ${finalStatus.systemStats.memoryUsage.heapUsed} memory used`);
+    console.log("   → Monitoring system resources...");
+    const finalStatus = await service.getStatus();
+    assertGreater(finalStatus.kernelStats.total, 0, "Should have active kernels");
+    console.log(`   📊 Final system state: ${finalStatus.kernelStats.total} kernels, ${finalStatus.systemStats.memoryUsage.heapUsed} memory used`);
 
       // Test 10.2: Vector database statistics
-      const vectorStats = await service.getVectorDBStats();
-      assertGreater(vectorStats.namespace.totalIndices, 0, "Should have vector indices");
-      assertGreater(vectorStats.namespace.totalDocuments, 0, "Should have documents");
-      console.log(`   📊 Vector DB stats: ${vectorStats.namespace.totalIndices} indices, ${vectorStats.namespace.totalDocuments} documents`);
+    const vectorStats = await service.getVectorDBStats();
+    assertGreater(vectorStats.namespace.totalIndices, 0, "Should have vector indices");
+    assertGreater(vectorStats.namespace.totalDocuments, 0, "Should have documents");
+    console.log(`   📊 Vector DB stats: ${vectorStats.namespace.totalIndices} indices, ${vectorStats.namespace.totalDocuments} documents`);
 
       // Test 10.3: Agent statistics
-      const agentStats = await service.getAgentStats();
+    const agentStats = await service.getAgentStats();
     if (ollamaAvailable) {
       assertGreater(agentStats.totalAgents, 0, "Should have active agents");
       console.log(`   📊 Agent stats: ${agentStats.totalAgents} agents, ${agentStats.totalConversations} conversations`);

@@ -429,7 +429,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       // List kernels
       if (path === "/api/kernels" && req.method === "GET") {
         try {
-          const kernelList = kernelManager.listKernels();
+          const kernelList = await kernelManager.listKernels();
           const kernels = kernelList.map(kernel => ({
             id: kernel.id,
             name: `Kernel-${kernel.id.slice(0, 8)}`,
@@ -486,11 +486,21 @@ export async function handleRequest(req: Request): Promise<Response> {
           // Initialize history for this kernel
           kernelHistory.set(kernelId, []);
           
+          // Get status asynchronously
+          let status = "unknown";
+          try {
+            if (kernel.kernel && typeof kernel.kernel.getStatus === 'function') {
+              status = await kernel.kernel.getStatus();
+            }
+          } catch (error) {
+            status = "unknown";
+          }
+
           return jsonResponse({
             id: kernelId,
             mode: kernel.mode,
             language: kernel.language || "python",
-            status: kernel.kernel.status || "unknown",
+            status: status,
             created: kernel.created,
             name: `Kernel-${kernelId.slice(0, 8)}`
           });
@@ -538,13 +548,23 @@ export async function handleRequest(req: Request): Promise<Response> {
           kernelHistory.set(kernelId, []);
         }
         
+        // Get status asynchronously
+        let status = "unknown";
+        try {
+          if (kernel.kernel && typeof kernel.kernel.getStatus === 'function') {
+            status = await kernel.kernel.getStatus();
+          }
+        } catch (error) {
+          status = "unknown";
+        }
+
         return jsonResponse({
           id: kernelId,
           name: `Kernel-${kernelId.slice(0, 8)}`,
           mode: kernel.mode,
           language: kernel.language || "python",
           created: kernel.created,
-          status: kernel.kernel.status || "unknown",
+          status: status,
           history: history,
         });
       }

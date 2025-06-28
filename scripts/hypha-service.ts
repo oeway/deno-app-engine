@@ -619,7 +619,7 @@ async function startHyphaService(options: {
         }
         
         // Verify it appears in list for this namespace
-        const kernelsInNamespace = kernelManager.listKernels(namespace);
+        const kernelsInNamespace = await kernelManager.listKernels(namespace);
         console.log(`Kernels in namespace ${namespace} after creation: ${kernelsInNamespace.length}`);
         const kernelExists = kernelsInNamespace.some(k => k.id === kernelId);
         if (!kernelExists) {
@@ -647,17 +647,18 @@ async function startHyphaService(options: {
       }
     },
     
-    listKernels(context: {user: any, ws: string}) {
+    async listKernels(context: {user: any, ws: string}) {
       // Only list kernels in the user's workspace namespace
       console.log(`Listing kernels for namespace: ${context.ws}, total kernels in manager: ${kernelManager.getKernelIds().length}`);
       console.log(`All kernel IDs: ${kernelManager.getKernelIds().join(', ')}`);
-      const kernelList = kernelManager.listKernels(context.ws);
+      const kernelList = await kernelManager.listKernels(context.ws);
       console.log(`Found ${kernelList.length} kernels for namespace ${context.ws}`);
       return kernelList.map(kernel => ({
         id: kernel.id,
         name: `Kernel-${kernel.id.split(":")[1].slice(0, 8)}`,
         mode: kernel.mode,
         language: kernel.language,
+        status: kernel.status,
         created: kernel.created.toISOString(),
       }));
     },
@@ -689,14 +690,32 @@ async function startHyphaService(options: {
         throw new Error("Kernel not found or access denied");
       }
       
+      // Use the async getStatus method
+      let kernelStatus = "unknown";
+      try {
+        if (kernel.kernel && typeof kernel.kernel.getStatus === 'function') {
+          kernelStatus = await kernel.kernel.getStatus();
+        }
+      } catch (error) {
+        // If accessing status fails, keep default "unknown"
+        kernelStatus = "unknown";
+      }
+      
+      // Ensure history contains only serializable data
+      const safeHistory = (kernelHistory.get(kernelId) || []).map(entry => ({
+        id: String(entry.id || ""),
+        script: String(entry.script || ""),
+        outputs: Array.isArray(entry.outputs) ? entry.outputs.length : 0 // Just return count to avoid serialization issues
+      }));
+      
       return {
         id: kernelId,
         name: `Kernel-${kernelId.split(":")[1].slice(0, 8)}`,
-        mode: kernel.mode,
-        language: kernel.language,
+        mode: String(kernel.mode || "unknown"),
+        language: String(kernel.language || "unknown"),
         created: kernel.created.toISOString(),
-        status: kernel.kernel.status || "unknown",
-        history: kernelHistory.get(kernelId) || [],
+        status: kernelStatus,
+        history: safeHistory,
       };
     },
 
@@ -1154,19 +1173,27 @@ async function startHyphaService(options: {
       const lastActivity = vectorDBManager.getLastActivityTime(fullIndexId);
       const timeUntilOffload = vectorDBManager.getTimeUntilOffload(fullIndexId);
       
+      // Ensure history contains only serializable data
+      const safeHistory = (vectorDBHistory.get(fullIndexId) || []).map(entry => ({
+        id: String(entry.id || ""),
+        query: typeof entry.query === "string" ? entry.query : "vector_query",
+        results: Array.isArray(entry.results) ? entry.results.length : 0, // Just return count
+        timestamp: entry.timestamp instanceof Date ? entry.timestamp.toISOString() : String(entry.timestamp)
+      }));
+
       return {
         id: fullIndexId,
         name: `VectorDB-${fullIndexId.split(":")[1].slice(0, 8)}`,
         created: index.created.toISOString(),
-        documentCount: index.documentCount,
-        embeddingDimension: index.embeddingDimension,
-        isFromOffload: index.isFromOffload || false,
-        history: vectorDBHistory.get(fullIndexId) || [],
+        documentCount: Number(index.documentCount || 0),
+        embeddingDimension: Number(index.embeddingDimension || 0),
+        isFromOffload: Boolean(index.isFromOffload || false),
+        history: safeHistory,
         activityMonitoring: {
           lastActivity: lastActivity ? new Date(lastActivity).toISOString() : undefined,
-          timeUntilOffload: timeUntilOffload,
-          inactivityTimeout: vectorDBManager.getInactivityTimeout(fullIndexId),
-          enabled: index.options.enableActivityMonitoring !== false && vectorDBActivityMonitoring
+          timeUntilOffload: Number(timeUntilOffload || 0),
+          inactivityTimeout: Number(vectorDBManager.getInactivityTimeout(fullIndexId) || 0),
+          enabled: Boolean(index.options.enableActivityMonitoring !== false && vectorDBActivityMonitoring)
         }
       };
     },
@@ -2398,7 +2425,7 @@ async function startHyphaService(options: {
         console.log("📋 Listing all deno-apps...");
         
         // Get all kernels in the deno-apps namespace using proper namespace filtering
-        const appKernelList = kernelManager.listKernels("deno-apps");
+        const appKernelList = await kernelManager.listKernels("deno-apps");
         
         console.log(`Found ${appKernelList.length} app kernels in deno-apps namespace`);
         
@@ -2529,7 +2556,7 @@ async function startHyphaService(options: {
         console.log("📊 Getting deno-app statistics...");
         
         // Get all kernels in the deno-apps namespace using proper namespace filtering
-        const appKernelList = kernelManager.listKernels("deno-apps");
+        const appKernelList = await kernelManager.listKernels("deno-apps");
         
         const stats = {
           totalApps: appKernelList.length,

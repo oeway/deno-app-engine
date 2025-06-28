@@ -405,8 +405,9 @@ Deno.test("Enhanced Kernels - Performance and Resource Management", async () => 
     for (const kernelId of kernelIds) {
       const kernel = manager.getKernel(kernelId);
       if (!kernel) {
-        console.error(`❌ Kernel ${kernelId} not found in manager. Available kernels:`, manager.listKernels().map(k => k.id));
-        console.error(`📊 Total available kernels: ${manager.listKernels().length}`);
+        const availableKernels = await manager.listKernels();
+        console.error(`❌ Kernel ${kernelId} not found in manager. Available kernels:`, availableKernels.map(k => k.id));
+        console.error(`📊 Total available kernels: ${availableKernels.length}`);
       }
       assertExists(kernel, `Kernel ${kernelId} should exist`);
     }
@@ -469,7 +470,7 @@ print("Memory test completed successfully")
     console.log("⏳ Testing kernel management...");
     
     // Verify kernels are still active
-    const activeKernels = manager.listKernels();
+    const activeKernels = await manager.listKernels();
     console.log(`📊 Active kernels: ${activeKernels.length}`);
 
     // Clean up any remaining kernels

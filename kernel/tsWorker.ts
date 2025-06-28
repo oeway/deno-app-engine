@@ -610,11 +610,7 @@ class TypeScriptKernel {
     return this.initialized;
   }
   
-  get status(): "active" | "busy" | "unknown" {
-    return this._status;
-  }
-  
-  getStatus(): "active" | "busy" | "unknown" {
+  async getStatus(): Promise<"active" | "busy" | "unknown"> {
     return this._status;
   }
   
