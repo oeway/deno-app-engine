@@ -1,6 +1,6 @@
 {
   "name": "deno-app-engine",
-  "version": "0.1.48",
+  "version": "0.1.49",
   "exports": {
     ".": "./mod.ts"
   },
@@ -36,7 +36,7 @@
     "kernel/pypi/**/*"
   ],
   "unstable": ["worker-options", "webgpu"],
-  "nodeModulesDir": "auto",
+  "nodeModulesDir": "none",
   "compilerOptions": {
     "lib": ["deno.ns", "dom", "esnext"]
   }
