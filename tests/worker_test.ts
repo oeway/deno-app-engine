@@ -1,7 +1,7 @@
 // Worker test for Deno App Engine
 // This demonstrates using the kernel in a web worker via the KernelManager
 
-import { assertEquals, assertNotEquals } from "https://deno.land/std/assert/mod.ts";
+import { assertEquals, assertNotEquals, assert } from "https://deno.land/std/assert/mod.ts";
 import { KernelManager, KernelMode, KernelEvents } from "../kernel/mod.ts";
 
 // Print header for the test
@@ -79,7 +79,10 @@ Deno.test({
       // 3. Test error handling
       console.log("Testing error handling...");
       const divByZeroResult = await instance.kernel.execute("1/0");
-      assertEquals(divByZeroResult.success, false, "Division by zero should fail");
+      // Division by zero should be detected as an error in the result status
+      assertEquals(divByZeroResult.success, true, "Kernel execution should succeed");
+      assertEquals(divByZeroResult.result?.status, "error", "Division by zero should result in error status");
+      assert(divByZeroResult.result?.ename?.includes("ZeroDivisionError"), "Should be a ZeroDivisionError");
       
       console.log("Basic worker tests completed successfully");
       

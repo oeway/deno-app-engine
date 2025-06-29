@@ -837,7 +837,7 @@ Deno.test("Agents Module - Startup Script Error Handling", async () => {
         startupScript: `
 # This startup script contains a deliberate error
 print("Starting initialization...")
-undefined_variable = some_undefined_function()  # This will cause a NameError
+some_undefined_function()  # This will cause a NameError
 print("This should never be reached")
         `,
         autoAttachKernel: true
@@ -1031,7 +1031,7 @@ Deno.test("Agents Module - Stateless Chat with Startup Error", async () => {
         startupScript: `
 # This startup script contains an error
 print("Starting initialization...")
-undefined_variable = some_undefined_function()  # This will cause a NameError
+some_undefined_function()  # This will cause a NameError
 print("This should never be reached")
         `,
         autoAttachKernel: true

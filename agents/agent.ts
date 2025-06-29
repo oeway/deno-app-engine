@@ -1535,7 +1535,7 @@ export class Agent implements IAgentInstance {
             } else if (streamEvent.type === 'execute_result' && streamEvent.data?.data?.['text/plain']) {
               // Include execute_result output as well
               startupOutput += streamEvent.data.data['text/plain'] || '';
-            } else if (streamEvent.type === 'execute_error') {
+            } else if (streamEvent.type === 'error') {
               if (streamEvent.data) {
               // Handle execution errors
               const errorMsg = `${streamEvent.data.ename}: ${streamEvent.data.evalue}`;
@@ -1567,6 +1567,17 @@ export class Agent implements IAgentInstance {
       } else {
         // Fallback to direct kernel execution
         finalResult = await this.kernel.execute(this.startupScript);
+        
+        // Check if the result indicates a Python execution error
+        if (finalResult.success && finalResult.result?.status === "error") {
+          const errorMsg = `${finalResult.result.ename}: ${finalResult.result.evalue}`;
+          startupOutput += errorMsg + '\n';
+          finalResult = {
+            success: false,
+            error: new Error(errorMsg),
+            result: finalResult.result
+          };
+        }
       }
 
       // Store the captured output for use in system prompt
@@ -1638,7 +1649,7 @@ export class Agent implements IAgentInstance {
             } else if (streamEvent.type === 'execute_result' && streamEvent.data?.data?.['text/plain']) {
               // Include execute_result output as well
               observations += streamEvent.data.data['text/plain'] || '';
-            } else if (streamEvent.type === 'execute_error' && streamEvent.data) {
+            } else if (streamEvent.type === 'error' && streamEvent.data) {
               // Handle execution errors
               const errorMsg = `${streamEvent.data.ename}: ${streamEvent.data.evalue}`;
               observations += errorMsg + '\n';
@@ -1665,6 +1676,17 @@ export class Agent implements IAgentInstance {
       } else {
         // Fallback to direct kernel execution
         finalResult = await this.kernel.execute(code);
+        
+        // Check if the result indicates a Python execution error
+        if (finalResult.success && finalResult.result?.status === "error") {
+          const errorMsg = `${finalResult.result.ename}: ${finalResult.result.evalue}`;
+          observations += errorMsg + '\n';
+          finalResult = {
+            success: false,
+            error: new Error(errorMsg),
+            result: finalResult.result
+          };
+        }
       }
 
       if (finalResult.success) {
@@ -1745,7 +1767,11 @@ export class Agent implements IAgentInstance {
         }
       } catch (error) {
         console.error(`Failed to execute startup script for agent ${this.id}:`, error);
-        const startupError = error instanceof AgentStartupError ? error : new Error(`Startup script execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        const startupError = error instanceof AgentStartupError ? error : new AgentStartupError(
+          `Startup script execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          error instanceof Error ? error.message : 'Unknown error',
+          error instanceof Error ? error.stack : undefined
+        );
         this.manager.emit(AgentEvents.AGENT_ERROR, {
           agentId: this.id,
           error: startupError,

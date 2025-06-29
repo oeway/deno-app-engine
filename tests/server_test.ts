@@ -1240,7 +1240,8 @@ Deno.test({
     console.log("  ✅ Namespace support verified");
     
     // Clean up namespaced agent
-    await makeRequest(`/agents/${namespaceResult.id}`, "DELETE");
+    const namespaceDeleteResult = await makeRequest(`/agents/${namespaceResult.id}`, "DELETE");
+    assertEquals(namespaceDeleteResult.success, true, "Namespaced agent should be deleted successfully");
     
     // Test: Error handling for invalid requests
     console.log("  → Testing error handling...");
