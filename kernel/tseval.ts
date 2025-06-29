@@ -45,7 +45,7 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
 
     // Collect variable names that will be defined in this execution
     const newVariables = new Set<string>();
-    let lastExprCode = "";
+    let lastExprCode = "undefined";
     
     traverse(ast, {
       Program(path: any) {
@@ -87,11 +87,24 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
           }
         }
         
-        // Check if the last statement is an expression (for return value)
+        // Check if the last statement is a supported expression
         const lastStmt = body[body.length - 1];
         if (lastStmt?.type === "ExpressionStatement") {
-          // Get just the expression part, not the entire statement (which includes semicolon)
-          lastExprCode = code.slice(lastStmt.expression.start!, lastStmt.expression.end!);
+          const expr = lastStmt.expression;
+          // Support: primitive literals, identifiers, binary expressions, member expressions, object expressions, and template literals
+          if (expr.type === "Identifier" || 
+              expr.type === "StringLiteral" || 
+              expr.type === "NumericLiteral" ||
+              expr.type === "BooleanLiteral" ||
+              expr.type === "NullLiteral" ||
+              expr.type === "BigIntLiteral" ||
+              expr.type === "TemplateLiteral" || // All template literals (with or without expressions)
+              expr.type === "BinaryExpression" || // x + y, x - y, etc.
+              expr.type === "MemberExpression" || // arr[0], obj.prop, etc.
+              expr.type === "ObjectExpression" || // { key: value }, ({ a: 1, b: 2 })
+              expr.type === "ArrayExpression") { // [1, 2, 3], [a, b, c]
+            lastExprCode = code.slice(expr.start!, expr.end!);
+          }
         }
       }
     });
@@ -116,33 +129,17 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
       .map(varName => `context["${varName}"] = ${varName};`)
       .join("\n");
 
-    // If there's a trailing expression, modify the code to capture its result without re-executing
+    // If there's a supported trailing expression, capture its result
     let finalCode;
     if (lastExprCode) {
-      // Check if the last expression is likely to have side effects
-      // Common side-effect patterns: console.log, function calls, method calls, etc.
-      const hasSideEffects = lastExprCode.includes('console.') || 
-                           lastExprCode.includes('(') || // function calls
-                           lastExprCode.match(/\w+\.\w+\s*\(/); // method calls
-      
-      if (hasSideEffects) {
-        // Don't re-execute side-effect expressions, just execute the code normally
-        finalCode = `const context = globalThis.__tseval_context__;
-${prelude}
-
-${code}
-
-${captureVariables}`;
-      } else {
-        // Safe to re-execute for result capture (simple expressions like variables, literals)
-        finalCode = `const context = globalThis.__tseval_context__;
+      // Supported expressions are safe to re-execute for result capture
+      finalCode = `const context = globalThis.__tseval_context__;
 ${prelude}
 
 ${code}
 
 ${captureVariables}
 context._ = (${lastExprCode});`;
-      }
     } else {
       finalCode = `const context = globalThis.__tseval_context__;
 ${prelude}
@@ -225,6 +222,24 @@ if (import.meta.main) {
   console.log(`▶ context history:`, tseval.getHistory());
   // get variables
   console.log(`▶ context variables:`, tseval.getVariables());
+
+  // Test primitive literal types
+  console.log("\n--- Testing Primitive Literals ---\n");
+  await run(`true`, "boolean literal: true");
+  await run(`false`, "boolean literal: false");
+  await run(`null`, "null literal");
+  await run(`123n`, "BigInt literal");
+  await run(`\`simple template\``, "simple template literal");
+  await run(`\`template with \${x}\``, "template with expression");
+  await run(`undefined`, "undefined identifier");
+
+  // Test complex expressions
+  console.log("\n--- Testing Complex Expressions ---\n");
+  await run(`x + y`, "binary expression: x + y");
+  await run(`x * 2`, "binary expression: x * 2");
+  await run(`nums[0]`, "member expression: nums[0]");
+  await run(`config.debug`, "member expression: config.debug");
+  await run(`\`x is \${x} and y is \${y}\``, "template literal with expressions");
 
   // ✅ test context reset
   tseval.reset();

@@ -253,7 +253,8 @@ Deno.test({
     const result1 = await instance.kernel.execute(`
       import lodash from "npm:lodash";
       const arr = [1, 2, 3, 4, 5];
-      lodash.sum(arr)
+      const sumResult = lodash.sum(arr);
+      sumResult
     `);
     
     assertEquals(result1.success, true, "NPM import should succeed");
@@ -264,7 +265,8 @@ Deno.test({
     // Test JSR import
     const result2 = await instance.kernel.execute(`
       import { encodeBase64 } from "jsr:@std/encoding/base64";
-      encodeBase64("hello")
+      const encodedResult = encodeBase64("hello");
+      encodedResult
     `);
     assertEquals(result2.success, true, "JSR import should succeed");
     
@@ -273,7 +275,8 @@ Deno.test({
     
     // Test that imported modules persist
     const result3 = await instance.kernel.execute(`
-      lodash.reverse([1, 2, 3])
+      const reverseResult = lodash.reverse([1, 2, 3]);
+      reverseResult
     `);
     
     assertEquals(result3.success, true, "Persisted import should work");
@@ -286,7 +289,8 @@ Deno.test({
     // Test Deno standard library
     const result4 = await instance.kernel.execute(`
       import * as path from "jsr:@std/path";
-      path.basename("/foo/bar/test.txt")
+      const basenameResult = path.basename("/foo/bar/test.txt");
+      basenameResult
     `);
     assertEquals(result4.success, true, "Deno std import should succeed");
     
@@ -333,7 +337,8 @@ Deno.test({
         return typeof value === 'string' ? value.toUpperCase() : value.toString();
       }
       
-      process("hello")
+      const processResult = process("hello");
+      processResult
     `);
     assertEquals(result2.success, true, "TypeScript type alias should work");
     
@@ -346,7 +351,8 @@ Deno.test({
         return arg;
       }
       
-      identity<number>(42)
+      const identityResult = identity<number>(42);
+      identityResult
     `);
     assertEquals(result3.success, true, "TypeScript generics should work");
     

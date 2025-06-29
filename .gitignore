@@ -9,3 +9,4 @@ dist/
 example_agents_data/
 agent_data/
 vectordb_offload/
+coverage/
