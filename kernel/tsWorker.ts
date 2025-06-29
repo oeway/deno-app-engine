@@ -113,12 +113,87 @@ class TypeScriptKernel {
     this.setupJupyterEventForwarding();
     this.setupFileSystemInterception();
     
-    // Initialize tseval context with console proxy
+    // Initialize tseval context with console proxy that goes through ConsoleCapture
     const consoleProxy = {
-      log: (...args: any[]) => console.log("[worker]", ...args),
-      error: (...args: any[]) => console.error("[worker]", ...args),
-      warn: (...args: any[]) => console.warn("[worker]", ...args),
-      info: (...args: any[]) => console.info("[worker]", ...args),
+      log: (...args: any[]) => {
+        const streamData = {
+          name: 'stdout',
+          text: args.map(arg => {
+            try {
+              if (typeof arg === 'string') {
+                return arg;
+              } else if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}`;
+              } else {
+                return JSON.stringify(arg, null, 2);
+              }
+            } catch (jsonError) {
+              return String(arg);
+            }
+          }).join(' ') + '\n'
+        };
+        // Emit directly to our event system for capture
+        this.eventEmitter.emit(KernelEvents.STREAM, streamData);
+        // Also print to terminal for debugging
+        console.log(...args);
+      },
+      error: (...args: any[]) => {
+        this.eventEmitter.emit(KernelEvents.STREAM, {
+          name: 'stderr',
+          text: args.map(arg => {
+            try {
+              if (typeof arg === 'string') {
+                return arg;
+              } else if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}`;
+              } else {
+                return JSON.stringify(arg, null, 2);
+              }
+            } catch (jsonError) {
+              return String(arg);
+            }
+          }).join(' ') + '\n'
+        });
+        console.error(...args);
+      },
+      warn: (...args: any[]) => {
+        this.eventEmitter.emit(KernelEvents.STREAM, {
+          name: 'stderr',
+          text: args.map(arg => {
+            try {
+              if (typeof arg === 'string') {
+                return arg;
+              } else if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}`;
+              } else {
+                return JSON.stringify(arg, null, 2);
+              }
+            } catch (jsonError) {
+              return String(arg);
+            }
+          }).join(' ') + '\n'
+        });
+        console.warn(...args);
+      },
+      info: (...args: any[]) => {
+        this.eventEmitter.emit(KernelEvents.STREAM, {
+          name: 'stdout',
+          text: args.map(arg => {
+            try {
+              if (typeof arg === 'string') {
+                return arg;
+              } else if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}`;
+              } else {
+                return JSON.stringify(arg, null, 2);
+              }
+            } catch (jsonError) {
+              return String(arg);
+            }
+          }).join(' ') + '\n'
+        });
+        console.info(...args);
+      },
     };
     
     this.tseval = createTSEvalContext({
@@ -180,95 +255,245 @@ class TypeScriptKernel {
     this.executionCount++;
     this.consoleCapture.start();
     
-    // Capture display data during execution
-    const displayData: any[] = [];
-    const captureDisplay = (data: any) => {
-      displayData.push(data);
-    };
-    
-    // Listen for display events during execution
-    this.eventEmitter.on('display_data', captureDisplay);
-    this.eventEmitter.on('execute_result', captureDisplay);
-    
     try {
-      // Use tseval for execution
-      const { result, mod } = await this.tseval(code);
-      
-      // Emit execution result if we have a meaningful result
-      // This is the proper Jupyter way - results go through events, not return values
-      if (result !== undefined) {
-        this.emitExecutionResult(result);
-      }
-      
-      // Wait a moment for the display data to be captured
-      await new Promise(resolve => setTimeout(resolve, 1));
-      
-      // Prepare display data for serialization
-      let displayDataForSerialization;
-      
-      if (displayData.length > 0) {
-        displayDataForSerialization = displayData[0].data;
-      } else if (result !== undefined) {
-        displayDataForSerialization = {
-          "text/plain": typeof result === 'string' ? result : JSON.stringify(result)
-        };
-      } else {
-        displayDataForSerialization = {
-          "text/plain": ""
-        };
-      }
-      
-      // Create a result object that can be serialized and reconstructed
-      const resultObj = {
-        _displayData: displayDataForSerialization,
-        [Symbol.for("Jupyter.display")]() {
-          return displayDataForSerialization;
-        }
+      // Set up execution state to collect all messages
+      const executionState = {
+        allMessages: [] as any[],
+        executionComplete: false,
+        executionResult: null as any,
+        executionError: null as Error | null,
+        timeout: null as number | null
       };
-      
-      // Return execution metadata with cleaner result structure
-      return { 
-        success: true, 
-        execution_count: this.executionCount,
-        result: resultObj
-      };
+
+      // Promise-based execution with proper message collection
+      return new Promise<{ success: boolean, execution_count: number, result?: any, error?: Error }>((resolve, reject) => {
+        
+        // Collect all events during execution
+        const handleAllEvents = (eventData: any) => {
+          // The eventData here is the actual stream data, we need to wrap it with type info
+          const wrappedEvent = {
+            type: 'stream', // We know this is from the stream event
+            bundle: eventData
+          };
+          console.log(`[TS_WORKER] Captured event: stream`, eventData);
+          executionState.allMessages.push(wrappedEvent);
+        };
+
+        // Set up event listeners for different types BEFORE execution
+        const handleStreamEvent = (eventData: any) => {
+          const wrappedEvent = { type: 'stream', bundle: eventData };
+          executionState.allMessages.push(wrappedEvent);
+        };
+        
+        const handleDisplayEvent = (eventData: any) => {
+          const wrappedEvent = { type: 'display_data', bundle: eventData };
+          executionState.allMessages.push(wrappedEvent);
+        };
+        
+        const handleResultEvent = (eventData: any) => {
+          const wrappedEvent = { type: 'execute_result', bundle: eventData };
+          executionState.allMessages.push(wrappedEvent);
+        };
+        
+        const handleErrorEvent = (eventData: any) => {
+          const wrappedEvent = { type: 'execute_error', bundle: eventData };
+          executionState.allMessages.push(wrappedEvent);
+        };
+
+        this.eventEmitter.on('stream', handleStreamEvent);
+        this.eventEmitter.on('display_data', handleDisplayEvent);
+        this.eventEmitter.on('execute_result', handleResultEvent);
+        this.eventEmitter.on('execute_error', handleErrorEvent);
+
+        // Completion detector - waits for message settling
+        const completionDetector = () => {
+          if (executionState.executionComplete) return;
+          
+          executionState.executionComplete = true;
+          
+          // Clear timeout
+          if (executionState.timeout !== null) {
+            clearTimeout(executionState.timeout);
+          }
+          
+          // Clean up event listeners
+          this.eventEmitter.off('stream', handleStreamEvent);
+          this.eventEmitter.off('display_data', handleDisplayEvent);
+          this.eventEmitter.off('execute_result', handleResultEvent);
+          this.eventEmitter.off('execute_error', handleErrorEvent);
+          
+          console.log(`[TS_WORKER] Execution complete, captured ${executionState.allMessages.length} messages`);
+          
+          // Process captured messages to build result
+          const streamOutputs: string[] = [];
+          let displayData: any[] = [];
+          let hasError = false;
+          let errorResult: any = null;
+          
+          for (const msg of executionState.allMessages) {
+            if (msg.type === 'stream' && msg.bundle?.text) {
+              streamOutputs.push(msg.bundle.text);
+            } else if (msg.type === 'display_data' && msg.bundle?.data) {
+              displayData.push(msg.bundle);
+            } else if (msg.type === 'execute_result' && msg.bundle?.data) {
+              displayData.push(msg.bundle);
+            } else if (msg.type === 'execute_error') {
+              hasError = true;
+              errorResult = msg.bundle;
+            }
+          }
+          
+          // Prepare result
+          let resultObj: any;
+          let success = !hasError;
+          
+          if (hasError && errorResult) {
+            // Error case
+            const errorDisplayData = {
+              "text/plain": `${errorResult.ename}: ${errorResult.evalue}`,
+              "application/vnd.jupyter.error": errorResult
+            };
+            
+            resultObj = {
+              _displayData: errorDisplayData,
+              _streamOutput: streamOutputs.join(''),
+              [Symbol.for("Jupyter.display")]() {
+                return errorDisplayData;
+              }
+            };
+            
+            // Ensure properties are enumerable for postMessage serialization
+            Object.defineProperty(resultObj, '_displayData', {
+              value: errorDisplayData,
+              enumerable: true,
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(resultObj, '_streamOutput', {
+              value: streamOutputs.join(''),
+              enumerable: true,
+              writable: true,
+              configurable: true
+            });
+            
+            resolve({
+              success: false,
+              execution_count: this.executionCount,
+              error: new Error(`${errorResult.ename}: ${errorResult.evalue}`),
+              result: resultObj
+            });
+          } else {
+            // Success case
+            let displayDataForSerialization;
+            
+            if (displayData.length > 0) {
+              displayDataForSerialization = displayData[0].data;
+            } else if (executionState.executionResult !== undefined) {
+              displayDataForSerialization = {
+                "text/plain": typeof executionState.executionResult === 'string' ? executionState.executionResult : JSON.stringify(executionState.executionResult)
+              };
+            } else if (streamOutputs.length > 0) {
+              displayDataForSerialization = {
+                "text/plain": streamOutputs.join('')
+              };
+            } else {
+              displayDataForSerialization = {
+                "text/plain": ""
+              };
+            }
+            
+            resultObj = {
+              _displayData: displayDataForSerialization,
+              _streamOutput: streamOutputs.join(''),
+              [Symbol.for("Jupyter.display")]() {
+                return displayDataForSerialization;
+              }
+            };
+            
+            // Ensure properties are enumerable for postMessage serialization
+            Object.defineProperty(resultObj, '_displayData', {
+              value: displayDataForSerialization,
+              enumerable: true,
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(resultObj, '_streamOutput', {
+              value: streamOutputs.join(''),
+              enumerable: true,
+              writable: true,
+              configurable: true
+            });
+            
+            resolve({
+              success: true,
+              execution_count: this.executionCount,
+              result: resultObj
+            });
+          }
+        };
+
+        // Set up timeout as safety net (10 seconds)
+        executionState.timeout = setTimeout(() => {
+          if (!executionState.executionComplete) {
+            console.warn("[TS_WORKER] Execution timeout, completing anyway");
+            completionDetector();
+          }
+        }, 10000) as unknown as number;
+
+        // Execute the code
+        this.tseval(code)
+          .then(({ result, mod }) => {
+            executionState.executionResult = result;
+            
+            // Emit execution result if we have a meaningful result
+            if (result !== undefined) {
+              this.emitExecutionResult(result);
+            }
+            
+            // Wait for message settling (100ms should be enough for TS execution)
+            setTimeout(() => {
+              if (!executionState.executionComplete) {
+                completionDetector();
+              }
+            }, 100);
+          })
+          .catch((error) => {
+            executionState.executionError = error instanceof Error ? error : new Error(String(error));
+            console.error("[TS_WORKER] Execution error:", executionState.executionError);
+            
+            this.emitExecutionError(executionState.executionError);
+            
+            // Wait for error message settling
+            setTimeout(() => {
+              if (!executionState.executionComplete) {
+                completionDetector();
+              }
+            }, 100);
+          });
+      });
     } catch (error) {
-      console.error("[TS_WORKER] Execution error:", error);
-      
+      // Handle setup errors (before promise execution)
       const errorObj = error instanceof Error ? error : new Error(String(error));
-      this.emitExecutionError(errorObj);
+      console.error("[TS_WORKER] Setup error:", errorObj);
       
-      // Prepare error display data for serialization
-      const errorDisplayData = {
-        "text/plain": `${errorObj.name}: ${errorObj.message}`,
-        "application/vnd.jupyter.error": {
-          ename: errorObj.name,
-          evalue: errorObj.message,
-          traceback: [errorObj.stack || errorObj.message]
-        }
-      };
-      
-      // Create an error result object that can be serialized and reconstructed
-      const errorResultObj = {
-        _displayData: errorDisplayData,
-        [Symbol.for("Jupyter.display")]() {
-          return errorDisplayData;
-        }
-      };
-      
-      // Return execution metadata including the error for compatibility with tests
-      return { 
-        success: false, 
+      return {
+        success: false,
         execution_count: this.executionCount,
         error: errorObj,
-        result: errorResultObj
+        result: {
+          _displayData: {
+            "text/plain": `Setup Error: ${errorObj.message}`
+          },
+          _streamOutput: '',
+          [Symbol.for("Jupyter.display")]() {
+            return {
+              "text/plain": `Setup Error: ${errorObj.message}`
+            };
+          }
+        }
       };
     } finally {
       this.consoleCapture.stop();
-      
-      // Clean up display data listeners
-      this.eventEmitter.off('display_data', captureDisplay);
-      this.eventEmitter.off('execute_result', captureDisplay);
     }
   }
   

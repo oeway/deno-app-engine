@@ -1107,12 +1107,10 @@ export class KernelManager extends EventEmitter {
             
             // Check if the result has display data properties that need to be reconstructed
             if (result.result._displayData) {
-              // Reconstruct the Symbol method from serialized display data
+              // Add the Symbol method to the existing result object (don't overwrite!)
               const displayData = result.result._displayData;
-              result.result = {
-                [Symbol.for("Jupyter.display")]() {
-                  return displayData;
-                }
+              result.result[Symbol.for("Jupyter.display")] = function() {
+                return displayData;
               };
             }
           }

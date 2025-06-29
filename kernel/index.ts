@@ -743,7 +743,7 @@ except Exception as e:
   }
   
   /**
-   * Execute code in the kernel
+   * Execute code in the kernel with proper message-based completion detection
    * 
    * @param code The code to execute
    * @param parent Parent message header
@@ -756,92 +756,112 @@ except Exception as e:
 
     try {
       this._status = "busy";
-      // Set up parent header for message callbacks
       await this.setup(parent);
       
-      // Execute the code using the IPython interpreter
-      const result = await this._kernel.run(code);
-      
-      // Format the result for consistent structure
-      const formattedResult = this.formatResult(result);
-      
-      // Check if there was a Python error - look for error status or error fields
-      if (formattedResult && 
-         ((formattedResult.status === 'error') || 
-          (formattedResult.ename) || 
-          (formattedResult.evalue))) {
-        
-        this._status = "active";
-        
-        // Check if this is a KeyboardInterrupt (from an interrupt signal)
-        if (formattedResult.ename && formattedResult.ename.includes('KeyboardInterrupt')) {
-
-          // Send stderr stream first (for Jupyter notebook UI compatibility)
-          this._sendMessage({
-            type: 'stream',
-            bundle: {
-              name: 'stderr',
-              text: `KeyboardInterrupt: ${formattedResult.evalue || 'Execution interrupted'}\n`
-            }
-          });
-          
-          // Send the error as an execute_error event
-          this._sendMessage({
-            type: 'execute_error',
-            bundle: {
-              ename: formattedResult.ename || 'KeyboardInterrupt',
-              evalue: formattedResult.evalue || 'Execution interrupted',
-              traceback: formattedResult.traceback || ['KeyboardInterrupt: Execution was interrupted by user']
-            }
-          });
-          
-          return { 
-            success: false, 
-            error: new Error('KeyboardInterrupt: Execution interrupted'),
-            result: formattedResult 
-          };
-        }
-        
-        // Send other errors as execute_error events
-      this._sendMessage({
-          type: 'execute_error',
-          bundle: {
-            ename: formattedResult.ename || 'Error',
-            evalue: formattedResult.evalue || 'Unknown error',
-            traceback: formattedResult.traceback || []
-          }
-        });
-         
-        return { 
-          success: false, 
-          error: new Error(`${formattedResult.ename || 'Error'}: ${formattedResult.evalue || 'Unknown error'}`),
-          result: formattedResult
+      // Create a promise that resolves only when execution is truly complete
+      return new Promise<{ success: boolean, result?: any, error?: Error }>((resolve, reject) => {
+        const executionState = {
+          allMessages: [] as IEventData[],
+          executionComplete: false,
+          executionResult: null as any,
+          executionError: null as Error | null,
+          timeout: null as number | null
         };
-      }
-    
-      // Don't try to get the last expression value - let Python's display system handle outputs
-      // This makes the behavior consistent with TypeScript kernel which only returns console/display outputs
-      
-      this._status = "active";
-      return {
-        success: true,
-        result: formattedResult
-      };
-    } catch (error) {
-      console.error("[KERNEL] Execute error:", error);
-      
-      // Simple error handling - let the existing message system handle the specifics
-      this._status = "active";
-      
-      // Send the error as an execute_error event
-      this._sendMessage({
-        type: 'execute_error',
-        bundle: {
-          ename: error instanceof Error ? error.name : 'Error',
-          evalue: error instanceof Error ? error.message : String(error),
-          traceback: error instanceof Error && error.stack ? [error.stack] : ['No traceback available']
-        }
+
+        // Set up message collector that captures ALL output before completion
+        const messageCollector = (eventData: IEventData) => {
+          executionState.allMessages.push(eventData);
+          
+          // Debug logging to trace message flow
+          console.log(`[KERNEL] Captured message: ${eventData.type}`, eventData.data);
+        };
+
+        // Set up completion detector
+        const completionDetector = async () => {
+          if (executionState.executionComplete) {
+            return; // Already completed
+          }
+          
+          console.log(`[KERNEL] Execution completed, processing ${executionState.allMessages.length} messages`);
+          
+          // Mark as complete to prevent multiple resolutions
+          executionState.executionComplete = true;
+          
+          // Clear timeout
+          if (executionState.timeout !== null) {
+            clearTimeout(executionState.timeout);
+          }
+          
+          // Clean up listeners
+          super.off(KernelEvents.ALL, messageCollector);
+          
+          // Process collected messages to determine final result
+          let hasError = false;
+          let errorInfo: any = null;
+          
+          for (const message of executionState.allMessages) {
+            if (message.type === 'execute_error') {
+              hasError = true;
+              errorInfo = message.data;
+              break;
+            }
+          }
+          
+          this._status = "active";
+          
+          if (hasError) {
+            console.log(`[KERNEL] Execution failed with error:`, errorInfo);
+            const errorMsg = `${errorInfo.ename || 'Error'}: ${errorInfo.evalue || 'Unknown error'}`;
+            resolve({
+              success: false,
+              error: new Error(errorMsg),
+              result: executionState.executionResult
+            });
+          } else {
+            console.log(`[KERNEL] Execution successful, captured ${executionState.allMessages.length} output messages`);
+            resolve({
+              success: true,
+              result: executionState.executionResult
+            });
+          }
+        };
+
+        // Set up timeout as safety net (10 seconds)
+        executionState.timeout = setTimeout(() => {
+          if (!executionState.executionComplete) {
+            console.warn("[KERNEL] Execution timeout, completing anyway");
+            completionDetector();
+          }
+        }, 10000) as unknown as number;
+
+        // Install message collector BEFORE executing code
+        super.on(KernelEvents.ALL, messageCollector);
+
+        // Execute the code and handle completion
+        this._kernel.run(code).then((result: any) => {
+          console.log("[KERNEL] Python execution finished, waiting for messages to settle");
+          executionState.executionResult = this.formatResult(result);
+          
+          // Wait a small amount of time for any remaining messages to be processed
+          // This ensures all stdout/stderr streams have been captured
+          setTimeout(() => {
+            completionDetector();
+          }, 100); // 100ms should be enough for message processing
+          
+        }).catch((error: any) => {
+          console.error("[KERNEL] Python execution error:", error);
+          executionState.executionError = error instanceof Error ? error : new Error(String(error));
+          
+          // Still wait for messages to settle before completing
+          setTimeout(() => {
+            completionDetector();
+          }, 100);
+        });
       });
+      
+    } catch (error) {
+      console.error("[KERNEL] Execute setup error:", error);
+      this._status = "active";
       
       return {
         success: false,
@@ -1050,11 +1070,8 @@ except Exception as e:
   public async* executeStream(code: string, parent: any = {}): AsyncGenerator<any, { success: boolean, result?: any, error?: Error }, void> {
     try {
       await this.initialize();
-      await this.setup(parent);
       
-      this._status = "busy";
-      
-      // Create event listeners
+      // Create event listeners for streaming
       const eventQueue: IEventData[] = [];
       
       const handleAllEvents = (eventData: IEventData) => {
@@ -1065,16 +1082,32 @@ except Exception as e:
       super.on(KernelEvents.ALL, handleAllEvents);
       
       try {
-        // Execute code as normal
-        const result = await this.execute(code, parent);
+        // Use the fixed execute method which properly waits for all messages
+        const resultPromise = this.execute(code, parent);
         
-        // Forward captured events
-        while (eventQueue.length > 0) {
-          yield eventQueue.shift();
+        // Stream events as they arrive
+        while (true) {
+          // Check if we have queued events to yield
+          if (eventQueue.length > 0) {
+            yield eventQueue.shift();
+          }
+          
+          // Check if execution is complete
+          const isComplete = await Promise.race([
+            resultPromise.then(() => true),
+            new Promise(resolve => setTimeout(() => resolve(false), 10))
+          ]);
+          
+          if (isComplete) {
+            // Yield any remaining events
+            while (eventQueue.length > 0) {
+              yield eventQueue.shift();
+            }
+            
+            // Return the final result
+            return await resultPromise;
+          }
         }
-        
-        this._status = "active";
-        return result;
       } catch (error) {
         console.error("Error in executeStream:", error);
         throw error;
@@ -1083,8 +1116,7 @@ except Exception as e:
         super.off(KernelEvents.ALL, handleAllEvents);
       }
     } catch (error) {
-      this._status = "active";
-      console.error("Error in executeStream:", error);
+      console.error("Error in executeStream setup:", error);
       return {
         success: false,
         error: error instanceof Error ? error : new Error(String(error))

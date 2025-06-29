@@ -103,12 +103,86 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     this.setupJupyterEventForwarding();
     this.setupFileSystemInterception();
     
-    // Initialize tseval context with console proxy
+    // Initialize tseval context with console proxy that goes through ConsoleCapture
     const consoleProxy = {
-      log: (...args: any[]) => console.log("[kernel]", ...args),
-      error: (...args: any[]) => console.error("[kernel]", ...args),
-      warn: (...args: any[]) => console.warn("[kernel]", ...args),
-      info: (...args: any[]) => console.info("[kernel]", ...args),
+      log: (...args: any[]) => {
+        // Emit directly to our event system for capture
+        super.emit(KernelEvents.STREAM, {
+          name: 'stdout',
+          text: args.map(arg => {
+            try {
+              if (typeof arg === 'string') {
+                return arg;
+              } else if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}`;
+              } else {
+                return JSON.stringify(arg, null, 2);
+              }
+            } catch (jsonError) {
+              return String(arg);
+            }
+          }).join(' ') + '\n'
+        });
+        // Also print to terminal for debugging
+        console.log(...args);
+      },
+      error: (...args: any[]) => {
+        super.emit(KernelEvents.STREAM, {
+          name: 'stderr',
+          text: args.map(arg => {
+            try {
+              if (typeof arg === 'string') {
+                return arg;
+              } else if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}`;
+              } else {
+                return JSON.stringify(arg, null, 2);
+              }
+            } catch (jsonError) {
+              return String(arg);
+            }
+          }).join(' ') + '\n'
+        });
+        console.error(...args);
+      },
+      warn: (...args: any[]) => {
+        super.emit(KernelEvents.STREAM, {
+          name: 'stderr',
+          text: args.map(arg => {
+            try {
+              if (typeof arg === 'string') {
+                return arg;
+              } else if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}`;
+              } else {
+                return JSON.stringify(arg, null, 2);
+              }
+            } catch (jsonError) {
+              return String(arg);
+            }
+          }).join(' ') + '\n'
+        });
+        console.warn(...args);
+      },
+      info: (...args: any[]) => {
+        super.emit(KernelEvents.STREAM, {
+          name: 'stdout',
+          text: args.map(arg => {
+            try {
+              if (typeof arg === 'string') {
+                return arg;
+              } else if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}`;
+              } else {
+                return JSON.stringify(arg, null, 2);
+              }
+            } catch (jsonError) {
+              return String(arg);
+            }
+          }).join(' ') + '\n'
+        });
+        console.info(...args);
+      },
     };
     
     this.tseval = createTSEvalContext({
@@ -224,118 +298,218 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     this._abortController = new AbortController();
     this.consoleCapture.start();
     
-    // Capture display data during execution
-    const displayData: any[] = [];
-    const captureDisplay = (data: any) => {
-      displayData.push(data);
-    };
-    
-    // Listen for display events during execution
-    super.on('display_data', captureDisplay);
-    super.on('execute_result', captureDisplay);
-    
     try {
       // Check for interrupt before execution
       if (this._abortController.signal.aborted) {
         throw new Error('KeyboardInterrupt: Execution was interrupted');
       }
-      
-      // Use tseval for execution with interrupt checking
-      const { result, mod } = await this.executeWithInterruptSupport(code);
-      
-      // Emit execution result if we have a meaningful result
-      // This is the proper Jupyter way - results go through events, not return values
-      if (result !== undefined) {
-        this.emitExecutionResult(result);
-      }
-      
-      // Prepare display data for serialization
-      let displayDataForSerialization;
-      
-      if (displayData.length > 0) {
-        displayDataForSerialization = displayData[0].data;
-      } else if (result !== undefined) {
-        displayDataForSerialization = {
-          "text/plain": typeof result === 'string' ? result : JSON.stringify(result)
-        };
-      } else {
-        displayDataForSerialization = {
-          "text/plain": ""
-        };
-      }
-      
-      // Create a result object with Jupyter display symbol
-      const resultObj = {
-        _displayData: displayDataForSerialization,
-        [Symbol.for("Jupyter.display")]() {
-          return displayDataForSerialization;
-        }
+
+      // Set up execution state to collect all messages
+      const executionState = {
+        allMessages: [] as any[],
+        executionComplete: false,
+        executionResult: null as any,
+        executionError: null as Error | null,
+        timeout: null as number | null
       };
-      
-      // Return execution metadata with cleaner result structure
-      return { 
-        success: true, 
-        execution_count: this.executionCount,
-        result: resultObj
-      };
-    } catch (error) {
-      const errorObj = error instanceof Error ? error : new Error(String(error));
-      
-      // Check if this was an interrupt
-      if (errorObj.message.includes('KeyboardInterrupt')) {
-        this._sendMessage({
-          type: 'stream',
-          bundle: {
-            name: 'stderr',
-            text: 'KeyboardInterrupt: TypeScript execution interrupted by user\n'
-          }
-        });
+
+      // Promise-based execution with proper message collection
+      return new Promise<{ success: boolean, execution_count: number, result?: any, error?: Error }>((resolve, reject) => {
         
-        this._sendMessage({
-          type: 'execute_error',
-          bundle: {
-            ename: 'KeyboardInterrupt',
-            evalue: 'TypeScript execution interrupted by user',
-            traceback: ['KeyboardInterrupt: TypeScript execution interrupted by user']
+        // Collect all events during execution
+        const handleAllEvents = (eventData: any) => {
+          console.log(`[TS_KERNEL] Captured event: ${eventData.type}`);
+          executionState.allMessages.push(eventData);
+        };
+
+        // Set up event listener BEFORE execution
+        super.on('stream', handleAllEvents);
+        super.on('display_data', handleAllEvents);
+        super.on('execute_result', handleAllEvents);
+        super.on('execute_error', handleAllEvents);
+
+        // Completion detector - waits for message settling
+        const completionDetector = () => {
+          if (executionState.executionComplete) return;
+          
+          executionState.executionComplete = true;
+          
+          // Clear timeout
+          if (executionState.timeout !== null) {
+            clearTimeout(executionState.timeout);
           }
-        });
-      } else {
-        this.emitExecutionError(errorObj);
-      }
+          
+          // Clean up event listeners
+          super.off('stream', handleAllEvents);
+          super.off('display_data', handleAllEvents);
+          super.off('execute_result', handleAllEvents);
+          super.off('execute_error', handleAllEvents);
+          
+          console.log(`[TS_KERNEL] Execution complete, captured ${executionState.allMessages.length} messages`);
+          
+          // Process captured messages to build result
+          const streamOutputs: string[] = [];
+          let displayData: any[] = [];
+          let hasError = false;
+          let errorResult: any = null;
+          
+          for (const msg of executionState.allMessages) {
+            if (msg.type === 'stream' && msg.bundle?.text) {
+              streamOutputs.push(msg.bundle.text);
+            } else if (msg.type === 'display_data' && msg.bundle?.data) {
+              displayData.push(msg.bundle);
+            } else if (msg.type === 'execute_result' && msg.bundle?.data) {
+              displayData.push(msg.bundle);
+            } else if (msg.type === 'execute_error') {
+              hasError = true;
+              errorResult = msg.bundle;
+            }
+          }
+          
+          // Prepare result
+          let resultObj: any;
+          let success = !hasError;
+          
+          if (hasError && errorResult) {
+            // Error case
+            const errorDisplayData = {
+              "text/plain": `${errorResult.ename}: ${errorResult.evalue}`,
+              "application/vnd.jupyter.error": errorResult
+            };
+            
+            resultObj = {
+              _displayData: errorDisplayData,
+              _streamOutput: streamOutputs.join(''),
+              [Symbol.for("Jupyter.display")]() {
+                return errorDisplayData;
+              }
+            };
+            
+            resolve({
+              success: false,
+              execution_count: this.executionCount,
+              error: new Error(`${errorResult.ename}: ${errorResult.evalue}`),
+              result: resultObj
+            });
+          } else {
+            // Success case
+            let displayDataForSerialization;
+            
+            if (displayData.length > 0) {
+              displayDataForSerialization = displayData[0].data;
+            } else if (executionState.executionResult !== undefined) {
+              displayDataForSerialization = {
+                "text/plain": typeof executionState.executionResult === 'string' ? executionState.executionResult : JSON.stringify(executionState.executionResult)
+              };
+            } else if (streamOutputs.length > 0) {
+              displayDataForSerialization = {
+                "text/plain": streamOutputs.join('')
+              };
+            } else {
+              displayDataForSerialization = {
+                "text/plain": ""
+              };
+            }
+            
+            resultObj = {
+              _displayData: displayDataForSerialization,
+              _streamOutput: streamOutputs.join(''),
+              [Symbol.for("Jupyter.display")]() {
+                return displayDataForSerialization;
+              }
+            };
+            
+            resolve({
+              success: true,
+              execution_count: this.executionCount,
+              result: resultObj
+            });
+          }
+        };
+
+        // Set up timeout as safety net (10 seconds)
+        executionState.timeout = setTimeout(() => {
+          if (!executionState.executionComplete) {
+            console.warn("[TS_KERNEL] Execution timeout, completing anyway");
+            completionDetector();
+          }
+        }, 10000) as unknown as number;
+
+        // Execute the code
+        this.executeWithInterruptSupport(code)
+          .then(({ result, mod }) => {
+            executionState.executionResult = result;
+            
+            // Emit execution result if we have a meaningful result
+            if (result !== undefined) {
+              this.emitExecutionResult(result);
+            }
+            
+            // Wait for message settling (100ms should be enough for TS execution)
+            setTimeout(() => {
+              if (!executionState.executionComplete) {
+                completionDetector();
+              }
+            }, 100);
+          })
+          .catch((error) => {
+            executionState.executionError = error instanceof Error ? error : new Error(String(error));
+            
+            // Check if this was an interrupt
+            if (executionState.executionError.message.includes('KeyboardInterrupt')) {
+              this._sendMessage({
+                type: 'stream',
+                bundle: {
+                  name: 'stderr',
+                  text: 'KeyboardInterrupt: TypeScript execution interrupted by user\n'
+                }
+              });
+              
+              this._sendMessage({
+                type: 'execute_error',
+                bundle: {
+                  ename: 'KeyboardInterrupt',
+                  evalue: 'TypeScript execution interrupted by user',
+                  traceback: ['KeyboardInterrupt: TypeScript execution interrupted by user']
+                }
+              });
+            } else {
+              this.emitExecutionError(executionState.executionError);
+            }
+            
+            // Wait for error message settling
+            setTimeout(() => {
+              if (!executionState.executionComplete) {
+                completionDetector();
+              }
+            }, 100);
+          });
+      });
+    } catch (error) {
+      // Handle setup errors (before promise execution)
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      console.error("[TS_KERNEL] Setup error:", errorObj);
       
-      // Prepare error display data for serialization
-      const errorDisplayData = {
-        "text/plain": `${errorObj.name}: ${errorObj.message}`,
-        "application/vnd.jupyter.error": {
-          ename: errorObj.name,
-          evalue: errorObj.message,
-          traceback: [errorObj.stack || errorObj.message]
-        }
-      };
-      
-      // Create an error result object with Jupyter display symbol
-      const errorResultObj = {
-        _displayData: errorDisplayData,
-        [Symbol.for("Jupyter.display")]() {
-          return errorDisplayData;
-        }
-      };
-      
-      // Return execution metadata including the error for compatibility with tests
-      return { 
-        success: false, 
+      return {
+        success: false,
         execution_count: this.executionCount,
         error: errorObj,
-        result: errorResultObj
+        result: {
+          _displayData: {
+            "text/plain": `Setup Error: ${errorObj.message}`
+          },
+          _streamOutput: '',
+          [Symbol.for("Jupyter.display")]() {
+            return {
+              "text/plain": `Setup Error: ${errorObj.message}`
+            };
+          }
+        }
       };
     } finally {
       this._isExecuting = false;
       this._abortController = null;
       this.consoleCapture.stop();
-      
-      // Clean up display data listeners
-      super.off('display_data', captureDisplay);
-      super.off('execute_result', captureDisplay);
     }
   }
   

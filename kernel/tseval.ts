@@ -124,6 +124,10 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
       })
       .join("\n");
 
+    // Add special handling for console override if it exists in context
+    const consoleOverride = context.console ? `const console = context.console;` : '';
+    const fullPrelude = [consoleOverride, prelude].filter(Boolean).join('\n');
+
     // Build trailing code - capture new variables and result
     const captureVariables = Array.from(newVariables)
       .map(varName => `context["${varName}"] = ${varName};`)
@@ -134,7 +138,7 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
     if (lastExprCode) {
       // Supported expressions are safe to re-execute for result capture
       finalCode = `const context = globalThis.__tseval_context__;
-${prelude}
+${fullPrelude}
 
 ${code}
 
@@ -142,7 +146,7 @@ ${captureVariables}
 context._ = (${lastExprCode});`;
     } else {
       finalCode = `const context = globalThis.__tseval_context__;
-${prelude}
+${fullPrelude}
 
 ${code}
 
