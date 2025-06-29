@@ -115,6 +115,9 @@ export class KernelManager extends EventEmitter {
   // Track execution metadata for better monitoring
   private executionMetadata: Map<string, Map<string, { startTime: number; code?: string; timeoutId?: number }>> = new Map();
   
+  // Track AbortControllers for each kernel's ongoing operations
+  private abortControllers: Map<string, Map<string, AbortController>> = new Map();
+  
   // Pool management - now using promises for immediate response
   private pool: Map<string, Promise<IKernelInstance>[]> = new Map();
   private poolConfig: IKernelPoolConfig;
@@ -157,6 +160,56 @@ export class KernelManager extends EventEmitter {
         traceback: ["KeyboardInterrupt: Execution interrupted by user"]
       }
     };
+  }
+  
+  /**
+   * Store an AbortController for a specific kernel execution
+   * @private
+   */
+  private storeAbortController(kernelId: string, executionId: string, controller: AbortController): void {
+    if (!this.abortControllers.has(kernelId)) {
+      this.abortControllers.set(kernelId, new Map());
+    }
+    this.abortControllers.get(kernelId)!.set(executionId, controller);
+  }
+
+  /**
+   * Remove and return an AbortController for a specific kernel execution
+   * @private
+   */
+  private removeAbortController(kernelId: string, executionId: string): AbortController | undefined {
+    const kernelControllers = this.abortControllers.get(kernelId);
+    if (!kernelControllers) return undefined;
+    
+    const controller = kernelControllers.get(executionId);
+    if (controller) {
+      kernelControllers.delete(executionId);
+      if (kernelControllers.size === 0) {
+        this.abortControllers.delete(kernelId);
+      }
+    }
+    return controller;
+  }
+
+  /**
+   * Abort all ongoing operations for a specific kernel
+   * @private
+   */
+  private abortAllKernelOperations(kernelId: string): void {
+    const kernelControllers = this.abortControllers.get(kernelId);
+    if (!kernelControllers) return;
+
+    for (const [executionId, controller] of kernelControllers) {
+      try {
+        controller.abort();
+        console.log(`🚫 Aborted execution ${executionId} for kernel ${kernelId}`);
+      } catch (error) {
+        console.warn(`⚠️ Error aborting execution ${executionId}:`, error);
+      }
+    }
+    
+    // Clear all controllers for this kernel
+    this.abortControllers.delete(kernelId);
   }
   
   constructor(options: IKernelManagerOptions = {}) {
@@ -1311,6 +1364,9 @@ export class KernelManager extends EventEmitter {
       throw new Error(`Kernel ${id} is missing destroy function (type: ${typeof instance.destroy})`);
     }
     
+    // Abort all ongoing operations for this kernel first
+    this.abortAllKernelOperations(id);
+    
     // Clear any inactivity timer
     this.clearInactivityTimeout(id);
     
@@ -1600,6 +1656,10 @@ export class KernelManager extends EventEmitter {
     // Track this execution with the code for better monitoring
     const executionId = this.trackExecution(kernelId, code);
     
+    // Create AbortController for this execution to enable cancellation
+    const abortController = new AbortController();
+    this.storeAbortController(kernelId, executionId, abortController);
+    
     try {
       // For main thread kernels, we can use the executeStream method directly
       if (instance.mode === KernelMode.MAIN_THREAD) {
@@ -1715,7 +1775,40 @@ export class KernelManager extends EventEmitter {
           
           // Set up timeout to prevent hanging executions
           const timeoutMs = 300000; // 5 minutes
-          const timeoutId = setTimeout(() => {
+          let timeoutId: number | null = null;
+          
+          // Check if already aborted
+          if (abortController.signal.aborted) {
+            executionComplete = true;
+            resolve({
+              success: false,
+              error: new Error('Execution was aborted')
+            });
+            return;
+          }
+          
+          // Set up abort handler
+          const abortHandler = () => {
+            if (!executionComplete) {
+              console.log(`🚫 Execution ${executionId} aborted`);
+              executionComplete = true;
+              
+              // Clear timeout if set
+              if (timeoutId !== null) {
+                clearTimeout(timeoutId);
+              }
+              
+              resolve({
+                success: false,
+                error: new Error('Execution was aborted')
+              });
+            }
+          };
+          
+          abortController.signal.addEventListener('abort', abortHandler);
+          
+          // Set up timeout timer
+          timeoutId = setTimeout(() => {
             if (!executionComplete) {
               console.warn(`Execution ${executionId} timed out after ${timeoutMs}ms`);
               executionComplete = true;
@@ -1844,7 +1937,8 @@ export class KernelManager extends EventEmitter {
           
           // Monitor the stream queue and yield results
           while ((!executionComplete || streamQueue.length > 0) && 
-                 (Date.now() - startTime < streamTimeout)) {
+                 (Date.now() - startTime < streamTimeout) &&
+                 !abortController.signal.aborted) {
             // If there are items in the queue, yield them
             if (streamQueue.length > 0) {
               const event = streamQueue.shift();
@@ -1854,7 +1948,21 @@ export class KernelManager extends EventEmitter {
             
             // If no more events but execution is not complete, wait a little
             if (!executionComplete) {
-              await new Promise(resolve => setTimeout(resolve, 10));
+              // Use abort signal to cancel the wait
+              try {
+                await new Promise((resolve, reject) => {
+                  const timeoutId = setTimeout(resolve, 10);
+                  abortController.signal.addEventListener('abort', () => {
+                    clearTimeout(timeoutId);
+                    reject(new Error('Aborted'));
+                  });
+                });
+              } catch (error) {
+                // If aborted, break out of loop
+                if (abortController.signal.aborted) {
+                  break;
+                }
+              }
             }
           }
           
@@ -1874,6 +1982,9 @@ export class KernelManager extends EventEmitter {
         } finally {
           // ALWAYS clean up event handlers regardless of how execution ends
           cleanupHandlers();
+          
+          // Remove AbortController to prevent memory leaks
+          this.removeAbortController(kernelId, executionId);
           
           // Complete execution tracking
           this.completeExecution(kernelId, executionId);
