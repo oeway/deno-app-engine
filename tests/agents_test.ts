@@ -1665,7 +1665,7 @@ try {
         console.log("🎫 Generated access token for external call");
         
         // Import hypha-rpc for external connection
-        const hyphaRPC = await import("npm:hypha-rpc@0.20.58");
+        const hyphaRPC = await import("npm:hypha-rpc@0.20.60");
         
         // Connect to HyphaCore server from test side (external client)
         console.log("🔗 Connecting to HyphaCore server as external client...");
@@ -1840,7 +1840,7 @@ Deno.test("Agents Module - HyphaCore Startup Script Generation", async () => {
       } else if (kernelTypeInfo.type === KernelType.JAVASCRIPT || kernelTypeInfo.type === KernelType.TYPESCRIPT) {
         // Verify JavaScript/TypeScript-specific content
         assert(startupScript.includes('const hyphaWebsocketClient = await import'), "JS/TS script should include dynamic import");
-        assert(startupScript.includes('https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.58'), "JS/TS script should include CDN URL");
+        assert(startupScript.includes('https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.60'), "JS/TS script should include CDN URL");
         assert(startupScript.includes('hyphaWebsocketClient.connectToServer'), "JS/TS script should include server connection");
         assert(startupScript.includes('globalThis._hypha_server'), "JS/TS script should set global variable");
         console.log(`✅ ${kernelTypeInfo.name} startup script generated correctly`);

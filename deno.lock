@@ -8,9 +8,10 @@
     "npm:@babel/core@*": "7.27.7",
     "npm:@babel/parser@*": "7.27.7",
     "npm:@babel/traverse@*": "7.27.7",
-    "npm:hypha-core@0.20.58-post2": "0.20.58-post2_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1",
-    "npm:hypha-rpc@*": "0.20.58",
-    "npm:hypha-rpc@0.20.58": "0.20.58",
+    "npm:hypha-core@0.20.60": "0.20.60_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1",
+    "npm:hypha-rpc@*": "0.20.60",
+    "npm:hypha-rpc@0.20.59": "0.20.59",
+    "npm:hypha-rpc@0.20.60": "0.20.60",
     "npm:ollama@*": "0.5.16",
     "npm:ollama@0.5": "0.5.16",
     "npm:openai@4": "4.104.0",
@@ -930,8 +931,8 @@
         "ms@2.1.3"
       ]
     },
-    "hypha-core@0.20.58-post2_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1": {
-      "integrity": "sha512-0fz5hhu5sxevIU+oPVaJisuymtBuebvhg9AY+y7ZX2WW1JOsgMFIkEnoBn0DmKDcMhLttE4TeBluoI8SIitmGA==",
+    "hypha-core@0.20.60_react@18.3.1_react-dom@18.3.1__react@18.3.1_@testing-library+dom@8.20.1": {
+      "integrity": "sha512-uSEw/JF0RrA0KwsjIk+BOjosJPYox7teZVQow4Z7pPPd5BPv1EMWS69dhJKgXW3Yz0NWQyRk8BpHmnG67JZiFQ==",
       "dependencies": [
         "@babel/standalone",
         "@monaco-editor/react",
@@ -943,7 +944,7 @@
         "autoprefixer",
         "buffer",
         "chai",
-        "hypha-rpc",
+        "hypha-rpc@0.20.60",
         "imjoy-rpc",
         "mocha",
         "mock-socket",
@@ -958,8 +959,14 @@
         "util"
       ]
     },
-    "hypha-rpc@0.20.58": {
-      "integrity": "sha512-7c3B3SKF22xz4af6EzPD4ksh6CSVaCmHmPFfV9qbmZGNdnpSxo69WW0UB+tEAn+AFZ2EZg5sHAoqygordAtBJQ==",
+    "hypha-rpc@0.20.59": {
+      "integrity": "sha512-Ipfs6hlFkB3PXv3wEqIbV4v5nMq0w7oif1feEO8coSkSuzKWWwy94o48NdysnuvfInZvWIsdW1aZJNLdoSlDow==",
+      "dependencies": [
+        "@msgpack/msgpack@2.8.0"
+      ]
+    },
+    "hypha-rpc@0.20.60": {
+      "integrity": "sha512-6ItvORWOZwR9I6oyG2vGf/Yxj5fS/s4dSeZ9nUO2+WR6/hc52bagAKvZleV0QK0dJ0ZKChvW7ExAXASsR1ZX+g==",
       "dependencies": [
         "@msgpack/msgpack@2.8.0"
       ]
@@ -1893,6 +1900,8 @@
   },
   "remote": {
     "https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.58/dist/hypha-rpc-websocket.mjs": "885f2e9f8ab14a4785cca6091d22bbab8c4c04e81996622d9914a11b8a8015ab",
+    "https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.59/dist/hypha-rpc-websocket.mjs": "a7e896e96e1240e89b61e8efa2242f41258743eeda283cabef157ec9ce512ed4",
+    "https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.60/dist/hypha-rpc-websocket.mjs": "06a773d6cc9757982409180718cb34fdda76362270445d0f62d1e11d6dea022b",
     "https://deno.land/std@0.177.0/_util/asserts.ts": "178dfc49a464aee693a7e285567b3d0b555dc805ff490505a8aae34f9cfb1462",
     "https://deno.land/std@0.177.0/_util/os.ts": "d932f56d41e4f6a6093d56044e29ce637f8dcc43c5a90af43504a889cf1775e3",
     "https://deno.land/std@0.177.0/node/_core.ts": "9a58c0ef98ee77e9b8fcc405511d1b37a003a705eb6a9b6e95f75434d8009adc",
@@ -2256,8 +2265,8 @@
   },
   "workspace": {
     "dependencies": [
-      "npm:hypha-core@0.20.58-post2",
-      "npm:hypha-rpc@0.20.58",
+      "npm:hypha-core@0.20.60",
+      "npm:hypha-rpc@0.20.60",
       "npm:ollama@0.5",
       "npm:openai@^4.65.0",
       "npm:pyodide@0.27.5"

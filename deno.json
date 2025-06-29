@@ -10,9 +10,9 @@
     "comlink": "https://esm.sh/comlink@4.3.1",
     "ollama": "npm:ollama@^0.5.0",
     "openai": "npm:openai@^4.65.0",
-    "hypha-core": "npm:hypha-core@0.20.58-post2",
-    "hypha-core/deno-websocket-server": "npm:hypha-core@0.20.58-post2/deno-websocket-server",
-    "hypha-rpc": "npm:hypha-rpc@0.20.58"
+    "hypha-core": "npm:hypha-core@0.20.60",
+    "hypha-core/deno-websocket-server": "npm:hypha-core@0.20.60/deno-websocket-server",
+    "hypha-rpc": "npm:hypha-rpc@0.20.60"
   },
   "tasks": {
     "test": "deno test -A --no-check tests/worker_test.ts tests/vectordb_comprehensive_test.ts",

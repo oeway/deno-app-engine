@@ -85,7 +85,8 @@ _hypha_server = await connect_to_server({
     "server_url": "http://${TEST_CONFIG.hypha_core_host}:${TEST_CONFIG.hypha_core_port}",
     "workspace": "${TEST_CONFIG.hypha_core_workspace}",
     "client_id": "python-hypha-test",
-    "token": "${pythonToken}"
+    "token": "${pythonToken}",
+    "method_timeout": 120
 })
 
 print(f"✅ Python connected to HyphaCore: {_hypha_server.config.public_base_url}")
@@ -141,14 +142,15 @@ print("✅ Python math service registered successfully")
       console.log("📘 Connecting TypeScript agent to HyphaCore...");
       const tsConnectResult = await tsAgent.execute(`
 // Import hypha-rpc WebSocket client  
-const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.58/dist/hypha-rpc-websocket.mjs");
+const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.60/dist/hypha-rpc-websocket.mjs");
 
 // Connect to HyphaCore server with authentication token
 const _hypha_server = await hyphaWebsocketClient.connectToServer({
     server_url: "http://${TEST_CONFIG.hypha_core_host}:${TEST_CONFIG.hypha_core_port}",
     workspace: "${TEST_CONFIG.hypha_core_workspace}",
     client_id: "typescript-hypha-test",
-    token: "${tsToken}"
+    token: "${tsToken}",
+    method_timeout: 120
 });
 
 console.log("✅ TypeScript connected to HyphaCore:", _hypha_server.config.public_base_url);
@@ -221,14 +223,15 @@ console.log("✅ TypeScript utils service registered successfully");
       console.log("📗 Connecting JavaScript agent to HyphaCore...");
       const jsConnectResult = await jsAgent.execute(`
 // Import hypha-rpc WebSocket client
-const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.58/dist/hypha-rpc-websocket.mjs");
+const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.60/dist/hypha-rpc-websocket.mjs");
 
 // Connect to HyphaCore server with authentication token
 const _hypha_server = await hyphaWebsocketClient.connectToServer({
     server_url: "http://${TEST_CONFIG.hypha_core_host}:${TEST_CONFIG.hypha_core_port}",
     workspace: "${TEST_CONFIG.hypha_core_workspace}",
     client_id: "javascript-hypha-test",
-    token: "${jsToken}"
+    token: "${jsToken}",
+    method_timeout: 120
 });
 
 console.log("✅ JavaScript connected to HyphaCore:", _hypha_server.config.public_base_url);

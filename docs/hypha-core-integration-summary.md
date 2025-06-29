@@ -48,9 +48,9 @@ Added to `deno.json`:
 ```json
 {
   "imports": {
-    "hypha-core": "npm:hypha-core@0.20.58",
-    "hypha-core/deno-websocket-server": "npm:hypha-core@0.20.58/deno-websocket-server",
-    "hypha-rpc": "npm:hypha-rpc@0.20.58"
+    "hypha-core": "npm:hypha-core@0.20.60",
+    "hypha-core/deno-websocket-server": "npm:hypha-core@0.20.60/deno-websocket-server",
+    "hypha-rpc": "npm:hypha-rpc@0.20.60"
   }
 }
 ```
