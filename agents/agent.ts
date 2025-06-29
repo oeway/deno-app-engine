@@ -1520,55 +1520,76 @@ export class Agent implements IAgentInstance {
 
     try {
       let startupOutput = '';
-      let startupError: string | undefined;
+      let finalResult: { success: boolean, result?: any, error?: Error } = { success: true };
 
-      // Set up output capture
-      const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (this.kernel && event.kernelId === this.kernelId) {
-          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
-            startupOutput += event.data.text || '';
+      // Use executeStream for reliable output capture
+      if (this.manager.kernelManager) {
+        const streamGenerator = this.manager.kernelManager.executeStream(this.kernelId!, this.startupScript);
+        
+        try {
+          for await (const streamEvent of streamGenerator) {
+            if (streamEvent.type === 'stream' && streamEvent.data) {
+              if (streamEvent.data.name === 'stdout' || streamEvent.data.name === 'stderr') {
+                startupOutput += streamEvent.data.text || '';
+              }
+            } else if (streamEvent.type === 'execute_result' && streamEvent.data?.data?.['text/plain']) {
+              // Include execute_result output as well
+              startupOutput += streamEvent.data.data['text/plain'] || '';
+            } else if (streamEvent.type === 'execute_error') {
+              if (streamEvent.data) {
+              // Handle execution errors
+              const errorMsg = `${streamEvent.data.ename}: ${streamEvent.data.evalue}`;
+              startupOutput += errorMsg + '\n';
+              finalResult = {
+                success: false,
+                  error: new Error(errorMsg),
+                  result: streamEvent.data
+                };
+              }
+              else {
+                finalResult = {
+                  success: false,
+                  error: new Error('Unknown error'),
+                  result: streamEvent.data
+                };
+              }
+            }
           }
+        } catch (streamError) {
+          console.error(`Stream error in executeStartupScript:`, streamError);
+          finalResult = {
+            success: false,
+            error: streamError instanceof Error ? streamError : new Error(String(streamError))
+          };
         }
-      };
+      } else {
+        // Fallback to direct kernel execution
+        finalResult = await this.kernel.execute(this.startupScript);
+      }
 
-      // Listen for output
-      this.manager.kernelManager.on(KernelEvents.STREAM, handleManagerEvent);
+      // Store the captured output for use in system prompt
+      this.startupOutput = startupOutput.trim();
 
-      try {
-        // Execute the startup script
-        const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernelId!, this.startupScript)
-          : await this.kernel.execute(this.startupScript);
+      if (!finalResult.success && finalResult.error) {
+        const errorMessage = finalResult.error.message || 'Unknown error';
+        const fullError = finalResult.result?.traceback ? finalResult.result.traceback.join('\n') : errorMessage;
+        
+        console.error(`❌ [Agent ${this.id}] Startup script failed:`, errorMessage);
+        console.error(`Full error details:`, fullError);
+        
+        this.startupError = new AgentStartupError(
+          `Startup script failed: ${errorMessage}`,
+          fullError,
+          finalResult.result?.traceback?.join('\n')
+        );
+        
+        // Don't return here - let the error be handled by attachKernel method
+      }
 
-        // Store the captured output for use in system prompt
-        this.startupOutput = startupOutput.trim();
-
-        if (!result.success && result.error) {
-          const errorMessage = result.error.message || 'Unknown error';
-          const fullError = result.result?.traceback ? result.result.traceback.join('\n') : errorMessage;
-          
-          console.error(`❌ [Agent ${this.id}] Startup script failed:`, errorMessage);
-          console.error(`Full error details:`, fullError);
-          
-          this.startupError = new AgentStartupError(
-            `Startup script failed: ${errorMessage}`,
-            fullError,
-            result.result?.traceback?.join('\n')
-          );
-          
-          // Don't return here - let the error propagate to attachKernel
-          return;
-        }
-
-        console.log(`✅ [Agent ${this.id}] Startup script executed successfully`);
-        if (this.startupOutput) {
-          console.log(`📋 [Agent ${this.id}] Startup output (${this.startupOutput.length} chars):`, 
-            this.startupOutput.substring(0, 200) + (this.startupOutput.length > 200 ? '...' : ''));
-        }
-
-      } finally {
-        // Clean up listener
-        this.manager.kernelManager.off(KernelEvents.STREAM, handleManagerEvent);
+      console.log(`✅ [Agent ${this.id}] Startup script executed successfully`);
+      if (this.startupOutput) {
+        console.log(`📋 [Agent ${this.id}] Startup output (${this.startupOutput.length} chars):`, 
+          this.startupOutput.substring(0, 200) + (this.startupOutput.length > 200 ? '...' : ''));
       }
 
     } catch (error) {
@@ -1597,55 +1618,75 @@ export class Agent implements IAgentInstance {
     try {
       let observations = '';
       let observationImages: string[] = [];
+      let finalResult: { success: boolean, result?: any, error?: Error } = { success: true };
 
-      // Set up output capture
-      const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (this.kernel && event.kernelId === this.kernelId) {
-          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
-            observations += event.data.text || '';
-          } else if (event.data.data && event.data.data['image/png']) {
-            observationImages.push(event.data.data['image/png']);
+      // Use executeStream for reliable output capture
+      if (this.manager.kernelManager) {
+        // Process streaming output from kernel manager
+        const streamGenerator = this.manager.kernelManager.executeStream(this.kernelId!, code);
+        
+        try {
+          for await (const streamEvent of streamGenerator) {
+            if (streamEvent.type === 'stream' && streamEvent.data) {
+              if (streamEvent.data.name === 'stdout' || streamEvent.data.name === 'stderr') {
+                observations += streamEvent.data.text || '';
+              }
+            } else if (streamEvent.type === 'display_data' && streamEvent.data?.data?.['image/png']) {
+              observationImages.push(streamEvent.data.data['image/png']);
+            } else if (streamEvent.type === 'execute_result' && streamEvent.data?.data?.['text/plain']) {
+              // Include execute_result output as well
+              observations += streamEvent.data.data['text/plain'] || '';
+            } else if (streamEvent.type === 'execute_error' && streamEvent.data) {
+              // Handle execution errors
+              const errorMsg = `${streamEvent.data.ename}: ${streamEvent.data.evalue}`;
+              observations += errorMsg + '\n';
+              finalResult = {
+                success: false,
+                error: new Error(errorMsg),
+                result: streamEvent.data
+              };
+            }
           }
+        } catch (streamError) {
+          // If there's an error in the stream, handle it
+          console.error(`Stream error in executeCode:`, streamError);
+          finalResult = {
+            success: false,
+            error: streamError instanceof Error ? streamError : new Error(String(streamError))
+          };
         }
-      };
-
-      // Listen for output
-      this.manager.kernelManager.on(KernelEvents.STREAM, handleManagerEvent);
-
-      try {
-        // Execute the code
-        const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernelId!, code)
-          : await this.kernel.execute(code);
-
-        if (result.success) {
-          console.log(`✅ [Agent ${this.id}] Step ${this.stepNumber}: Code executed successfully`);
-        } else {
-          console.log(`❌ [Agent ${this.id}] Step ${this.stepNumber}: Code execution failed -`, result.error?.message || 'Unknown error');
-        }
-
-        // Store observations in the action step
-        actionStep.observations = observations.trim();
-        if (observationImages.length > 0) {
-          actionStep.observationsImages = observationImages;
-        }
-
-        // Emit code execution event
-        this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
-          agentId: this.id,
-          completionId,
-          stepNumber: this.stepNumber,
-          code,
-          result,
-          observations: actionStep.observations,
-          observationImages: actionStep.observationsImages
-        });
-
-        return actionStep.observations || 'Code executed (no output)';
-      } finally {
-        // Clean up listener
-        this.manager.kernelManager.off(KernelEvents.STREAM, handleManagerEvent);
+        
+        // The generator's return value is the final result
+        // But since we've already processed the stream above, we'll use our collected result
+      } else {
+        // Fallback to direct kernel execution
+        finalResult = await this.kernel.execute(code);
       }
+
+      if (finalResult.success) {
+        console.log(`✅ [Agent ${this.id}] Step ${this.stepNumber}: Code executed successfully`);
+      } else {
+        console.log(`❌ [Agent ${this.id}] Step ${this.stepNumber}: Code execution failed -`, finalResult.error?.message || 'Unknown error');
+      }
+
+      // Store observations in the action step
+      actionStep.observations = observations.trim();
+      if (observationImages.length > 0) {
+        actionStep.observationsImages = observationImages;
+      }
+
+      // Emit code execution event
+      this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
+        agentId: this.id,
+        completionId,
+        stepNumber: this.stepNumber,
+        code,
+        result: finalResult,
+        observations: actionStep.observations,
+        observationImages: actionStep.observationsImages
+      });
+
+      return actionStep.observations || 'Code executed (no output)';
     } catch (error) {
       const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
       console.log(`💥 [Agent ${this.id}] Step ${this.stepNumber}: Kernel execution exception - ${errorMsg}`);
@@ -1814,47 +1855,59 @@ export class Agent implements IAgentInstance {
     let capturedOutput = '';
 
     try {
-      // Set up output capture
-      const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (this.kernel && event.kernelId === this.kernelId) {
-          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
-            capturedOutput += event.data.text || '';
-          }
-        }
-      };
+      let finalResult: { success: boolean, result?: any, error?: Error } = { success: true };
 
-      // Listen for output if manager is available
+      // Use executeStream for reliable output capture
       if (this.manager.kernelManager) {
-        this.manager.kernelManager.on(KernelEvents.STREAM, handleManagerEvent);
+        const streamGenerator = this.manager.kernelManager.executeStream(this.kernelId!, code);
+        
+        try {
+          for await (const streamEvent of streamGenerator) {
+            if (streamEvent.type === 'stream' && streamEvent.data) {
+              if (streamEvent.data.name === 'stdout' || streamEvent.data.name === 'stderr') {
+                capturedOutput += streamEvent.data.text || '';
+              }
+            } else if (streamEvent.type === 'execute_result' && streamEvent.data?.data?.['text/plain']) {
+              // Include execute_result output as well
+              capturedOutput += streamEvent.data.data['text/plain'] || '';
+            } else if (streamEvent.type === 'execute_error' && streamEvent.data) {
+              // Handle execution errors
+              const errorMsg = `${streamEvent.data.ename}: ${streamEvent.data.evalue}`;
+              capturedOutput += errorMsg + '\n';
+              finalResult = {
+                success: false,
+                error: new Error(errorMsg),
+                result: streamEvent.data
+              };
+            }
+          }
+        } catch (streamError) {
+          console.error(`Stream error in execute:`, streamError);
+          finalResult = {
+            success: false,
+            error: streamError instanceof Error ? streamError : new Error(String(streamError))
+          };
+        }
+      } else {
+        // Fallback to direct kernel execution
+        finalResult = await this.kernel.execute(code);
       }
 
-      try {
-        // Execute the code
-        const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernelId!, code)
-          : await this.kernel.execute(code);
-
-        if (result.success) {
-          console.log(`✅ [Agent ${this.id}] Code executed successfully`);
-          return {
-            success: true,
-            output: capturedOutput.trim(),
-            result: result.result
-          };
-        } else {
-          console.log(`❌ [Agent ${this.id}] Code execution failed -`, result.error?.message || 'Unknown error');
-          return {
-            success: false,
-            output: capturedOutput.trim(),
-            error: result.error,
-            result: result.result
-          };
-        }
-      } finally {
-        // Clean up listener
-        if (this.manager.kernelManager) {
-          this.manager.kernelManager.off(KernelEvents.STREAM, handleManagerEvent);
-        }
+      if (finalResult.success) {
+        console.log(`✅ [Agent ${this.id}] Code executed successfully`);
+        return {
+          success: true,
+          output: capturedOutput.trim(),
+          result: finalResult.result
+        };
+      } else {
+        console.log(`❌ [Agent ${this.id}] Code execution failed -`, finalResult.error?.message || 'Unknown error');
+        return {
+          success: false,
+          output: capturedOutput.trim(),
+          error: finalResult.error,
+          result: finalResult.result
+        };
       }
     } catch (error) {
       const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -1980,49 +2033,64 @@ export class Agent implements IAgentInstance {
     try {
       let observations = '';
       let observationImages: string[] = [];
+      let finalResult: { success: boolean, result?: any, error?: Error } = { success: true };
 
-      // Set up output capture
-      const handleManagerEvent = (event: { kernelId: string; data: any }) => {
-        if (this.kernel && event.kernelId === this.kernelId) {
-          if (event.data.name === 'stdout' || event.data.name === 'stderr') {
-            observations += event.data.text || '';
-          } else if (event.data.data && event.data.data['image/png']) {
-            observationImages.push(event.data.data['image/png']);
+      // Use executeStream for reliable output capture
+      if (this.manager.kernelManager) {
+        const streamGenerator = this.manager.kernelManager.executeStream(this.kernelId!, code);
+        
+        try {
+          for await (const streamEvent of streamGenerator) {
+            if (streamEvent.type === 'stream' && streamEvent.data) {
+              if (streamEvent.data.name === 'stdout' || streamEvent.data.name === 'stderr') {
+                observations += streamEvent.data.text || '';
+              }
+            } else if (streamEvent.type === 'display_data' && streamEvent.data?.data?.['image/png']) {
+              observationImages.push(streamEvent.data.data['image/png']);
+            } else if (streamEvent.type === 'execute_result' && streamEvent.data?.data?.['text/plain']) {
+              // Include execute_result output as well
+              observations += streamEvent.data.data['text/plain'] || '';
+            } else if (streamEvent.type === 'execute_error' && streamEvent.data) {
+              // Handle execution errors
+              const errorMsg = `${streamEvent.data.ename}: ${streamEvent.data.evalue}`;
+              observations += errorMsg + '\n';
+              finalResult = {
+                success: false,
+                error: new Error(errorMsg),
+                result: streamEvent.data
+              };
+            }
           }
+        } catch (streamError) {
+          console.error(`Stream error in executeCodeStateless:`, streamError);
+          finalResult = {
+            success: false,
+            error: streamError instanceof Error ? streamError : new Error(String(streamError))
+          };
         }
-      };
-
-      // Listen for output
-      this.manager.kernelManager.on(KernelEvents.STREAM, handleManagerEvent);
-
-      try {
-        // Execute the code
-        const result = this.manager.kernelManager 
-          ? await this.manager.kernelManager.execute(this.kernelId!, code)
-          : await this.kernel.execute(code);
-
-        if (result.success) {
-          console.log(`✅ [Agent ${this.id}] Stateless execution: Code executed successfully`);
-        } else {
-          console.log(`❌ [Agent ${this.id}] Stateless execution: Code execution failed -`, result.error?.message || 'Unknown error');
-        }
-
-        // Emit code execution event (stateless)
-        this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
-          agentId: this.id,
-          completionId,
-          code,
-          result,
-          observations: observations.trim(),
-          observationImages,
-          stateless: true
-        });
-
-        return observations.trim() || 'Code executed (no output)';
-      } finally {
-        // Clean up listener
-        this.manager.kernelManager.off(KernelEvents.STREAM, handleManagerEvent);
+      } else {
+        // Fallback to direct kernel execution
+        finalResult = await this.kernel.execute(code);
       }
+
+      if (finalResult.success) {
+        console.log(`✅ [Agent ${this.id}] Stateless execution: Code executed successfully`);
+      } else {
+        console.log(`❌ [Agent ${this.id}] Stateless execution: Code execution failed -`, finalResult.error?.message || 'Unknown error');
+      }
+
+      // Emit code execution event (stateless)
+      this.manager.emit(AgentEvents.AGENT_CODE_EXECUTED, {
+        agentId: this.id,
+        completionId,
+        code,
+        result: finalResult,
+        observations: observations.trim(),
+        observationImages,
+        stateless: true
+      });
+
+      return observations.trim() || 'Code executed (no output)';
     } catch (error) {
       const errorMsg = `Kernel execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
       console.log(`💥 [Agent ${this.id}] Stateless execution: Kernel execution exception - ${errorMsg}`);
