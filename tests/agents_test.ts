@@ -985,6 +985,10 @@ Deno.test("Agents Module - Stateless Chat Completion", async () => {
     
   } finally {
     await manager.destroyAll();
+    
+    // Wait for any ongoing operations to complete before test ends
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
     try {
       await Deno.remove(testDir, { recursive: true });
     } catch {

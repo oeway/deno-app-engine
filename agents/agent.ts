@@ -1553,6 +1553,8 @@ export class Agent implements IAgentInstance {
                   result: streamEvent.data
                 };
               }
+              // Break out of loop to properly terminate the stream and cleanup timers
+              break;
             }
           }
         } catch (streamError) {
@@ -1645,6 +1647,8 @@ export class Agent implements IAgentInstance {
                 error: new Error(errorMsg),
                 result: streamEvent.data
               };
+              // Break out of loop to properly terminate the stream and cleanup timers
+              break;
             }
           }
         } catch (streamError) {
@@ -1879,6 +1883,8 @@ export class Agent implements IAgentInstance {
                 error: new Error(errorMsg),
                 result: streamEvent.data
               };
+              // Break out of loop to properly terminate the stream and cleanup timers
+              break;
             }
           }
         } catch (streamError) {
@@ -2059,6 +2065,8 @@ export class Agent implements IAgentInstance {
                 error: new Error(errorMsg),
                 result: streamEvent.data
               };
+              // Break out of loop to properly terminate the stream and cleanup timers
+              break;
             }
           }
         } catch (streamError) {
