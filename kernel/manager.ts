@@ -1046,7 +1046,25 @@ export class KernelManager extends EventEmitter {
           return kernelProxy.initialize(options);
         },
         execute: async (code: string, parent?: any) => {
-          return kernelProxy.execute(code, parent);
+          const result = await kernelProxy.execute(code, parent);
+          
+          // If this is a TypeScript/JavaScript worker result, reconstruct the Jupyter display symbol
+          if (result && result.result && typeof result.result === 'object' && 
+              (language === KernelLanguage.TYPESCRIPT || language === KernelLanguage.JAVASCRIPT)) {
+            
+            // Check if the result has display data properties that need to be reconstructed
+            if (result.result._displayData) {
+              // Reconstruct the Symbol method from serialized display data
+              const displayData = result.result._displayData;
+              result.result = {
+                [Symbol.for("Jupyter.display")]() {
+                  return displayData;
+                }
+              };
+            }
+          }
+          
+          return result;
         },
         isInitialized: () => {
           return kernelProxy.isInitialized();

@@ -413,12 +413,20 @@ After each code execution, you'll receive an <observation> with the output. Use 
 Use <returnToUser> tags when you have completed the task or need to return control:
 - Include a \`commit="id1,id2,id3"\` attribute to preserve important code blocks
 - Provide a clear summary of what was accomplished
-- Include relevant results or findings
+- **CRITICAL: ALWAYS include all captured output from successful code execution**
+- If relevant, include ALL printed results, data analysis output, and findings
+- Copy the exact output from observations into your final response
 - **IMPORTANT**: Only responses wrapped in \`<returnToUser>\` tags will be delivered to the user as final answers
 
 Example:
 <returnToUser commit="load_data,analysis,visualization">
-Successfully analyzed the sales data showing a 15% increase in Q4. Created visualization showing monthly trends with peak in December.
+Successfully analyzed the sales data. Here are the results:
+
+Loaded 1000 records
+Columns: ['date', 'sales', 'region']
+Sales trend shows 15% increase in Q4 with peak in December.
+
+Created visualization showing monthly trends saved as 'sales_chart.png'.
 </returnToUser>
 
 ## Advanced Capabilities

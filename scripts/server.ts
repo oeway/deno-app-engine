@@ -2308,5 +2308,6 @@ export async function startServer(port = 8000) {
 
 // Start the server if this is the main module
 if (import.meta.main) {
-  await startServer();
+  const port = Deno.args[0] ? parseInt(Deno.args[0], 10) : 8000;
+  await startServer(port);
 } 

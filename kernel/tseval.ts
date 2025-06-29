@@ -119,22 +119,22 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
     // If there's a trailing expression, modify the code to capture its result without re-executing
     let finalCode;
     if (lastExprCode) {
-      // Be more careful about replacement - only replace at the end of the code
-      // and make sure we're not replacing part of an assignment or declaration
-      const codeBeforeExpression = code.slice(0, code.lastIndexOf(lastExprCode));
-      const codeAfterExpression = code.slice(code.lastIndexOf(lastExprCode) + lastExprCode.length);
+      // Check if the last expression is likely to have side effects
+      // Common side-effect patterns: console.log, function calls, method calls, etc.
+      const hasSideEffects = lastExprCode.includes('console.') || 
+                           lastExprCode.includes('(') || // function calls
+                           lastExprCode.match(/\w+\.\w+\s*\(/); // method calls
       
-      // Only do the replacement if this is truly a trailing expression (no significant code after it)
-      if (codeAfterExpression.trim() === '' || codeAfterExpression.trim() === ';') {
-        const modifiedCode = codeBeforeExpression + `(context._ = (${lastExprCode}))` + codeAfterExpression;
+      if (hasSideEffects) {
+        // Don't re-execute side-effect expressions, just execute the code normally
         finalCode = `const context = globalThis.__tseval_context__;
 ${prelude}
 
-${modifiedCode}
+${code}
 
 ${captureVariables}`;
       } else {
-        // Fall back to the old approach if the expression is not at the end
+        // Safe to re-execute for result capture (simple expressions like variables, literals)
         finalCode = `const context = globalThis.__tseval_context__;
 ${prelude}
 

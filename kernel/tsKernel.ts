@@ -214,7 +214,7 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     return path;
   }
   
-  async execute(code: string, parent?: any): Promise<{ success: boolean, execution_count: number }> {
+  async execute(code: string, parent?: any): Promise<{ success: boolean, execution_count: number, result?: any, error?: Error }> {
     if (!this.initialized) {
       await this.initialize();
     }
@@ -223,6 +223,16 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     this._isExecuting = true;
     this._abortController = new AbortController();
     this.consoleCapture.start();
+    
+    // Capture display data during execution
+    const displayData: any[] = [];
+    const captureDisplay = (data: any) => {
+      displayData.push(data);
+    };
+    
+    // Listen for display events during execution
+    super.on('display_data', captureDisplay);
+    super.on('execute_result', captureDisplay);
     
     try {
       // Check for interrupt before execution
@@ -239,11 +249,40 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
         this.emitExecutionResult(result);
       }
       
-      // Return only simple execution metadata, not the actual result
-      return { success: true, execution_count: this.executionCount };
+      // Prepare display data for serialization
+      let displayDataForSerialization;
+      
+      if (displayData.length > 0) {
+        displayDataForSerialization = displayData[0].data;
+      } else if (result !== undefined) {
+        displayDataForSerialization = {
+          "text/plain": typeof result === 'string' ? result : JSON.stringify(result)
+        };
+      } else {
+        displayDataForSerialization = {
+          "text/plain": ""
+        };
+      }
+      
+      // Create a result object with Jupyter display symbol
+      const resultObj = {
+        _displayData: displayDataForSerialization,
+        [Symbol.for("Jupyter.display")]() {
+          return displayDataForSerialization;
+        }
+      };
+      
+      // Return execution metadata with cleaner result structure
+      return { 
+        success: true, 
+        execution_count: this.executionCount,
+        result: resultObj
+      };
     } catch (error) {
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      
       // Check if this was an interrupt
-      if (error instanceof Error && error.message.includes('KeyboardInterrupt')) {
+      if (errorObj.message.includes('KeyboardInterrupt')) {
         this._sendMessage({
           type: 'stream',
           bundle: {
@@ -261,18 +300,42 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
           }
         });
       } else {
-        this.emitExecutionError(error);
+        this.emitExecutionError(errorObj);
       }
       
-      // Return only simple execution metadata, not the actual error
+      // Prepare error display data for serialization
+      const errorDisplayData = {
+        "text/plain": `${errorObj.name}: ${errorObj.message}`,
+        "application/vnd.jupyter.error": {
+          ename: errorObj.name,
+          evalue: errorObj.message,
+          traceback: [errorObj.stack || errorObj.message]
+        }
+      };
+      
+      // Create an error result object with Jupyter display symbol
+      const errorResultObj = {
+        _displayData: errorDisplayData,
+        [Symbol.for("Jupyter.display")]() {
+          return errorDisplayData;
+        }
+      };
+      
+      // Return execution metadata including the error for compatibility with tests
       return { 
         success: false, 
-        execution_count: this.executionCount
+        execution_count: this.executionCount,
+        error: errorObj,
+        result: errorResultObj
       };
     } finally {
       this._isExecuting = false;
       this._abortController = null;
       this.consoleCapture.stop();
+      
+      // Clean up display data listeners
+      super.off('display_data', captureDisplay);
+      super.off('execute_result', captureDisplay);
     }
   }
   
@@ -298,7 +361,7 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
     return result;
   }
   
-  async* executeStream(code: string, parent?: any): AsyncGenerator<any, { success: boolean, execution_count: number }, void> {
+  async* executeStream(code: string, parent?: any): AsyncGenerator<any, { success: boolean, execution_count: number, result?: any, error?: Error }, void> {
     try {
       if (!this.initialized) {
         await this.initialize();
@@ -330,9 +393,11 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
       }
     } catch (error) {
       console.error("Error in executeStream:", error);
+      const errorObj = error instanceof Error ? error : new Error(String(error));
       return {
         success: false,
-        execution_count: this.executionCount
+        execution_count: this.executionCount,
+        error: errorObj
       };
     }
   }

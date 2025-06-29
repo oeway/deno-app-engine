@@ -440,9 +440,9 @@ async function startHyphaService(options: {
     "client_id": options.clientId || Deno.env.get("HYPHA_CLIENT_ID") || undefined,
   });
   
-  await registerService(server);
+  const service = await registerService(server);
   
-  return server;
+  return { server, service };
 }
 
 async function registerService(server: any) {
@@ -3012,8 +3012,8 @@ async function registerService(server: any) {
     }
   }
   
-  // Keep the connection alive
-  return { server, service: svc };
+  // Return just the service object for registerService
+  return svc;
 }
 
 // Export for testing

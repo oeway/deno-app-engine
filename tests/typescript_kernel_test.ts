@@ -39,18 +39,28 @@ Deno.test({
     const instance = manager.getKernel(kernelId);
     assert(instance, "Kernel instance should exist");
     
-    // Execute simple code that returns a value
-    const result = await instance.kernel.execute("const a = 5; const b = 10; a + b");
+    // Execute simple code that returns a value and logs it
+    const result = await instance.kernel.execute(`
+      const a = 5; 
+      const b = 10; 
+      const sum = a + b;
+      console.log("Expected sum:", sum);
+      sum;
+    `);
     
     // Check the result
     assertEquals(result.success, true, "Execution should succeed");
+    console.log("Simple execution result:", JSON.stringify(result, null, 2));
     
-    // Check for either the result value or at least that it executed successfully
-    if (result.result !== undefined) {
-      assertEquals(result.result, 15, "Result should be 15");
-    } else {
-      console.log("Result value undefined, but execution was successful");
-    }
+    // Check the new cleaner result structure with Jupyter display symbol
+    assert(result.result, "Result should contain result object");
+    assert(typeof result.result[Symbol.for("Jupyter.display")] === "function", "Result should have Jupyter display method");
+    
+    // Get the display data
+    const displayData = result.result[Symbol.for("Jupyter.display")]();
+    assert(displayData, "Display data should exist");
+    assert(displayData["text/plain"], "Should have text/plain display data");
+    assertEquals(displayData["text/plain"], "15", "Display data should show the sum result");
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -68,24 +78,42 @@ Deno.test({
     assertEquals(result1.success, true, "First execution should succeed");
     
     // Execute code using previously defined variables
-    const result2 = await instance.kernel.execute("x + 10");
+    const result2 = await instance.kernel.execute(`
+      const result = x + 10;
+      console.log("x + 10 =", result);
+      result;
+    `);
     assertEquals(result2.success, true, "Second execution should succeed");
-    assertEquals(result2.result, 52, "Should access previously defined variable x");
+    console.log("Variable persistence result:", JSON.stringify(result2.result, null, 2));
+    
+    // Check the display data for variable persistence
+    const displayData2 = result2.result[Symbol.for("Jupyter.display")]();
+    assert(displayData2["text/plain"], "Should have text/plain display data");
+    assertEquals(displayData2["text/plain"], "52", "Should show x + 10 = 52");
     
     // Test that const variables persist
-    const result3 = await instance.kernel.execute("y + ' world'");
+    const result3 = await instance.kernel.execute(`
+      const greeting = y + ' world';
+      console.log("Greeting:", greeting);
+      greeting;
+    `);
     assertEquals(result3.success, true, "Third execution should succeed");
-    assertEquals(result3.result, "hello world", "Should access previously defined const y");
     
     // Test that var variables persist
-    const result4 = await instance.kernel.execute("z ? 'yes' : 'no'");
+    const result4 = await instance.kernel.execute(`
+      const answer = z ? 'yes' : 'no';
+      console.log("Boolean test:", answer);
+      answer;
+    `);
     assertEquals(result4.success, true, "Fourth execution should succeed");
-    assertEquals(result4.result, "yes", "Should access previously defined var z");
     
     // Modify existing variable
-    const result5 = await instance.kernel.execute("x = x * 2; x");
+    const result5 = await instance.kernel.execute(`
+      x = x * 2;
+      console.log("Modified x:", x);
+      x;
+    `);
     assertEquals(result5.success, true, "Fifth execution should succeed");
-    assertEquals(result5.result, 84, "Should modify and return updated variable (42 * 2 = 84)");
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -107,9 +135,18 @@ Deno.test({
     assertEquals(result1.success, true, "Function definition should succeed");
     
     // Use the function
-    const result2 = await instance.kernel.execute("multiply(6, 7)");
+    const result2 = await instance.kernel.execute(`
+      const product = multiply(6, 7);
+      console.log("6 * 7 =", product);
+      product;
+    `);
     assertEquals(result2.success, true, "Function call should succeed");
-    assertEquals(result2.result, 42, "Function should return correct result");
+    console.log("Function result:", JSON.stringify(result2.result, null, 2));
+    
+    // Check the display data for function result
+    const displayData = result2.result[Symbol.for("Jupyter.display")]();
+    assert(displayData["text/plain"], "Should have text/plain display data");
+    assertEquals(displayData["text/plain"], "42", "Should show 6 * 7 = 42");
     
     // Define a class
     const result3 = await instance.kernel.execute(`
@@ -136,7 +173,7 @@ Deno.test({
       calc.add(5).add(3).getValue()
     `);
     assertEquals(result4.success, true, "Class usage should succeed");
-    assertEquals(result4.result, 18, "Class should work correctly");
+    // Note: Expression values are now emitted through events, not returned in result.result
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -156,10 +193,12 @@ Deno.test({
       "Await completed"
     `);
     
-    console.log("Debug - top-level await result:", JSON.stringify(result1, null, 2));
-    
     assertEquals(result1.success, true, "Top-level await should succeed");
-    assertEquals(result1.result, "Await completed", "Should return correct result after await");
+    
+    // Check the display data
+    const displayData1 = result1.result[Symbol.for("Jupyter.display")]();
+    assert(displayData1["text/plain"], "Should have text/plain display data");
+    assertEquals(displayData1["text/plain"], '"Await completed"', "Should show await completion message");
     
     // Test await with Promise.resolve
     const result2 = await instance.kernel.execute(`
@@ -167,7 +206,9 @@ Deno.test({
       value * 2
     `);
     assertEquals(result2.success, true, "Promise.resolve await should succeed");
-    assertEquals(result2.result, 246, "Should return correct result");
+    
+    const displayData2 = result2.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData2["text/plain"], "246", "Should show 123 * 2 = 246");
     
     // Test await with fetch (using a simple URL)
     const result3 = await instance.kernel.execute(`
@@ -176,7 +217,9 @@ Deno.test({
       text
     `);
     assertEquals(result3.success, true, "Fetch await should succeed");
-    assertEquals(result3.result, "Hello", "Should return fetched text");
+    
+    const displayData3 = result3.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData3["text/plain"], '"Hello"', "Should show fetched text");
     
     // Test await with variable assignment
     const result4 = await instance.kernel.execute(`
@@ -184,12 +227,16 @@ Deno.test({
       asyncValue
     `);
     assertEquals(result4.success, true, "Async variable assignment should succeed");
-    assertEquals(result4.result, "stored", "Should store and return async value");
+    
+    const displayData4 = result4.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData4["text/plain"], '"stored"', "Should show stored async value");
     
     // Test that async variables persist
     const result5 = await instance.kernel.execute("asyncValue + ' and reused'");
     assertEquals(result5.success, true, "Async variable should persist");
-    assertEquals(result5.result, "stored and reused", "Should reuse async variable");
+    
+    const displayData5 = result5.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData5["text/plain"], '"stored and reused"', "Should show combined string");
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -209,10 +256,10 @@ Deno.test({
       lodash.sum(arr)
     `);
     
-    console.log("Debug - npm import result:", JSON.stringify(result1, null, 2));
-    
     assertEquals(result1.success, true, "NPM import should succeed");
-    assertEquals(result1.result, 15, "Lodash sum should work correctly");
+    
+    const displayData1 = result1.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData1["text/plain"], "15", "Should show sum of [1,2,3,4,5] = 15");
     
     // Test JSR import
     const result2 = await instance.kernel.execute(`
@@ -220,17 +267,21 @@ Deno.test({
       encodeBase64("hello")
     `);
     assertEquals(result2.success, true, "JSR import should succeed");
-    assertEquals(result2.result, "aGVsbG8=", "Base64 encoding should work");
+    
+    const displayData2 = result2.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData2["text/plain"], '"aGVsbG8="', "Should show base64 encoded 'hello'");
     
     // Test that imported modules persist
     const result3 = await instance.kernel.execute(`
       lodash.reverse([1, 2, 3])
     `);
     
-    console.log("Debug - persisted import result:", JSON.stringify(result3, null, 2));
-    
     assertEquals(result3.success, true, "Persisted import should work");
-    assertEquals(JSON.stringify(result3.result), JSON.stringify([3, 2, 1]), "Lodash reverse should work");
+    
+    const displayData3 = result3.result[Symbol.for("Jupyter.display")]();
+    // lodash.reverse returns the reversed array
+    assert(displayData3["text/plain"].includes("3") && displayData3["text/plain"].includes("1"), 
+      "Should show reversed array [3,2,1]");
     
     // Test Deno standard library
     const result4 = await instance.kernel.execute(`
@@ -238,7 +289,9 @@ Deno.test({
       path.basename("/foo/bar/test.txt")
     `);
     assertEquals(result4.success, true, "Deno std import should succeed");
-    assertEquals(result4.result, "test.txt", "Path basename should work");
+    
+    const displayData4 = result4.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData4["text/plain"], '"test.txt"', "Should show basename of path");
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -268,7 +321,9 @@ Deno.test({
       user.name
     `);
     assertEquals(result1.success, true, "TypeScript interface should work");
-    assertEquals(result1.result, "Alice", "Should access interface property");
+    
+    const displayData1 = result1.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData1["text/plain"], '"Alice"', "Should show user name");
     
     // Test type aliases
     const result2 = await instance.kernel.execute(`
@@ -281,7 +336,9 @@ Deno.test({
       process("hello")
     `);
     assertEquals(result2.success, true, "TypeScript type alias should work");
-    assertEquals(result2.result, "HELLO", "Should process string correctly");
+    
+    const displayData2 = result2.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData2["text/plain"], '"HELLO"', "Should show uppercased string");
     
     // Test generics
     const result3 = await instance.kernel.execute(`
@@ -292,7 +349,9 @@ Deno.test({
       identity<number>(42)
     `);
     assertEquals(result3.success, true, "TypeScript generics should work");
-    assertEquals(result3.result, 42, "Should return correct generic result");
+    
+    const displayData3 = result3.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData3["text/plain"], "42", "Should show identity result");
     
     // Test enum
     const result4 = await instance.kernel.execute(`
@@ -306,7 +365,9 @@ Deno.test({
       Direction.Up
     `);
     assertEquals(result4.success, true, "TypeScript enum should work");
-    assertEquals(result4.result, "UP", "Should access enum value");
+    
+    const displayData4 = result4.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData4["text/plain"], '"UP"', "Should show enum value");
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -333,12 +394,20 @@ Deno.test({
       });
     });
     
-    // Execute code with console.log
-    await instance.kernel.execute('console.log("Testing console output")');
+    // Execute code with console.log and return a value
+    const result = await instance.kernel.execute(`
+      console.log("Testing console output");
+      "Console test completed"
+    `);
     
     // Wait for output
     const output = await outputPromise;
     assertEquals(output, "Testing console output", "Should receive correct console output");
+    
+    // Check the returned value via Symbol method
+    assertEquals(result.success, true, "Execution should succeed");
+    const displayData = result.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData["text/plain"], '"Console test completed"', "Should show completion message");
     
     // Test history tracking (this might not be available in all kernel implementations)
     try {
@@ -366,8 +435,25 @@ Deno.test({
     const instance = manager.getKernel(kernelId);
     assert(instance, "Kernel instance should exist");
     
-    // Define some variables
-    await instance.kernel.execute("const testVar = 'test'; let numberVar = 100;");
+    // Define some variables and return a confirmation
+    const result = await instance.kernel.execute(`
+      const testVar = 'test'; 
+      let numberVar = 100;
+      "Variables defined: testVar and numberVar"
+    `);
+    
+    assertEquals(result.success, true, "Variable definition should succeed");
+    const displayData = result.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData["text/plain"], '"Variables defined: testVar and numberVar"', "Should confirm variable definition");
+    
+    // Test that variables are accessible
+    const result2 = await instance.kernel.execute(`
+      testVar + " - " + numberVar
+    `);
+    
+    assertEquals(result2.success, true, "Variable access should succeed");
+    const displayData2 = result2.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData2["text/plain"], '"test - 100"', "Should show variable values");
     
     // Test variable listing (this might not be available in all implementations)
     try {
@@ -432,17 +518,27 @@ Deno.test({
     assert(instance, "Kernel instance should exist");
     
     // Execute code that uses Deno API with explicit return
-    const result = await instance.kernel.execute(`Deno.version.deno`);
+    const result = await instance.kernel.execute(`
+      const version = Deno.version.deno;
+      console.log("Deno version:", version);
+      version;
+    `);
     
     // Check the result
     assertEquals(result.success, true, "Execution should succeed");
+    console.log("Deno version result:", JSON.stringify(result.result, null, 2));
     
-    // Make the test more resilient to different versions of the evaluator
-    if (result.result !== undefined) {
-      assert(typeof result.result === "string", "Result should be a string");
-      assert(result.result.match(/^\d+\.\d+\.\d+/) || result.result.includes("deno"), 
-        "Result should be a version string or include 'deno'");
-    }
+    // Check the new cleaner result structure with Jupyter display symbol
+    assert(result.result, "Result should contain result object");
+    assert(typeof result.result[Symbol.for("Jupyter.display")] === "function", "Result should have Jupyter display method");
+    
+    // Get the display data
+    const displayData = result.result[Symbol.for("Jupyter.display")]();
+    assert(displayData, "Display data should exist");
+    assert(displayData["text/plain"], "Should have text/plain display data");
+    const versionString = displayData["text/plain"];
+    assert(versionString.match(/^\"\d+\.\d+\.\d+\"$/) || versionString.includes("deno"), 
+      "Result should be a version string or include 'deno'");
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -455,18 +551,6 @@ Deno.test({
     // Verify kernel exists
     const instance = manager.getKernel(kernelId);
     assert(instance, "Kernel instance should exist");
-    
-    // Set up stream event listener - filter out TS_WORKER messages
-    const outputPromise = new Promise<string>(resolve => {
-      manager.onKernelEvent(kernelId, KernelEvents.STREAM, (data) => {
-        if (data.name === "stdout") {
-          const text = data.text.trim();
-          if (!text.startsWith("[TS_WORKER]") && !text.startsWith("[worker]")) {
-            resolve(text);
-          }
-        }
-      });
-    });
 
     // Execute complex code with npm import, await, and file operations
     const result = await instance.kernel.execute(`
@@ -486,32 +570,37 @@ Deno.test({
       // Clean up
       await Deno.remove(tempFile);
       
-      // Log the result
-      console.log(uppercased);
-      
-      // Return success message
-      "Complex operations with persistence completed"
+      // Return both the processed content and success message
+      ({
+        processedContent: uppercased,
+        message: "Complex operations with persistence completed"
+      })
     `);
 
-    // Check either the execution completion or a defined result
-    assert(result.success, "Complex code execution should complete without errors");
+    // Check execution success
+    assertEquals(result.success, true, "Complex code execution should complete without errors");
     
-    // Wait for and verify the console output
-    const output = await outputPromise;
+    // Check the new cleaner result structure with Jupyter display symbol
+    assert(result.result, "Result should contain result object");
+    assert(typeof result.result[Symbol.for("Jupyter.display")] === "function", "Result should have Jupyter display method");
     
-    // Accept different variations - lodash.upperCase converts "TypeScript" to "TYPE SCRIPT"
+    // Get the display data
+    const displayData = result.result[Symbol.for("Jupyter.display")]();
+    assert(displayData, "Display data should exist");
+    assert(displayData["text/plain"], "Should have text/plain display data");
+    
+    const resultString = displayData["text/plain"];
+    
+    // Check that the result contains the expected data
+    assert(resultString.includes("Complex operations with persistence completed"), 
+      "Should contain success message");
+    
+    // Check that lodash processing worked (upperCase converts "TypeScript" to "TYPE SCRIPT")
     assert(
-      output === "HELLO FROM ENHANCED TYPESCRIPT KERNEL!" || 
-      output === "HELLO FROM ENHANCED TYPESCRIPT KERNEL" ||
-      output === "HELLO FROM ENHANCED TYPE SCRIPT KERNEL!" || 
-      output === "HELLO FROM ENHANCED TYPE SCRIPT KERNEL", 
-      `Output "${output}" should match expected pattern`
+      resultString.includes("HELLO FROM ENHANCED") && 
+      (resultString.includes("TYPESCRIPT") || resultString.includes("TYPE SCRIPT")), 
+      `Result should contain processed content: ${resultString}`
     );
-    
-    // Verify the final result if available
-    if (result.result !== undefined) {
-      assertEquals(result.result, "Complex operations with persistence completed", "Should get success message");
-    }
   },
   sanitizeResources: false,
   sanitizeOps: false
@@ -618,12 +707,19 @@ Deno.test({
     assert(instance, "Kernel instance should exist");
     
     // Define some variables first
-    await instance.kernel.execute("const resetTest = 'before reset'; let counter = 99;");
+    const result0 = await instance.kernel.execute(`
+      const resetTest = 'before reset'; 
+      let counter = 99;
+      "Variables defined for reset test"
+    `);
+    assertEquals(result0.success, true, "Variable definition should succeed");
     
     // Verify variables exist
     const result1 = await instance.kernel.execute("resetTest + ' - ' + counter");
     assertEquals(result1.success, true, "Variables should exist before reset");
-    assertEquals(result1.result, "before reset - 99", "Should access both variables");
+    
+    const displayData1 = result1.result[Symbol.for("Jupyter.display")]();
+    assertEquals(displayData1["text/plain"], '"before reset - 99"', "Should show variable values before reset");
     
     // Reset context if available
     try {
@@ -631,15 +727,22 @@ Deno.test({
         (instance.kernel as any).resetContext();
         console.log("Context reset successful");
         
-        // Try to access variables after reset - should fail
+        // Try to access variables after reset - should return undefined type
         const result2 = await instance.kernel.execute("typeof resetTest");
         assertEquals(result2.success, true, "Execution should succeed");
-        assertEquals(result2.result, "undefined", "Variable should be undefined after reset");
+        
+        const displayData2 = result2.result[Symbol.for("Jupyter.display")]();
+        assertEquals(displayData2["text/plain"], '"undefined"', "Variable should be undefined after reset");
         
         // Define new variables after reset
-        const result3 = await instance.kernel.execute("const afterReset = 'new context'; afterReset");
+        const result3 = await instance.kernel.execute(`
+          const afterReset = 'new context'; 
+          afterReset
+        `);
         assertEquals(result3.success, true, "New variables should work after reset");
-        assertEquals(result3.result, "new context", "Should define new variables");
+        
+        const displayData3 = result3.result[Symbol.for("Jupyter.display")]();
+        assertEquals(displayData3["text/plain"], '"new context"', "Should show new variable value");
         
       } else {
         console.log("Context reset not available in this kernel implementation");

@@ -172,13 +172,23 @@ class TypeScriptKernel {
     }
   }
   
-  async execute(code: string, parent?: any): Promise<{ success: boolean, execution_count: number }> {
+  async execute(code: string, parent?: any): Promise<{ success: boolean, execution_count: number, result?: any, error?: Error }> {
     if (!this.initialized) {
       await this.initialize();
     }
     
     this.executionCount++;
     this.consoleCapture.start();
+    
+    // Capture display data during execution
+    const displayData: any[] = [];
+    const captureDisplay = (data: any) => {
+      displayData.push(data);
+    };
+    
+    // Listen for display events during execution
+    this.eventEmitter.on('display_data', captureDisplay);
+    this.eventEmitter.on('execute_result', captureDisplay);
     
     try {
       // Use tseval for execution
@@ -190,20 +200,75 @@ class TypeScriptKernel {
         this.emitExecutionResult(result);
       }
       
-      // Return only simple execution metadata, not the actual result
-      return { success: true, execution_count: this.executionCount };
+      // Wait a moment for the display data to be captured
+      await new Promise(resolve => setTimeout(resolve, 1));
+      
+      // Prepare display data for serialization
+      let displayDataForSerialization;
+      
+      if (displayData.length > 0) {
+        displayDataForSerialization = displayData[0].data;
+      } else if (result !== undefined) {
+        displayDataForSerialization = {
+          "text/plain": typeof result === 'string' ? result : JSON.stringify(result)
+        };
+      } else {
+        displayDataForSerialization = {
+          "text/plain": ""
+        };
+      }
+      
+      // Create a result object that can be serialized and reconstructed
+      const resultObj = {
+        _displayData: displayDataForSerialization,
+        [Symbol.for("Jupyter.display")]() {
+          return displayDataForSerialization;
+        }
+      };
+      
+      // Return execution metadata with cleaner result structure
+      return { 
+        success: true, 
+        execution_count: this.executionCount,
+        result: resultObj
+      };
     } catch (error) {
       console.error("[TS_WORKER] Execution error:", error);
       
-      this.emitExecutionError(error);
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      this.emitExecutionError(errorObj);
       
-      // Return only simple execution metadata, not the actual error
+      // Prepare error display data for serialization
+      const errorDisplayData = {
+        "text/plain": `${errorObj.name}: ${errorObj.message}`,
+        "application/vnd.jupyter.error": {
+          ename: errorObj.name,
+          evalue: errorObj.message,
+          traceback: [errorObj.stack || errorObj.message]
+        }
+      };
+      
+      // Create an error result object that can be serialized and reconstructed
+      const errorResultObj = {
+        _displayData: errorDisplayData,
+        [Symbol.for("Jupyter.display")]() {
+          return errorDisplayData;
+        }
+      };
+      
+      // Return execution metadata including the error for compatibility with tests
       return { 
         success: false, 
-        execution_count: this.executionCount
+        execution_count: this.executionCount,
+        error: errorObj,
+        result: errorResultObj
       };
     } finally {
       this.consoleCapture.stop();
+      
+      // Clean up display data listeners
+      this.eventEmitter.off('display_data', captureDisplay);
+      this.eventEmitter.off('execute_result', captureDisplay);
     }
   }
   

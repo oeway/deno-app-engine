@@ -378,29 +378,66 @@ Deno.test({
 Deno.test({
   name: "POST /kernels/:id/execute/stream - should stream TypeScript execution results",
   async fn() {
-    const code = `console.log("Start TS");
+    // Start server if not already running (for isolated test runs)
+    let localServer = null;
+    if (!server) {
+      try {
+        // Test if server is already running
+        await fetch("http://localhost:8001/api/kernels");
+      } catch {
+        // Server not running, start it
+        localServer = await startTestServer(8001);
+      }
+    }
+    
+    try {
+      // Create a TypeScript kernel if tsKernelId is not set (for isolated test runs)
+      let kernelId = tsKernelId;
+      let createdKernel = false;
+      
+      if (!kernelId) {
+        const createResult = await makeRequest("/kernels", "POST", { lang: "typescript" });
+        assertExists(createResult.id);
+        kernelId = createResult.id;
+        createdKernel = true;
+      }
+      
+      try {
+        const code = `console.log("Start TS");
 await new Promise(resolve => setTimeout(resolve, 100));
 console.log("Middle TS");
 await new Promise(resolve => setTimeout(resolve, 100));
 console.log("End TS");`;
-    
-    const response = await fetch(`http://localhost:8001/api/kernels/${tsKernelId}/execute/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
-    
-    assertEquals(response.headers.get("Content-Type"), "text/event-stream");
-    
-    const events = await readSSEStream(response);
-    
-    // Verify we got all three print outputs (filter out TS_WORKER messages)
-    const outputs = events
-      .filter((event: any) => event.type === "stream")
-      .map((event: any) => event.data.text.trim())
-      .filter(text => text.length > 0 && !text.startsWith("[TS_WORKER]"));
-    
-    assertEquals(outputs, ["Start TS", "Middle TS", "End TS"]);
+        
+        const response = await fetch(`http://localhost:8001/api/kernels/${kernelId}/execute/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code }),
+        });
+        
+        assertEquals(response.headers.get("Content-Type"), "text/event-stream");
+        
+        const events = await readSSEStream(response);
+        
+        // Verify we got all three print outputs (filter out TS_WORKER messages)
+        const outputs = events
+          .filter((event: any) => event.type === "stream")
+          .map((event: any) => event.data.text.trim())
+          .filter(text => text.length > 0 && !text.startsWith("[TS_WORKER]"));
+        
+        assertEquals(outputs, ["Start TS", "Middle TS", "End TS"]);
+      } finally {
+        // Clean up if we created a kernel for this test
+        if (createdKernel) {
+          await fetch(`http://localhost:8001/api/kernels/${kernelId}`, { method: "DELETE" });
+        }
+      }
+    } finally {
+      // Clean up local server if we started it
+      if (localServer) {
+        await localServer.close();
+      }
+    }
   },
   sanitizeResources: false,
   sanitizeOps: false,
@@ -433,32 +470,69 @@ Deno.test({
 Deno.test({
   name: "POST /kernels/:id/execute/submit - should submit async TypeScript execution",
   async fn() {
-    const code = `
+    // Start server if not already running (for isolated test runs)
+    let localServer = null;
+    if (!server) {
+      try {
+        // Test if server is already running
+        await fetch("http://localhost:8001/api/kernels");
+      } catch {
+        // Server not running, start it
+        localServer = await startTestServer(8001);
+      }
+    }
+    
+    try {
+      // Create a TypeScript kernel if tsKernelId is not set (for isolated test runs)
+      let kernelId = tsKernelId;
+      let createdKernel = false;
+      
+      if (!kernelId) {
+        const createResult = await makeRequest("/kernels", "POST", { lang: "typescript" });
+        assertExists(createResult.id);
+        kernelId = createResult.id;
+        createdKernel = true;
+      }
+      
+      try {
+        const code = `
 await new Promise(resolve => setTimeout(resolve, 500));
 console.log("Async TypeScript execution complete!");
 const result = 42 * 2;
 result  // This will be in execute_result
 `;
-    const submitResult = await makeRequest(`/kernels/${tsKernelId}/execute/submit`, "POST", { code });
-    assertExists(submitResult.session_id);
-    const sessionId = submitResult.session_id;
+        const submitResult = await makeRequest(`/kernels/${kernelId}/execute/submit`, "POST", { code });
+        assertExists(submitResult.session_id);
+        const sessionId = submitResult.session_id;
 
-    // Get results - this should block until execution is complete
-    const execResult = await makeRequest(`/kernels/${tsKernelId}/execute/result/${sessionId}`);
-    
-    // Verify stdout and result
-    const stdoutEvent = execResult.find((event: any) => 
-      event.type === "stream" && 
-      event.data.name === "stdout" &&
-      event.data.text.includes("Async TypeScript execution complete!")
-    );
-    assertExists(stdoutEvent);
+        // Get results - this should block until execution is complete
+        const execResult = await makeRequest(`/kernels/${kernelId}/execute/result/${sessionId}`);
+        
+        // Verify stdout and result
+        const stdoutEvent = execResult.find((event: any) => 
+          event.type === "stream" && 
+          event.data.name === "stdout" &&
+          event.data.text.includes("Async TypeScript execution complete!")
+        );
+        assertExists(stdoutEvent);
 
-    const resultEvent = execResult.find((event: any) =>
-      event.type === "execute_result" &&
-      event.data.data["text/plain"] === "84"
-    );
-    assertExists(resultEvent);
+        const resultEvent = execResult.find((event: any) =>
+          event.type === "execute_result" &&
+          event.data.data["text/plain"] === "84"
+        );
+        assertExists(resultEvent);
+      } finally {
+        // Clean up if we created a kernel for this test
+        if (createdKernel) {
+          await fetch(`http://localhost:8001/api/kernels/${kernelId}`, { method: "DELETE" });
+        }
+      }
+    } finally {
+      // Clean up local server if we started it
+      if (localServer) {
+        await localServer.close();
+      }
+    }
   },
   sanitizeResources: false,
   sanitizeOps: false,

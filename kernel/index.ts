@@ -803,7 +803,7 @@ except Exception as e:
         }
         
         // Send other errors as execute_error events
-        this._sendMessage({
+      this._sendMessage({
           type: 'execute_error',
           bundle: {
             ename: formattedResult.ename || 'Error',
@@ -819,21 +819,8 @@ except Exception as e:
         };
       }
     
-      // Get the last expression value if available
-      const lastExpr = this.pyodide.globals.get('_');
-      if (lastExpr !== undefined && lastExpr !== null && String(lastExpr) !== 'None') {
-        const value = this.formatResult(lastExpr);
-        if (value !== undefined && value !== null && String(value) !== 'None') {
-          this._sendMessage({
-            type: 'execute_result',
-            bundle: {
-              execution_count: this.executionCount++,
-              data: { 'text/plain': String(value) },
-              metadata: {}
-            }
-          });
-        }
-      }
+      // Don't try to get the last expression value - let Python's display system handle outputs
+      // This makes the behavior consistent with TypeScript kernel which only returns console/display outputs
       
       this._status = "active";
       return {
@@ -1088,6 +1075,9 @@ except Exception as e:
         
         this._status = "active";
         return result;
+      } catch (error) {
+        console.error("Error in executeStream:", error);
+        throw error;
       } finally {
         // Clean up listener in finally block to ensure it's always removed
         super.off(KernelEvents.ALL, handleAllEvents);
