@@ -19,6 +19,9 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
   const context: EvalContext = options?.context as EvalContext ?? {} as EvalContext;
   context.__meta = context.__meta ?? {}; // Track variable kinds
   context.__history = context.__history ?? [];
+  
+  // Add execution counter to prevent module caching issues
+  let executionCounter = 0;
 
   const getHistory = () => context.__history;
 
@@ -32,9 +35,11 @@ export function createTSEvalContext(options?: { context?: Record<string, any> })
     }
     context.__meta = {};
     context.__history = [];
+    executionCounter = 0; // Reset counter on context reset
   };
 
   const evaluate = async function tseval(code: string): Promise<{ result?: any, mod?: any }> {
+    executionCounter++; // Increment counter for each execution
     context.__history.push(code);
 
     // Parse the code to detect new variable declarations and trailing expressions
@@ -153,13 +158,15 @@ ${code}
 ${captureVariables}`;
     }
 
-
-
     const encoded = encodeBase64(finalCode);
     (globalThis as any).__tseval_context__ = context;
 
+    // Add execution counter and timestamp to prevent ES module caching
+    // This ensures each execution creates a unique URL, preventing Deno from
+    // returning cached modules that don't re-execute console.log statements
+    const uniqueId = `${executionCounter}_${Date.now()}`;
     const mod = await import(
-      `data:application/typescript;charset=utf-8;base64,${encoded}`
+      `data:application/typescript;charset=utf-8;base64,${encoded}#${uniqueId}`
     );
 
     return {

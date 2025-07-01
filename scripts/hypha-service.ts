@@ -162,6 +162,16 @@ const vectorDBHistory = new Map<string, VectorDBHistory[]>();
 // if : is in the id, it should match the namespace
 // otherwise, we should add the namespace to the id
 function ensureKernelId(id: string, namespace: string) {
+    // Validate inputs to prevent undefined/null errors
+    if (!id || typeof id !== 'string') {
+        throw new Error(`Invalid kernel ID: ${id}`);
+    }
+    
+    if (!namespace || typeof namespace !== 'string') {
+        console.warn(`Invalid namespace: ${namespace}, using 'default' as fallback`);
+        namespace = 'default';
+    }
+    
     if (id.includes(':')) {
         if (id.startsWith(namespace + ":")) {
             return id;
@@ -210,6 +220,16 @@ async function ensureVectorIndexAccess(indexId: string, requestingNamespace: str
 }
 
 function ensureAgentAccess(agentId: string, namespace: string): string {
+  // Validate inputs - protect against undefined/null values
+  if (!agentId || typeof agentId !== 'string') {
+    throw new Error(`Invalid agent ID: ${agentId}`);
+  }
+  
+  if (!namespace || typeof namespace !== 'string') {
+    console.warn(`Invalid namespace: ${namespace}, using 'default' as fallback`);
+    namespace = 'default';
+  }
+  
   // If the agent ID is namespaced and matches the expected namespace, allow access
   if (agentId.includes(':')) {
     const [agentNamespace] = agentId.split(':');
@@ -238,7 +258,12 @@ function getKernelManagerOptions(): IKernelManagerOptions {
       const [modeStr, langStr] = typeStr.trim().split("-");
       
       const mode = modeStr === "main_thread" ? KernelMode.MAIN_THREAD : KernelMode.WORKER;
-      const language = langStr === "typescript" ? KernelLanguage.TYPESCRIPT : KernelLanguage.PYTHON;
+      let language = KernelLanguage.PYTHON; // Default
+      if (langStr === "typescript") {
+        language = KernelLanguage.TYPESCRIPT;
+      } else if (langStr === "javascript") {
+        language = KernelLanguage.JAVASCRIPT;
+      }
       
       return { mode, language };
     });
@@ -246,7 +271,8 @@ function getKernelManagerOptions(): IKernelManagerOptions {
     // Default: disable kernel pool since initialization is now fast (~4-5 seconds)
     allowedKernelTypes = [
       { mode: KernelMode.WORKER, language: KernelLanguage.PYTHON },
-      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT }
+      { mode: KernelMode.WORKER, language: KernelLanguage.TYPESCRIPT },
+      { mode: KernelMode.WORKER, language: KernelLanguage.JAVASCRIPT }
     ];
   }
   
@@ -265,7 +291,12 @@ function getKernelManagerOptions(): IKernelManagerOptions {
       const [modeStr, langStr] = typeStr.trim().split("-");
       
       const mode = modeStr === "main_thread" ? KernelMode.MAIN_THREAD : KernelMode.WORKER;
-      const language = langStr === "typescript" ? KernelLanguage.TYPESCRIPT : KernelLanguage.PYTHON;
+      let language = KernelLanguage.PYTHON; // Default
+      if (langStr === "typescript") {
+        language = KernelLanguage.TYPESCRIPT;
+      } else if (langStr === "javascript") {
+        language = KernelLanguage.JAVASCRIPT;
+      }
       
       return { mode, language };
     });
@@ -593,22 +624,74 @@ async function registerService(server: any) {
     },
     
     // Service methods
-    async createKernel(options: {id: string, mode: KernelMode, inactivity_timeout?: number, max_execution_time?: number}, context: {user: any, ws: string}) {
+    async createKernel(params: any, context: {user: any, ws: string}) {
       try {
-        options = options || {};
-        const namespace = context.ws;
-        console.log(`Creating kernel with namespace: ${namespace}, requested ID: ${options.id || "auto-generated"}`);
+        const namespace = context.ws || 'default';
+        console.log(`[DEBUG] createKernel called with params=${JSON.stringify(params)}, context.ws=${context.ws}`);
+        
+        // Handle the case where params might be a string (the mode) or an object
+        let mode: string;
+        let id: string | undefined;
+        let inactivity_timeout: number | undefined;
+        let max_execution_time: number | undefined;
+        
+        if (typeof params === 'string') {
+          // If params is a string, treat it as the mode
+          mode = params;
+        } else if (params && typeof params === 'object') {
+          // If params is an object, extract properties
+          mode = params.mode;
+          id = params.id;
+          inactivity_timeout = params.inactivity_timeout;
+          max_execution_time = params.max_execution_time;
+        } else {
+          throw new Error("Invalid parameters provided");
+        }
+        
+        console.log(`Creating kernel with namespace: ${namespace}, requested ID: ${id || "auto-generated"}, mode: ${mode}`);
+        
+        // Parse mode string to extract mode and language
+        // Expected format: "worker-python", "worker-typescript", "worker-javascript", "main_thread-python", etc.
+        let parsedMode = KernelMode.WORKER;
+        let parsedLanguage = KernelLanguage.PYTHON;
+        
+        if (mode && typeof mode === 'string') {
+          const [modeStr, langStr] = mode.split('-');
+          
+          // Parse mode
+          if (modeStr === 'main_thread') {
+            parsedMode = KernelMode.MAIN_THREAD;
+          } else {
+            parsedMode = KernelMode.WORKER; // Default to worker
+          }
+          
+          // Parse language
+          if (langStr === 'typescript') {
+            parsedLanguage = KernelLanguage.TYPESCRIPT;
+          } else if (langStr === 'javascript') {
+            parsedLanguage = KernelLanguage.JAVASCRIPT;
+          } else {
+            parsedLanguage = KernelLanguage.PYTHON; // Default to python
+          }
+        }
+        
+        console.log(`🔍 KERNEL CREATION DEBUG:`);
+        console.log(`  - Original mode string: "${mode}"`);
+        console.log(`  - Parsed mode: ${parsedMode} (${typeof parsedMode})`);
+        console.log(`  - Parsed language: ${parsedLanguage} (${typeof parsedLanguage})`);
+        console.log(`  - Language values: PYTHON="${KernelLanguage.PYTHON}", TYPESCRIPT="${KernelLanguage.TYPESCRIPT}", JAVASCRIPT="${KernelLanguage.JAVASCRIPT}"`);
         
         // Get existing kernels before creation
         const existingKernels = kernelManager.getKernelIds();
         console.log(`Existing kernels before creation: ${existingKernels.length}`);
         
         const kernelId = await kernelManager.createKernel({
-          id: options.id || crypto.randomUUID(),
-          mode: options.mode || KernelMode.WORKER,
+          id: id || crypto.randomUUID(),
+          mode: parsedMode,
+          lang: parsedLanguage,
           namespace: namespace, // Use workspace as namespace for isolation
-          inactivityTimeout: options.inactivity_timeout || 1000 * 60 * 10, // 10 minutes default
-          maxExecutionTime: options.max_execution_time || 1000 * 60 * 60 * 24 * 10 // 10 days default
+          inactivityTimeout: inactivity_timeout || 1000 * 60 * 10, // 10 minutes default
+          maxExecutionTime: max_execution_time || 1000 * 60 * 60 * 24 * 10 // 10 days default
         });
         
         console.log(`Kernel created with ID: ${kernelId}`);
@@ -977,11 +1060,22 @@ async function registerService(server: any) {
       };
     },
 
-    async executeCode({kernelId, code}: {kernelId: string, code: string}, context: {user: any, ws: string}) {
-        kernelId = ensureKernelId(kernelId, context.ws);
-      if (!code) {
-        throw new Error("No code provided");
-      }
+    async executeCode(params: any, context: {user: any, ws: string}) {
+        // Handle HTTP request context where ws might be undefined
+        const namespace = context.ws || 'default';
+        console.log(`[DEBUG] executeCode called with params=${JSON.stringify(params)}, context.ws=${context.ws}`);
+        
+        let kernelId = params.kernelId || params.kernel_id;
+        const code = params.code;
+        
+        if (!kernelId) {
+            throw new Error("kernelId is required");
+        }
+        if (!code) {
+            throw new Error("No code provided");
+        }
+        
+        kernelId = ensureKernelId(kernelId, namespace);
 
       // Verify kernel belongs to user's namespace
       const kernel = kernelManager.getKernel(kernelId);
@@ -1027,7 +1121,8 @@ async function registerService(server: any) {
     },
     
     async getExecutionResult({kernelId, executionId}: {kernelId: string, executionId: string}, context: {user: any, ws: string}) {
-        kernelId = ensureKernelId(kernelId, context.ws);
+        const namespace = context.ws || 'default';
+        kernelId = ensureKernelId(kernelId, namespace);
 
       const history = kernelHistory.get(kernelId) || [];
       const execution = history.find(h => h.id === executionId);
@@ -1041,7 +1136,8 @@ async function registerService(server: any) {
     
     // Stream execution as outputs
     async *streamExecution({kernelId, code}: {kernelId: string, code: string}, context: {user: any, ws: string}) {
-        kernelId = ensureKernelId(kernelId, context.ws);
+        const namespace = context.ws || 'default';
+        kernelId = ensureKernelId(kernelId, namespace);
         if (!code) {
         throw new Error("No code provided");
       }

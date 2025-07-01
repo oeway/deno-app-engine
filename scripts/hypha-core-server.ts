@@ -45,6 +45,7 @@
 import { HyphaCore } from 'hypha-core';
 import { DenoWebSocketServer, DenoWebSocketClient } from 'hypha-core/deno-websocket-server';
 import { registerService } from './hypha-service.ts';
+import { createPlaygroundService } from './playground-service.ts';
 
 // Generate a random JWT secret for HyphaCore
 function generateRandomJwtSecret(): string {
@@ -85,11 +86,28 @@ async function startHyphaCoreServer(options: {
 
   await registerService(hyphaAPI);
   
+  // Register the playground service
+  await createPlaygroundService(hyphaAPI, {
+    id: 'playground-service',
+    name: 'Playground Service',
+    description: 'Frontend playground interfaces for kernels, agents, and vector databases'
+  });
+  
   console.log(`✅ HyphaCore server started successfully!`);
   console.log(`🌐 Server URL: http://${host}:${port}`);
   console.log(`🔌 WebSocket URL: ws://${host}:${port}/ws`);
   console.log(`📁 Default workspace: ${workspace}`);
   console.log();
+  console.log(`============================================================`);
+  console.log(`🎉 Playground Service is running!`);
+  console.log(`🌐 **Access the Playground:**`);
+  console.log(`   Main Dashboard: http://${host}:${port}/${workspace}/apps/playground-service/`);
+  console.log(`   Kernel Playground: http://${host}:${port}/${workspace}/apps/playground-service/kernels`);
+  console.log(`   Agent Playground: http://${host}:${port}/${workspace}/apps/playground-service/agents`);
+  console.log(`   VectorDB Playground: http://${host}:${port}/${workspace}/apps/playground-service/vectordb`);
+  console.log(`📡 **API endpoints:**`);
+  console.log(`   Service API: http://${host}:${port}/${workspace}/services/root:deno-app-engine/`);
+  console.log(`✨ All playground interfaces are ready!`);
   console.log(`🚀 Ready to accept connections!`);
   
   // Keep the server running

@@ -16,7 +16,7 @@ import {
   type IAgentConfig, 
   type IAgentInstance 
 } from "./agent.ts";
-import { KernelLanguage } from "../kernel/manager.ts";
+import { KernelLanguage, KernelMode } from "../kernel/manager.ts";
 import { HyphaCore } from 'hypha-core';
 import { DenoWebSocketServer, DenoWebSocketClient } from 'hypha-core/deno-websocket-server';
 import type { InspectImagesOptions } from './vision.ts';
@@ -561,6 +561,7 @@ export class AgentManager extends EventEmitter {
     
     // Prepare kernel creation options with environment variables
     const kernelOptions: any = {
+      mode: KernelMode.WORKER,  // Explicitly set the kernel mode
       lang: kernelLanguage,
     };
     

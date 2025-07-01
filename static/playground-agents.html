@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent Playground - HyphaCore</title>
+    <style>
+        body { font-family: system-ui; margin: 0; height: 100vh; display: flex; flex-direction: column; background: #f9fafb; }
+        .demo-banner { background: #10b981; color: white; padding: 0.5rem; text-align: center; font-weight: 500; }
+        .header { background: white; padding: 1rem 2rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+        .nav-tabs { display: flex; gap: 1rem; }
+        .nav-tab { text-decoration: none; color: #6b7280; padding: 0.5rem 1rem; border-radius: 0.5rem; }
+        .nav-tab.active { color: #4f46e5; background: rgba(79, 70, 229, 0.1); }
+        .main { flex: 1; display: grid; grid-template-columns: 300px 1fr; }
+        .sidebar { background: white; border-right: 1px solid #e5e7eb; padding: 1.5rem; }
+        .chat-container { display: flex; flex-direction: column; }
+        .messages { flex: 1; padding: 1rem; overflow-y: auto; background: #f8f9fa; }
+        .input-area { background: white; padding: 1rem; border-top: 1px solid #e5e7eb; display: flex; gap: 0.5rem; }
+        .message-input { flex: 1; padding: 0.5rem; border: 1px solid #e5e7eb; border-radius: 0.375rem; }
+        button { background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.375rem; cursor: pointer; }
+        .agent-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .agent-item { padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; cursor: pointer; background: white; }
+        .agent-item.active { border-color: #4f46e5; background: rgba(79, 70, 229, 0.05); }
+        .message { margin-bottom: 1rem; padding: 0.75rem; border-radius: 0.5rem; }
+        .message.user { background: #dbeafe; margin-left: 2rem; }
+        .message.assistant { background: white; margin-right: 2rem; }
+    </style>
+</head>
+<body>
+    <div class="demo-banner">🚀 HyphaCore ASGI - Connected to Deno App Engine Service</div>
+    <div class="header">
+        <h1>🤖 Agent Playground</h1>
+        <nav class="nav-tabs">
+            <a href="../" class="nav-tab">🏠 Home</a>
+            <a href="./kernels" class="nav-tab">⚡ Kernels</a>
+            <a href="./agents" class="nav-tab active">🤖 Agents</a>
+            <a href="./vectordb" class="nav-tab">🗄️ VectorDB</a>
+        </nav>
+    </div>
+    <div class="main">
+        <div class="sidebar">
+            <h3>Agents <button onclick="createAgent()" style="float: right; padding: 0.25rem 0.5rem; font-size: 0.8rem;">+ New</button></h3>
+            <div id="agent-list" class="agent-list">
+                <div style="text-align: center; padding: 2rem; color: #6b7280;">Loading agents...</div>
+            </div>
+        </div>
+        <div class="chat-container">
+            <div id="messages" class="messages">
+                <div style="text-align: center; padding: 2rem; color: #6b7280;">Select an agent to start chatting</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="message-input" class="message-input" placeholder="Type your message..." onkeypress="handleKeyPress(event)">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        const API_BASE = '/default/services/root:deno-app-engine';
+        let agents = [];
+        let currentAgentId = null;
+        let messages = [];
+
+        async function makeRequest(path, method = 'GET', body = null) {
+            const options = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) options.body = JSON.stringify(body);
+            
+            const url = API_BASE + '/' + path.replace(/^\//, '');
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+            }
+            return response.json();
+        }
+
+        async function loadAgents() {
+            try {
+                const result = await makeRequest('listAgents');
+                agents = result || [];
+                renderAgentList();
+            } catch (error) {
+                console.error('Failed to load agents:', error);
+                document.getElementById('agent-list').innerHTML = 
+                    `<div style="text-align: center; color: #ef4444; padding: 2rem;">Failed to load agents<br><small>${error.message}</small></div>`;
+            }
+        }
+
+        function renderAgentList() {
+            const container = document.getElementById('agent-list');
+            if (agents.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 2rem;">No agents available<br><button onclick="createAgent()">Create First Agent</button></div>';
+                return;
+            }
+            container.innerHTML = agents.map(agent => `
+                <div class="agent-item ${agent.id === currentAgentId ? 'active' : ''}" onclick="selectAgent('${agent.id}')">
+                    <div><strong>${agent.name || agent.id}</strong></div>
+                    <small>${agent.description || 'No description'}</small>
+                </div>
+            `).join('');
+        }
+
+        async function createAgent() {
+            const name = prompt('Agent name:', 'New Agent');
+            if (!name) return;
+            
+            try {
+                const result = await makeRequest('createAgent', 'POST', {
+                    name: name,
+                    instructions: 'You are a helpful assistant.',
+                    autoAttachKernel: true
+                });
+                await loadAgents();
+                selectAgent(result.id);
+            } catch (error) {
+                alert('Failed to create agent: ' + error.message);
+            }
+        }
+
+        function selectAgent(agentId) {
+            currentAgentId = agentId;
+            renderAgentList();
+            messages = [];
+            renderMessages();
+        }
+
+        async function loadMessages() {
+            if (!currentAgentId) return;
+            
+            console.log('Skipping message loading due to API bug - starting with empty conversation');
+            messages = [];
+            renderMessages();
+            
+            /*
+            try {
+                const result = await makeRequest('getAgentConversation', 'POST', { agentId: currentAgentId });
+                messages = result.conversation || [];
+                renderMessages();
+            } catch (error) {
+                console.error('Failed to load messages:', error);
+                messages = [];
+                renderMessages();
+            }
+            */
+        }
+
+        function renderMessages() {
+            const container = document.getElementById('messages');
+            if (messages.length === 0) {
+                container.innerHTML = '<div style="text-align: center; padding: 2rem; color: #6b7280;">No messages yet. Start a conversation!</div>';
+                return;
+            }
+            
+            container.innerHTML = messages.map(msg => `
+                <div class="message ${msg.role}">
+                    <strong>${msg.role === 'user' ? 'You' : 'Agent'}:</strong>
+                    <div style="margin-top: 0.5rem; white-space: pre-wrap;">${msg.content}</div>
+                </div>
+            `).join('');
+            
+            container.scrollTop = container.scrollHeight;
+        }
+
+        async function sendMessage() {
+            if (!currentAgentId) {
+                alert('Please select an agent first');
+                return;
+            }
+            
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            input.value = '';
+            input.disabled = true;
+            
+            messages.push({ role: 'user', content: message });
+            renderMessages();
+            
+            const loadingMessage = { role: 'assistant', content: 'Thinking...' };
+            messages.push(loadingMessage);
+            renderMessages();
+            
+            try {
+                const response = await fetch(`${API_BASE}/chatWithAgent`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ agentId: currentAgentId, message })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                if (!response.body) {
+                    throw new Error('No response body');
+                }
+
+                messages.pop();
+                let assistantMessage = { role: 'assistant', content: '' };
+                messages.push(assistantMessage);
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    
+                    const lines = chunk.split('\n').filter(line => line.trim());
+                    
+                    for (const line of lines) {
+                        try {
+                            const data = JSON.parse(line);
+                            if (data.type === 'text_chunk' && data.content) {
+                                assistantMessage.content += data.content;
+                                renderMessages();
+                            } else if (data.type === 'text' && data.content) {
+                                if (!assistantMessage.content) {
+                                    assistantMessage.content = data.content;
+                                    renderMessages();
+                                }
+                            } else if (data.type === 'error') {
+                                assistantMessage.content += `\n[ERROR: ${data.message || 'Unknown error'}]`;
+                                renderMessages();
+                            }
+                        } catch (parseError) {
+                            assistantMessage.content += chunk;
+                            renderMessages();
+                        }
+                    }
+                }
+                
+                if (!assistantMessage.content.trim()) {
+                    assistantMessage.content = 'The assistant response was empty or could not be processed.';
+                    renderMessages();
+                }
+                
+            } catch (error) {
+                console.error('Chat error:', error);
+                messages.pop();
+                messages.push({ 
+                    role: 'assistant', 
+                    content: `Error: ${error.message}\n\nPlease try again or check if the agent is configured correctly.` 
+                });
+                renderMessages();
+            } finally {
+                input.disabled = false;
+                input.focus();
+            }
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadAgents);
+    </script>
+</body>
+</html> 

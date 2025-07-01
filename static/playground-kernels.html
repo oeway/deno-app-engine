@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kernel Playground - HyphaCore</title>
+    <style>
+        body { font-family: system-ui; margin: 0; height: 100vh; display: flex; flex-direction: column; background: #f9fafb; }
+        .demo-banner { background: #10b981; color: white; padding: 0.5rem; text-align: center; font-weight: 500; }
+        .header { background: white; padding: 1rem 2rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+        .nav-tabs { display: flex; gap: 1rem; }
+        .nav-tab { text-decoration: none; color: #6b7280; padding: 0.5rem 1rem; border-radius: 0.5rem; }
+        .nav-tab.active { color: #4f46e5; background: rgba(79, 70, 229, 0.1); }
+        .main { flex: 1; display: grid; grid-template-columns: 300px 1fr; }
+        .sidebar { background: white; border-right: 1px solid #e5e7eb; padding: 1.5rem; }
+        .workspace { display: flex; flex-direction: column; }
+        .toolbar { background: white; padding: 1rem; border-bottom: 1px solid #e5e7eb; display: flex; gap: 0.75rem; }
+        .code-editor { flex: 1; padding: 1rem; border: none; font-family: Monaco, monospace; font-size: 0.9rem; background: #1e1e1e; color: #d4d4d4; resize: none; outline: none; min-height: 300px; }
+        .output-container { background: white; border-top: 1px solid #e5e7eb; height: 300px; display: flex; flex-direction: column; }
+        .output-header { padding: 0.75rem 1rem; background: #f8f9fa; border-bottom: 1px solid #e5e7eb; font-weight: 500; }
+        .output-content { flex: 1; padding: 1rem; font-family: Monaco, monospace; font-size: 0.85rem; overflow-y: auto; background: #1f2937; color: #f9fafb; white-space: pre-wrap; }
+        button { background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.375rem; cursor: pointer; font-weight: 500; }
+        button:hover { background: #4338ca; }
+        .kernel-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .kernel-item { padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; cursor: pointer; background: white; }
+        .kernel-item:hover { border-color: #4f46e5; }
+        .kernel-item.active { border-color: #4f46e5; background: rgba(79, 70, 229, 0.05); }
+    </style>
+</head>
+<body>
+    <div class="demo-banner">🚀 HyphaCore ASGI - Connected to Deno App Engine Service</div>
+    <div class="header">
+        <h1>⚡ Kernel Playground</h1>
+        <nav class="nav-tabs">
+            <a href="../" class="nav-tab">🏠 Home</a>
+            <a href="./kernels" class="nav-tab active">⚡ Kernels</a>
+            <a href="./agents" class="nav-tab">🤖 Agents</a>
+            <a href="./vectordb" class="nav-tab">🗄️ VectorDB</a>
+        </nav>
+    </div>
+    <div class="main">
+        <div class="sidebar">
+            <h3>Kernels <button onclick="createKernel()" style="float: right; padding: 0.25rem 0.5rem; font-size: 0.8rem;">+ New</button></h3>
+            <div id="kernel-list" class="kernel-list">
+                <div style="text-align: center; padding: 2rem; color: #6b7280;">Loading kernels...</div>
+            </div>
+        </div>
+        <div class="workspace">
+            <div class="toolbar">
+                <select id="language-select" title="Select programming language" onchange="onLanguageChange()">
+                    <option value="python">🐍 Python</option>
+                    <option value="typescript">📘 TypeScript</option>
+                    <option value="javascript">📙 JavaScript</option>
+                </select>
+                <button onclick="runCode()">▶️ Run</button>
+                <button onclick="interruptKernel()">⏹️ Interrupt</button>
+                <button onclick="restartKernel()">🔄 Restart</button>
+            </div>
+            <textarea id="code-editor" class="code-editor" placeholder="🐍 Select or create a Python kernel to start coding..."></textarea>
+            <div class="output-container">
+                <div class="output-header">Output</div>
+                <div id="output-content" class="output-content">Ready to execute code...</div>
+            </div>
+        </div>
+    </div>
+    <script>
+        // Use HyphaCore service API endpoints
+        const API_BASE = '/default/services/root:deno-app-engine';
+        let kernels = [];
+        let currentKernelId = null;
+
+        // Enhanced kernel support for all three languages
+        const LANGUAGE_CONFIG = {
+            python: {
+                name: 'Python',
+                icon: '🐍',
+                example: `# Welcome to Python Kernel!
+import datetime
+print(f"Hello from Python! Current time: {datetime.datetime.now()}")
+
+# Try some Python code:
+numbers = [1, 2, 3, 4, 5]
+squares = [x**2 for x in numbers]
+print(f"Numbers: {numbers}")
+print(f"Squares: {squares}")`,
+                extension: 'py'
+            },
+            typescript: {
+                name: 'TypeScript',
+                icon: '📘',
+                example: `// Welcome to TypeScript Kernel!
+interface Person {
+    name: string;
+    age: number;
+}
+
+const person: Person = {
+    name: "TypeScript Developer",
+    age: 25
+};
+
+console.log(\`Hello from TypeScript! Person: \${JSON.stringify(person)}\`);
+
+// Try some TypeScript code:
+const numbers: number[] = [1, 2, 3, 4, 5];
+const squares: number[] = numbers.map(x => x * x);
+console.log(\`Numbers: \${numbers}\`);
+console.log(\`Squares: \${squares}\`);`,
+                extension: 'ts'
+            },
+            javascript: {
+                name: 'JavaScript',
+                icon: '📙',
+                example: `// Welcome to JavaScript Kernel!
+const person = {
+    name: "JavaScript Developer",
+    age: 30
+};
+
+console.log(\`Hello from JavaScript! Person: \${JSON.stringify(person)}\`);
+
+// Try some JavaScript code:
+const numbers = [1, 2, 3, 4, 5];
+const squares = numbers.map(x => x * x);
+console.log(\`Numbers: \${numbers}\`);
+console.log(\`Squares: \${squares}\`);`,
+                extension: 'js'
+            }
+        };
+
+        async function makeRequest(path, method = 'GET', body = null) {
+            const options = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) options.body = JSON.stringify(body);
+            
+            const url = API_BASE + '/' + path.replace(/^\//, '');
+            console.log('Making request to:', url);
+            
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+            }
+            return response.json();
+        }
+
+        async function loadKernels() {
+            try {
+                const result = await makeRequest('listKernels');
+                kernels = result || [];
+                renderKernelList();
+            } catch (error) {
+                console.error('Failed to load kernels:', error);
+                document.getElementById('kernel-list').innerHTML = 
+                    `<div style="text-align: center; color: #ef4444; padding: 2rem;">Failed to load kernels<br><small>${error.message}</small></div>`;
+            }
+        }
+
+        function renderKernelList() {
+            const container = document.getElementById('kernel-list');
+            if (kernels.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 2rem;">No kernels available<br><button onclick="createKernel()">Create First Kernel</button></div>';
+                return;
+            }
+            container.innerHTML = kernels.map(kernel => {
+                const langConfig = LANGUAGE_CONFIG[kernel.language] || LANGUAGE_CONFIG.python;
+                return `
+                    <div class="kernel-item ${kernel.id === currentKernelId ? 'active' : ''}" onclick="selectKernel('${kernel.id}')">
+                        <div><strong>${langConfig.icon} ${kernel.name || kernel.id}</strong></div>
+                        <small>${kernel.mode} (${langConfig.name})</small>
+                        <small style="color: #6b7280;">Created: ${new Date(kernel.created).toLocaleDateString()}</small>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function createKernel() {
+            try {
+                const language = document.getElementById('language-select').value;
+                // Use correct format: "worker-python", "worker-typescript", "worker-javascript"
+                const mode = `worker-${language}`;
+                
+                console.log(`Creating ${language} kernel with mode: ${mode}`);
+                
+                const result = await makeRequest('createKernel', 'POST', {
+                    mode: mode
+                });
+                
+                console.log('Kernel created:', result);
+                await loadKernels();
+                selectKernel(result.id);
+                
+                // Set example code for the selected language
+                setExampleCode(language);
+                
+            } catch (error) {
+                console.error('Create kernel error:', error);
+                alert('Failed to create kernel: ' + error.message);
+            }
+        }
+
+        function selectKernel(kernelId) {
+            currentKernelId = kernelId;
+            renderKernelList();
+            
+            // Find the selected kernel to get its language
+            const selectedKernel = kernels.find(k => k.id === kernelId);
+            if (selectedKernel) {
+                const langConfig = LANGUAGE_CONFIG[selectedKernel.language] || LANGUAGE_CONFIG.python;
+                document.getElementById('code-editor').placeholder = `${langConfig.icon} ${langConfig.name} kernel selected. Ready to execute code...`;
+                
+                // Update language selector to match kernel language
+                document.getElementById('language-select').value = selectedKernel.language;
+                
+                // If code editor is empty, set example code
+                const editor = document.getElementById('code-editor');
+                if (!editor.value.trim()) {
+                    setExampleCode(selectedKernel.language);
+                }
+            }
+        }
+
+        function setExampleCode(language) {
+            const langConfig = LANGUAGE_CONFIG[language] || LANGUAGE_CONFIG.python;
+            const editor = document.getElementById('code-editor');
+            editor.value = langConfig.example;
+        }
+
+        function onLanguageChange() {
+            const language = document.getElementById('language-select').value;
+            const langConfig = LANGUAGE_CONFIG[language];
+            
+            // Update placeholder to reflect selected language
+            document.getElementById('code-editor').placeholder = `Select or create a ${langConfig.icon} ${langConfig.name} kernel to start coding...`;
+            
+            // If no kernel is selected, update example code
+            if (!currentKernelId) {
+                setExampleCode(language);
+            }
+        }
+
+        async function runCode() {
+            if (!currentKernelId) {
+                alert('Please create and select a kernel first');
+                return;
+            }
+            
+            const code = document.getElementById('code-editor').value;
+            if (!code.trim()) {
+                alert('Please enter some code to execute');
+                return;
+            }
+            
+            const outputContainer = document.getElementById('output-content');
+            outputContainer.textContent = 'Executing...\n';
+
+            try {
+                // Try streaming execution first
+                const response = await fetch(`${API_BASE}/streamExecution`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ kernelId: currentKernelId, code })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                if (!response.body) {
+                    throw new Error('No response body for streaming');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                outputContainer.textContent = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    // Parse JSON lines from streaming response
+                    const lines = chunk.split('\n').filter(line => line.trim());
+                    
+                    for (const line of lines) {
+                        try {
+                            const data = JSON.parse(line);
+                            if (data.type === 'stream' && data.data) {
+                                outputContainer.textContent += data.data.text || '';
+                            } else if (data.type === 'execute_error') {
+                                outputContainer.textContent += `ERROR: ${data.data.traceback || 'Unknown error'}\n`;
+                            } else if (data.type === 'error') {
+                                outputContainer.textContent += `ERROR: ${data.message || 'Unknown error'}\n`;
+                            } else if (data.type === 'complete') {
+                                outputContainer.textContent += `\n--- Execution ${data.status || 'completed'} ---\n`;
+                            }
+                        } catch (parseError) {
+                            // If not JSON, treat as plain text
+                            outputContainer.textContent += chunk;
+                        }
+                    }
+                    
+                    outputContainer.scrollTop = outputContainer.scrollHeight;
+                }
+                
+            } catch (error) {
+                console.error('Streaming execution failed:', error);
+                outputContainer.textContent = `ERROR: ${error.message}\n\nTrying fallback execution method...`;
+                
+                // Fallback to regular execution
+                try {
+                    const result = await makeRequest('executeCode', 'POST', {
+                        kernelId: currentKernelId,
+                        code: code
+                    });
+                    outputContainer.textContent += `\nExecution started with ID: ${result.execution_id}`;
+                } catch (fallbackError) {
+                    outputContainer.textContent += `\nFallback execution also failed: ${fallbackError.message}`;
+                }
+            }
+        }
+
+        async function interruptKernel() {
+            if (!currentKernelId) return;
+            try {
+                await makeRequest('interruptKernel', 'POST', { kernelId: currentKernelId });
+                document.getElementById('output-content').textContent += '\nExecution interrupted.\n';
+            } catch (error) {
+                alert('Failed to interrupt: ' + error.message);
+            }
+        }
+
+        async function restartKernel() {
+            if (!currentKernelId) return;
+            try {
+                await makeRequest('restartKernel', 'POST', { kernelId: currentKernelId });
+                document.getElementById('output-content').textContent = 'Kernel restarted.\n';
+            } catch (error) {
+                alert('Failed to restart: ' + error.message);
+            }
+        }
+
+        // Initialize page when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            loadKernels();
+            // Set default Python example code
+            setExampleCode('python');
+        });
+    </script>
+</body>
+</html> 

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VectorDB Playground - HyphaCore</title>
+    <style>
+        body { font-family: system-ui; margin: 0; height: 100vh; display: flex; flex-direction: column; background: #f9fafb; }
+        .demo-banner { background: #10b981; color: white; padding: 0.5rem; text-align: center; font-weight: 500; }
+        .header { background: white; padding: 1rem 2rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+        .nav-tabs { display: flex; gap: 1rem; }
+        .nav-tab { text-decoration: none; color: #6b7280; padding: 0.5rem 1rem; border-radius: 0.5rem; }
+        .nav-tab.active { color: #4f46e5; background: rgba(79, 70, 229, 0.1); }
+        .main { flex: 1; display: grid; grid-template-columns: 300px 1fr; }
+        .sidebar { background: white; border-right: 1px solid #e5e7eb; padding: 1.5rem; }
+        .content { padding: 1.5rem; overflow-y: auto; }
+        button { background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.375rem; cursor: pointer; }
+        .index-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .index-item { padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; cursor: pointer; background: white; }
+        .index-item.active { border-color: #4f46e5; background: rgba(79, 70, 229, 0.05); }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.5rem; border: 1px solid #e5e7eb; border-radius: 0.375rem; }
+        .providers-section { background: white; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="demo-banner">🚀 HyphaCore ASGI - Connected to Deno App Engine Service</div>
+    <div class="header">
+        <h1>🗄️ VectorDB Playground</h1>
+        <nav class="nav-tabs">
+            <a href="../" class="nav-tab">🏠 Home</a>
+            <a href="./kernels" class="nav-tab">⚡ Kernels</a>
+            <a href="./agents" class="nav-tab">🤖 Agents</a>
+            <a href="./vectordb" class="nav-tab active">🗄️ VectorDB</a>
+        </nav>
+    </div>
+    <div class="main">
+        <div class="sidebar">
+            <h3>Vector Indices <button onclick="createIndex()" style="float: right; padding: 0.25rem 0.5rem; font-size: 0.8rem;">+ New</button></h3>
+            <div id="index-list" class="index-list">
+                <div style="text-align: center; padding: 2rem; color: #6b7280;">Loading indices...</div>
+            </div>
+            
+            <div class="providers-section">
+                <h4>Embedding Providers</h4>
+                <div id="providers-list">Loading providers...</div>
+                <button onclick="loadProviders()" style="width: 100%; margin-top: 0.5rem;">Refresh Providers</button>
+            </div>
+        </div>
+        <div class="content">
+            <div id="main-content">
+                <h2>Vector Database Management</h2>
+                <p>Select or create a vector index to start managing documents and performing semantic searches.</p>
+                
+                <div class="form-group">
+                    <label for="test-query">Quick Test Query:</label>
+                    <input type="text" id="test-query" placeholder="Enter text to search..." />
+                    <button onclick="quickSearch()" style="margin-top: 0.5rem;">Search Current Index</button>
+                </div>
+                
+                <div class="form-group">
+                    <label for="test-document">Add Test Document:</label>
+                    <textarea id="test-document" placeholder="Enter document text..."></textarea>
+                    <button onclick="addTestDocument()" style="margin-top: 0.5rem;">Add Document</button>
+                </div>
+                
+                <div id="results-area" style="background: white; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; min-height: 200px;">
+                    <p>Results will appear here...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        const API_BASE = '/default/services/root:deno-app-engine';
+        let indices = [];
+        let providers = [];
+        let currentIndexId = null;
+
+        async function makeRequest(path, method = 'GET', body = null) {
+            const options = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) options.body = JSON.stringify(body);
+            
+            const url = API_BASE + '/' + path.replace(/^\//, '');
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+            }
+            return response.json();
+        }
+
+        async function loadIndices() {
+            try {
+                const result = await makeRequest('listVectorIndices');
+                indices = result || [];
+                renderIndexList();
+            } catch (error) {
+                console.error('Failed to load indices:', error);
+                document.getElementById('index-list').innerHTML = 
+                    `<div style="text-align: center; color: #ef4444; padding: 2rem;">Failed to load indices<br><small>${error.message}</small></div>`;
+            }
+        }
+
+        async function loadProviders() {
+            try {
+                const result = await makeRequest('listEmbeddingProviders');
+                providers = result.providers || [];
+                renderProvidersList();
+            } catch (error) {
+                console.error('Failed to load providers:', error);
+                document.getElementById('providers-list').innerHTML = 
+                    `<div style="color: #ef4444; font-size: 0.8rem;">Failed to load providers<br>${error.message}</div>`;
+            }
+        }
+
+        function renderIndexList() {
+            const container = document.getElementById('index-list');
+            if (indices.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 2rem;">No indices available<br><button onclick="createIndex()">Create First Index</button></div>';
+                return;
+            }
+            container.innerHTML = indices.map(index => `
+                <div class="index-item ${index.id === currentIndexId ? 'active' : ''}" onclick="selectIndex('${index.id}')">
+                    <div><strong>${index.name || index.id}</strong></div>
+                    <small>${index.documentCount || 0} docs${index.embeddingDimension ? `, ${index.embeddingDimension}D` : ''}</small>
+                </div>
+            `).join('');
+        }
+
+        function renderProvidersList() {
+            const container = document.getElementById('providers-list');
+            if (providers.length === 0) {
+                container.innerHTML = '<div style="color: #6b7280; font-size: 0.8rem;">No providers available</div>';
+                return;
+            }
+            container.innerHTML = providers.map(provider => `
+                <div style="font-size: 0.8rem; padding: 0.25rem 0; border-bottom: 1px solid #f0f0f0;">
+                    <strong>${provider.name}</strong><br>
+                    <span style="color: #6b7280;">${provider.type} (${provider.dimension}D)</span>
+                </div>
+            `).join('');
+        }
+
+        async function createIndex() {
+            if (providers.length === 0) {
+                alert('No embedding providers available. Please configure providers first.');
+                return;
+            }
+            
+            const embeddingProvider = providers[0].id;
+            
+            try {
+                const result = await makeRequest('createVectorIndex', 'POST', {
+                    embeddingProviderName: embeddingProvider
+                });
+                await loadIndices();
+                selectIndex(result.id);
+                
+                document.getElementById('results-area').innerHTML = `
+                    <div style="color: #10b981;">
+                        <strong>Vector index created successfully!</strong><br>
+                        ID: ${result.id}<br>
+                        Name: ${result.name}<br>
+                        Provider: ${embeddingProvider}
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Create index error:', error);
+                alert('Failed to create index: ' + error.message);
+            }
+        }
+
+        function selectIndex(indexId) {
+            currentIndexId = indexId;
+            renderIndexList();
+            
+            const selectedIndex = indices.find(idx => idx.id === indexId);
+            if (selectedIndex) {
+                document.getElementById('results-area').innerHTML = `
+                    <div style="background: #f0f9ff; padding: 1rem; border-radius: 0.5rem;">
+                        <strong>Selected Index: ${selectedIndex.name}</strong><br>
+                        <small>ID: ${selectedIndex.id}</small><br>
+                        <small>Documents: ${selectedIndex.documentCount || 0}</small><br>
+                        <small>Dimensions: ${selectedIndex.embeddingDimension || 'Unknown'}</small>
+                        <br><br>
+                        <em>Use the controls above to search or add documents.</em>
+                    </div>
+                `;
+            }
+        }
+
+        async function quickSearch() {
+            if (!currentIndexId) {
+                alert('Please select an index first');
+                return;
+            }
+            
+            const query = document.getElementById('test-query').value.trim();
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+            
+            document.getElementById('results-area').innerHTML = '<div style="color: #6b7280;">Searching...</div>';
+            
+            try {
+                const result = await makeRequest('queryVectorIndex', 'POST', {
+                    indexId: currentIndexId,
+                    query: query,
+                    options: { k: 5 }
+                });
+                
+                document.getElementById('results-area').innerHTML = `
+                    <h4>Search Results (${result.resultCount} found)</h4>
+                    <small>Query ID: ${result.queryId} | Timestamp: ${new Date(result.timestamp).toLocaleString()}</small>
+                    <div style="margin-top: 1rem;">
+                        ${result.results && result.results.length > 0 ? result.results.map((res, i) => `
+                            <div style="border: 1px solid #e5e7eb; padding: 0.75rem; margin: 0.5rem 0; border-radius: 0.25rem; background: #f9fafb;">
+                                <div style="display: flex; justify-content: between; align-items: center; margin-bottom: 0.5rem;">
+                                    <strong>Result ${i + 1}</strong>
+                                    <span style="color: #6b7280; font-size: 0.8rem;">Score: ${res.score?.toFixed(3) || 'N/A'}</span>
+                                </div>
+                                <div style="margin-bottom: 0.5rem;"><strong>ID:</strong> ${res.id}</div>
+                                <div style="margin-bottom: 0.5rem;"><strong>Text:</strong> ${res.text || 'No text available'}</div>
+                                ${res.metadata ? `<div style="font-size: 0.8rem; color: #6b7280;"><strong>Metadata:</strong> ${JSON.stringify(res.metadata)}</div>` : ''}
+                            </div>
+                        `).join('') : '<div style="color: #6b7280; padding: 1rem;">No results found</div>'}
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Search error:', error);
+                document.getElementById('results-area').innerHTML = `
+                    <div style="color: #ef4444;">
+                        <strong>Search failed</strong><br>
+                        ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        async function addTestDocument() {
+            if (!currentIndexId) {
+                alert('Please select an index first');
+                return;
+            }
+            
+            const text = document.getElementById('test-document').value.trim();
+            if (!text) {
+                alert('Please enter document text');
+                return;
+            }
+            
+            document.getElementById('results-area').innerHTML = '<div style="color: #6b7280;">Adding document...</div>';
+            
+            try {
+                const result = await makeRequest('addDocuments', 'POST', {
+                    indexId: currentIndexId,
+                    documents: [{
+                        id: 'doc-' + Date.now(),
+                        text: text,
+                        metadata: { 
+                            added: new Date().toISOString(),
+                            source: 'playground'
+                        }
+                    }]
+                });
+                
+                document.getElementById('results-area').innerHTML = `
+                    <div style="color: #10b981; background: #f0fdf4; padding: 1rem; border-radius: 0.5rem;">
+                        <strong>Document added successfully!</strong><br>
+                        Added: ${result.addedCount} document(s)<br>
+                        Timestamp: ${new Date(result.timestamp).toLocaleString()}
+                    </div>
+                `;
+                
+                document.getElementById('test-document').value = '';
+                
+                // Refresh the index list to show updated document count
+                await loadIndices();
+                
+            } catch (error) {
+                console.error('Add document error:', error);
+                document.getElementById('results-area').innerHTML = `
+                    <div style="color: #ef4444; background: #fef2f2; padding: 1rem; border-radius: 0.5rem;">
+                        <strong>Failed to add document</strong><br>
+                        ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadIndices();
+            loadProviders();
+        });
+    </script>
+</body>
+</html> 
