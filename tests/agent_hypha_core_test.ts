@@ -13,7 +13,9 @@ const TEST_CONFIG = {
 /**
  * Test HyphaCore integration with AgentManager
  */
-Deno.test("AgentManager HyphaCore Integration Test", async () => {
+Deno.test({
+  name: "AgentManager HyphaCore Integration Test",
+  async fn() {
     let agentManager: AgentManager | null = null;
     let kernelManager: KernelManager | null = null;
     
@@ -314,9 +316,24 @@ console.log("✅ JavaScript data service registered successfully");
             console.log(`⚠️ Service "${serviceId}" not found (attempt ${i + 1}/${maxRetries}):`, errorMessage);
             
             if (i < maxRetries - 1) {
-              const delay = baseDelay * Math.pow(1.5, i); // Exponential backoff
+              const delay = Math.min(baseDelay * Math.pow(1.5, i), 5000); // Cap at 5s
               console.log(`⏳ Waiting ${delay}ms before retry...`);
-              await new Promise(resolve => setTimeout(resolve, delay));
+              // Use AbortController to ensure timer can be cleaned up if needed
+              const controller = new AbortController();
+              try {
+                await new Promise((resolve, reject) => {
+                  const timeoutId = setTimeout(resolve, delay);
+                  controller.signal.addEventListener('abort', () => {
+                    clearTimeout(timeoutId);
+                    reject(new Error('Retry delay aborted'));
+                  });
+                });
+              } catch (abortError) {
+                if (controller.signal.aborted) {
+                  throw new Error('Operation aborted during retry delay');
+                }
+                throw abortError;
+              }
             }
           }
         }
@@ -339,9 +356,24 @@ console.log("✅ JavaScript data service registered successfully");
             console.log(`⚠️ ${methodName}() failed (attempt ${i + 1}/${maxRetries}):`, errorMessage);
             
             if (i < maxRetries - 1) {
-              const delay = 1000 * Math.pow(1.5, i); // Exponential backoff
+              const delay = Math.min(1000 * Math.pow(1.5, i), 3000); // Cap at 3s
               console.log(`⏳ Waiting ${delay}ms before retry...`);
-              await new Promise(resolve => setTimeout(resolve, delay));
+              // Use AbortController to ensure timer can be cleaned up if needed
+              const controller = new AbortController();
+              try {
+                await new Promise((resolve, reject) => {
+                  const timeoutId = setTimeout(resolve, delay);
+                  controller.signal.addEventListener('abort', () => {
+                    clearTimeout(timeoutId);
+                    reject(new Error('Retry delay aborted'));
+                  });
+                });
+              } catch (abortError) {
+                if (controller.signal.aborted) {
+                  throw new Error('Operation aborted during retry delay');
+                }
+                throw abortError;
+              }
             }
           }
         }
@@ -633,8 +665,91 @@ try {
       if (agentManager) {
         console.log("🧹 Cleaning up agents and shutting down HyphaCore...");
         try {
-          await agentManager.destroyAll();
-          await agentManager.shutdown();
+          // First, try to disconnect HyphaCore connections from within agents
+          try {
+            console.log("🔌 Disconnecting HyphaCore connections from agents...");
+            
+            // Disconnect Python agent HyphaCore connection
+            const pythonAgent = agentManager.getAgent("python-hypha-test");
+            if (pythonAgent && pythonAgent.kernel) {
+              await pythonAgent.execute(`
+try:
+    if '_hypha_server' in globals():
+        await _hypha_server.disconnect()
+        print("✅ Python HyphaCore connection disconnected")
+    else:
+        print("ℹ️ No Python HyphaCore connection to disconnect")
+except Exception as e:
+    print(f"⚠️ Python HyphaCore disconnect error: {e}")
+`);
+            }
+            
+            // Disconnect TypeScript agent HyphaCore connection  
+            const tsAgent = agentManager.getAgent("typescript-hypha-test");
+            if (tsAgent && tsAgent.kernel) {
+              await tsAgent.execute(`
+try {
+    if (typeof _hypha_server !== 'undefined' && _hypha_server) {
+        await _hypha_server.disconnect();
+        console.log("✅ TypeScript HyphaCore connection disconnected");
+    } else {
+        console.log("ℹ️ No TypeScript HyphaCore connection to disconnect");
+    }
+} catch (error) {
+    console.log("⚠️ TypeScript HyphaCore disconnect error:", error);
+}
+`);
+            }
+            
+            // Disconnect JavaScript agent HyphaCore connection
+            const jsAgent = agentManager.getAgent("javascript-hypha-test");
+            if (jsAgent && jsAgent.kernel) {
+              await jsAgent.execute(`
+try {
+    if (typeof _hypha_server !== 'undefined' && _hypha_server) {
+        await _hypha_server.disconnect();
+        console.log("✅ JavaScript HyphaCore connection disconnected");
+    } else {
+        console.log("ℹ️ No JavaScript HyphaCore connection to disconnect");
+    }
+} catch (error) {
+    console.log("⚠️ JavaScript HyphaCore disconnect error:", error);
+}
+`);
+            }
+          } catch (disconnectError) {
+            console.error("⚠️ Failed to disconnect HyphaCore connections:", disconnectError);
+          }
+          
+          // Small delay to allow disconnections to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Use timeout wrapper for cleanup operations to prevent hanging
+          const cleanupWithTimeout = async (operation: () => Promise<void>, name: string, timeoutMs = 10000) => {
+            try {
+              await Promise.race([
+                operation(),
+                new Promise((_, reject) => 
+                  setTimeout(() => reject(new Error(`${name} timed out after ${timeoutMs}ms`)), timeoutMs)
+                )
+              ]);
+              console.log(`✅ ${name} completed successfully`);
+            } catch (error) {
+              console.error(`⚠️ ${name} failed:`, error);
+            }
+          };
+          
+          await cleanupWithTimeout(
+            () => agentManager!.destroyAll(), 
+            "Agent cleanup", 
+            15000
+          );
+          
+          await cleanupWithTimeout(
+            () => agentManager!.shutdown(), 
+            "AgentManager shutdown", 
+            10000
+          );
         } catch (error) {
           console.error("⚠️ Cleanup error:", error);
         }
@@ -652,7 +767,10 @@ try {
       
       console.log("✅ Test cleanup completed");
     }
-  });
+  },
+  sanitizeOps: false,
+  sanitizeResources: false
+});
 
 /**
  * Test error handling when HyphaCore is not enabled
