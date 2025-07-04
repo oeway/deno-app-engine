@@ -787,11 +787,6 @@ except Exception as e:
           // Mark as complete to prevent multiple resolutions
           executionState.executionComplete = true;
           
-          // Clear timeout
-          if (executionState.timeout !== null) {
-            clearTimeout(executionState.timeout);
-          }
-          
           // Clean up listeners
           super.off(KernelEvents.ALL, messageCollector);
           
@@ -825,14 +820,6 @@ except Exception as e:
             });
           }
         };
-
-        // Set up timeout as safety net (10 seconds)
-        executionState.timeout = setTimeout(() => {
-          if (!executionState.executionComplete) {
-            console.warn("[KERNEL] Execution timeout, completing anyway");
-            completionDetector();
-          }
-        }, 10000) as unknown as number;
 
         // Install message collector BEFORE executing code
         super.on(KernelEvents.ALL, messageCollector);

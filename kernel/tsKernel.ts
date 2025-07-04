@@ -327,12 +327,6 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
           if (executionState.executionComplete) return;
           
           executionState.executionComplete = true;
-          
-          // Clear timeout
-          if (executionState.timeout !== null) {
-            clearTimeout(executionState.timeout);
-          }
-          
           // Clean up event listeners
           super.off('stream', handleAllEvents);
           super.off('display_data', handleAllEvents);
@@ -421,13 +415,6 @@ export class TypeScriptKernel extends EventEmitter implements IKernel {
           }
         };
 
-        // Set up timeout as safety net (10 seconds)
-        executionState.timeout = setTimeout(() => {
-          if (!executionState.executionComplete) {
-            console.warn("[TS_KERNEL] Execution timeout, completing anyway");
-            completionDetector();
-          }
-        }, 10000) as unknown as number;
 
         // Execute the code
         this.executeWithInterruptSupport(code)

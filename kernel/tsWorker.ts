@@ -306,11 +306,6 @@ class TypeScriptKernel {
           
           executionState.executionComplete = true;
           
-          // Clear timeout
-          if (executionState.timeout !== null) {
-            clearTimeout(executionState.timeout);
-          }
-          
           // Clean up event listeners
           this.eventEmitter.off('stream', handleStreamEvent);
           this.eventEmitter.off('display_data', handleDisplayEvent);
@@ -426,14 +421,6 @@ class TypeScriptKernel {
             });
           }
         };
-
-        // Set up timeout as safety net (10 seconds)
-        executionState.timeout = setTimeout(() => {
-          if (!executionState.executionComplete) {
-            console.warn("[TS_WORKER] Execution timeout, completing anyway");
-            completionDetector();
-          }
-        }, 10000) as unknown as number;
 
         // Execute the code
         this.tseval(code)
