@@ -1,76 +1,173 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VectorDB Playground - HyphaCore</title>
-    <style>
-        body { font-family: system-ui; margin: 0; height: 100vh; display: flex; flex-direction: column; background: #f9fafb; }
-        .demo-banner { background: #10b981; color: white; padding: 0.5rem; text-align: center; font-weight: 500; }
-        .header { background: white; padding: 1rem 2rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
-        .nav-tabs { display: flex; gap: 1rem; }
-        .nav-tab { text-decoration: none; color: #6b7280; padding: 0.5rem 1rem; border-radius: 0.5rem; }
-        .nav-tab.active { color: #4f46e5; background: rgba(79, 70, 229, 0.1); }
-        .main { flex: 1; display: grid; grid-template-columns: 300px 1fr; }
-        .sidebar { background: white; border-right: 1px solid #e5e7eb; padding: 1.5rem; }
-        .content { padding: 1.5rem; overflow-y: auto; }
-        button { background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.375rem; cursor: pointer; }
-        .index-list { display: flex; flex-direction: column; gap: 0.5rem; }
-        .index-item { padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; cursor: pointer; background: white; }
-        .index-item.active { border-color: #4f46e5; background: rgba(79, 70, 229, 0.05); }
-        .form-group { margin-bottom: 1rem; }
-        .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
-        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.5rem; border: 1px solid #e5e7eb; border-radius: 0.375rem; }
-        .providers-section { background: white; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; }
-    </style>
+    <title>VectorDB Playground - Deno App Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-in-out',
+                        'slide-in': 'slideIn 0.3s ease-out',
+                        'pulse-glow': 'pulseGlow 2s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' }
+                        },
+                        slideIn: {
+                            '0%': { transform: 'translateY(10px)', opacity: '0' },
+                            '100%': { transform: 'translateY(0)', opacity: '1' }
+                        },
+                        pulseGlow: {
+                            '0%, 100%': { opacity: '0.5', boxShadow: '0 0 5px rgba(236, 72, 153, 0.3)' },
+                            '50%': { opacity: '1', boxShadow: '0 0 20px rgba(236, 72, 153, 0.6)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
 </head>
-<body>
-    <div class="demo-banner">🚀 HyphaCore ASGI - Connected to Deno App Engine Service</div>
-    <div class="header">
-        <h1>🗄️ VectorDB Playground</h1>
-        <nav class="nav-tabs">
-            <a href="../" class="nav-tab">🏠 Home</a>
-            <a href="./kernels" class="nav-tab">⚡ Kernels</a>
-            <a href="./agents" class="nav-tab">🤖 Agents</a>
-            <a href="./vectordb" class="nav-tab active">🗄️ VectorDB</a>
-        </nav>
+<body class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-gray-100">
+    <!-- Status Banner -->
+    <div class="bg-emerald-500 text-white px-4 py-2 text-center font-medium text-sm">
+        <div class="flex items-center justify-center space-x-2">
+            <div class="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+            <span>HyphaCore ASGI Connected - Deno App Engine Service</span>
+        </div>
     </div>
-    <div class="main">
-        <div class="sidebar">
-            <h3>Vector Indices <button onclick="createIndex()" style="float: right; padding: 0.25rem 0.5rem; font-size: 0.8rem;">+ New</button></h3>
-            <div id="index-list" class="index-list">
-                <div style="text-align: center; padding: 2rem; color: #6b7280;">Loading indices...</div>
+
+    <!-- Header -->
+    <header class="bg-white/5 backdrop-blur-sm border-b border-white/10">
+        <div class="px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <h1 class="text-2xl font-bold bg-gradient-to-r from-pink-400 to-purple-400 bg-clip-text text-transparent flex items-center">
+                        <span class="text-3xl mr-2">🗄️</span>
+                        VectorDB Playground
+                    </h1>
+                </div>
+                <nav class="flex space-x-1">
+                    <a href="./" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/10 transition-all duration-200 flex items-center space-x-2">
+                        <span class="text-lg">🏠</span>
+                        <span class="hidden sm:inline">Home</span>
+                    </a>
+                    <a href="./kernels" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/10 transition-all duration-200 flex items-center space-x-2">
+                        <span class="text-lg">⚡</span>
+                        <span class="hidden sm:inline">Kernels</span>
+                    </a>
+                    <a href="./agents" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/10 transition-all duration-200 flex items-center space-x-2">
+                        <span class="text-lg">🤖</span>
+                        <span class="hidden sm:inline">Agents</span>
+                    </a>
+                    <a href="./vectordb" class="px-4 py-2 rounded-xl bg-pink-500/20 text-pink-300 flex items-center space-x-2">
+                        <span class="text-lg">🗄️</span>
+                        <span class="hidden sm:inline">VectorDB</span>
+                    </a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="flex h-[calc(100vh-120px)]">
+        <!-- Sidebar -->
+        <aside class="w-80 bg-white/5 backdrop-blur-sm border-r border-white/10 flex flex-col">
+            <div class="p-6 border-b border-white/10">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-white">Vector Indices</h2>
+                    <button onclick="createIndex()" class="px-3 py-1.5 bg-pink-500 hover:bg-pink-600 text-white font-medium rounded-lg transition-colors duration-200 text-sm flex items-center space-x-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                        </svg>
+                        <span>New</span>
+                    </button>
+                </div>
+                <div id="index-list" class="space-y-2">
+                    <div class="text-center py-8 text-gray-400 animate-fade-in">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-pink-400 mx-auto mb-3"></div>
+                        <p>Loading indices...</p>
+                    </div>
+                </div>
             </div>
             
-            <div class="providers-section">
-                <h4>Embedding Providers</h4>
-                <div id="providers-list">Loading providers...</div>
-                <button onclick="loadProviders()" style="width: 100%; margin-top: 0.5rem;">Refresh Providers</button>
+            <div class="p-6 border-b border-white/10">
+                <h3 class="text-lg font-semibold text-white mb-4">Embedding Providers</h3>
+                <div id="providers-list" class="space-y-2">
+                    <div class="text-center py-4 text-gray-400 animate-fade-in">
+                        <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-400 mx-auto mb-2"></div>
+                        <p class="text-sm">Loading providers...</p>
+                    </div>
+                </div>
+                <button onclick="loadProviders()" class="w-full mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors text-sm">
+                    Refresh Providers
+                </button>
             </div>
-        </div>
-        <div class="content">
-            <div id="main-content">
-                <h2>Vector Database Management</h2>
-                <p>Select or create a vector index to start managing documents and performing semantic searches.</p>
-                
-                <div class="form-group">
-                    <label for="test-query">Quick Test Query:</label>
-                    <input type="text" id="test-query" placeholder="Enter text to search..." />
-                    <button onclick="quickSearch()" style="margin-top: 0.5rem;">Search Current Index</button>
-                </div>
-                
-                <div class="form-group">
-                    <label for="test-document">Add Test Document:</label>
-                    <textarea id="test-document" placeholder="Enter document text..."></textarea>
-                    <button onclick="addTestDocument()" style="margin-top: 0.5rem;">Add Document</button>
-                </div>
-                
-                <div id="results-area" style="background: white; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; min-height: 200px;">
-                    <p>Results will appear here...</p>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="flex-1 flex flex-col">
+            <!-- Content Area -->
+            <div class="flex-1 p-6 overflow-y-auto">
+                <div id="main-content">
+                    <!-- Default Welcome Screen -->
+                    <div class="text-center py-12 animate-fade-in">
+                        <div class="text-6xl mb-6">🗄️</div>
+                        <h2 class="text-3xl font-bold text-white mb-4">Vector Database Management</h2>
+                        <p class="text-gray-400 text-lg mb-8 max-w-2xl mx-auto">
+                            Create and manage vector indices for semantic search. Add documents, perform queries, and explore your data with AI-powered embeddings.
+                        </p>
+                        
+                        <!-- Quick Actions -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto mb-8">
+                            <!-- Quick Search -->
+                            <div class="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6">
+                                <div class="text-2xl mb-3">🔍</div>
+                                <h3 class="text-lg font-semibold text-white mb-3">Quick Search</h3>
+                                <div class="space-y-3">
+                                    <input type="text" id="test-query" placeholder="Enter text to search..." class="w-full bg-slate-800 border border-slate-600 text-gray-200 px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent placeholder-gray-400">
+                                    <button onclick="quickSearch()" class="w-full px-4 py-2 bg-gradient-to-r from-pink-500 to-purple-500 hover:from-pink-600 hover:to-purple-600 text-white font-medium rounded-lg transition-all duration-200">
+                                        Search Current Index
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- Add Document -->
+                            <div class="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6">
+                                <div class="text-2xl mb-3">📄</div>
+                                <h3 class="text-lg font-semibold text-white mb-3">Add Document</h3>
+                                <div class="space-y-3">
+                                    <textarea id="test-document" placeholder="Enter document text..." rows="3" class="w-full bg-slate-800 border border-slate-600 text-gray-200 px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent resize-none placeholder-gray-400"></textarea>
+                                    <button onclick="addTestDocument()" class="w-full px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium rounded-lg transition-all duration-200">
+                                        Add to Current Index
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Results Area -->
+                    <div id="results-area" class="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6 animate-slide-in">
+                        <div class="flex items-center space-x-2 mb-4">
+                            <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                            </svg>
+                            <h3 class="text-lg font-semibold text-white">Results</h3>
+                        </div>
+                        <div class="text-gray-400 italic">
+                            Results will appear here when you perform searches or operations...
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
+
     <script>
         const API_BASE = '/default/services/root:deno-app-engine';
         let indices = [];
@@ -97,7 +194,13 @@
             } catch (error) {
                 console.error('Failed to load indices:', error);
                 document.getElementById('index-list').innerHTML = 
-                    `<div style="text-align: center; color: #ef4444; padding: 2rem;">Failed to load indices<br><small>${error.message}</small></div>`;
+                    `<div class="text-center py-8 text-red-400 animate-fade-in">
+                        <svg class="w-8 h-8 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                        </svg>
+                        <p class="font-medium">Failed to load indices</p>
+                        <p class="text-sm text-gray-500 mt-1">${error.message}</p>
+                    </div>`;
             }
         }
 
@@ -109,41 +212,73 @@
             } catch (error) {
                 console.error('Failed to load providers:', error);
                 document.getElementById('providers-list').innerHTML = 
-                    `<div style="color: #ef4444; font-size: 0.8rem;">Failed to load providers<br>${error.message}</div>`;
+                    `<div class="text-center py-4 text-red-400 animate-fade-in">
+                        <svg class="w-6 h-6 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                        </svg>
+                        <p class="text-sm font-medium">Failed to load providers</p>
+                        <p class="text-xs text-gray-500 mt-1">${error.message}</p>
+                    </div>`;
             }
         }
 
         function renderIndexList() {
             const container = document.getElementById('index-list');
             if (indices.length === 0) {
-                container.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 2rem;">No indices available<br><button onclick="createIndex()">Create First Index</button></div>';
+                container.innerHTML = `
+                    <div class="text-center py-8 text-gray-400 animate-fade-in">
+                        <svg class="w-12 h-12 mx-auto mb-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                        </svg>
+                        <p class="font-medium mb-2">No indices available</p>
+                        <button onclick="createIndex()" class="px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white font-medium rounded-lg transition-colors text-sm">
+                            Create First Index
+                        </button>
+                    </div>
+                `;
                 return;
             }
-            container.innerHTML = indices.map(index => `
-                <div class="index-item ${index.id === currentIndexId ? 'active' : ''}" onclick="selectIndex('${index.id}')">
-                    <div><strong>${index.name || index.id}</strong></div>
-                    <small>${index.documentCount || 0} docs${index.embeddingDimension ? `, ${index.embeddingDimension}D` : ''}</small>
-                </div>
-            `).join('');
+            container.innerHTML = indices.map(index => {
+                const isActive = index.id === currentIndexId;
+                return `
+                    <div onclick="selectIndex('${index.id}')" class="p-4 rounded-xl cursor-pointer transition-all duration-200 ${isActive ? 'bg-white/20 border border-pink-500/50' : 'bg-white/5 hover:bg-white/10 border border-transparent'} animate-slide-in">
+                        <div class="flex items-start justify-between mb-2">
+                            <div>
+                                <h3 class="font-semibold text-white text-sm">${index.name || index.id}</h3>
+                                <div class="flex items-center space-x-4 mt-1">
+                                    <span class="text-xs text-gray-400">${index.documentCount || 0} docs</span>
+                                    ${index.embeddingDimension ? `<span class="text-xs text-gray-400">${index.embeddingDimension}D</span>` : ''}
+                                </div>
+                            </div>
+                            ${isActive ? '<div class="w-2 h-2 bg-pink-400 rounded-full animate-pulse"></div>' : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
         }
 
         function renderProvidersList() {
             const container = document.getElementById('providers-list');
             if (providers.length === 0) {
-                container.innerHTML = '<div style="color: #6b7280; font-size: 0.8rem;">No providers available</div>';
+                container.innerHTML = '<div class="text-center py-4 text-gray-400 text-sm">No providers available</div>';
                 return;
             }
             container.innerHTML = providers.map(provider => `
-                <div style="font-size: 0.8rem; padding: 0.25rem 0; border-bottom: 1px solid #f0f0f0;">
-                    <strong>${provider.name}</strong><br>
-                    <span style="color: #6b7280;">${provider.type} (${provider.dimension}D)</span>
+                <div class="bg-white/5 rounded-lg p-3 border border-white/10">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h4 class="text-sm font-semibold text-white">${provider.name}</h4>
+                            <p class="text-xs text-gray-400">${provider.type}</p>
+                        </div>
+                        <div class="text-xs text-purple-400 font-mono">${provider.dimension}D</div>
+                    </div>
                 </div>
             `).join('');
         }
 
         async function createIndex() {
             if (providers.length === 0) {
-                alert('No embedding providers available. Please configure providers first.');
+                showNotification('No embedding providers available. Please configure providers first.', 'warning');
                 return;
             }
             
@@ -157,16 +292,34 @@
                 selectIndex(result.id);
                 
                 document.getElementById('results-area').innerHTML = `
-                    <div style="color: #10b981;">
-                        <strong>Vector index created successfully!</strong><br>
-                        ID: ${result.id}<br>
-                        Name: ${result.name}<br>
-                        Provider: ${embeddingProvider}
+                    <div class="flex items-center space-x-2 mb-4">
+                        <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <h3 class="text-lg font-semibold text-white">Index Created Successfully!</h3>
+                    </div>
+                    <div class="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div>
+                                <span class="text-gray-400">ID:</span>
+                                <div class="text-green-400 font-mono">${result.id}</div>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">Name:</span>
+                                <div class="text-white">${result.name}</div>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">Provider:</span>
+                                <div class="text-purple-400">${embeddingProvider}</div>
+                            </div>
+                        </div>
                     </div>
                 `;
+                
+                showNotification('Vector index created successfully!', 'success');
             } catch (error) {
                 console.error('Create index error:', error);
-                alert('Failed to create index: ' + error.message);
+                showNotification('Failed to create index: ' + error.message, 'error');
             }
         }
 
@@ -177,13 +330,34 @@
             const selectedIndex = indices.find(idx => idx.id === indexId);
             if (selectedIndex) {
                 document.getElementById('results-area').innerHTML = `
-                    <div style="background: #f0f9ff; padding: 1rem; border-radius: 0.5rem;">
-                        <strong>Selected Index: ${selectedIndex.name}</strong><br>
-                        <small>ID: ${selectedIndex.id}</small><br>
-                        <small>Documents: ${selectedIndex.documentCount || 0}</small><br>
-                        <small>Dimensions: ${selectedIndex.embeddingDimension || 'Unknown'}</small>
-                        <br><br>
-                        <em>Use the controls above to search or add documents.</em>
+                    <div class="flex items-center space-x-2 mb-4">
+                        <svg class="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                        </svg>
+                        <h3 class="text-lg font-semibold text-white">Selected Index: ${selectedIndex.name}</h3>
+                    </div>
+                    <div class="bg-pink-500/10 border border-pink-500/20 rounded-xl p-4 mb-4">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                            <div>
+                                <span class="text-gray-400">ID:</span>
+                                <div class="text-pink-400 font-mono">${selectedIndex.id}</div>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">Documents:</span>
+                                <div class="text-white font-bold">${selectedIndex.documentCount || 0}</div>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">Dimensions:</span>
+                                <div class="text-purple-400">${selectedIndex.embeddingDimension || 'Unknown'}</div>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">Status:</span>
+                                <div class="text-green-400">Ready</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-gray-400 italic">
+                        Use the search and document controls above to interact with this index.
                     </div>
                 `;
             }
@@ -191,17 +365,22 @@
 
         async function quickSearch() {
             if (!currentIndexId) {
-                alert('Please select an index first');
+                showNotification('Please select an index first', 'warning');
                 return;
             }
             
             const query = document.getElementById('test-query').value.trim();
             if (!query) {
-                alert('Please enter a search query');
+                showNotification('Please enter a search query', 'warning');
                 return;
             }
             
-            document.getElementById('results-area').innerHTML = '<div style="color: #6b7280;">Searching...</div>';
+            document.getElementById('results-area').innerHTML = `
+                <div class="flex items-center space-x-2 mb-4">
+                    <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-400"></div>
+                    <h3 class="text-lg font-semibold text-white">Searching...</h3>
+                </div>
+            `;
             
             try {
                 const result = await makeRequest('queryVectorIndex', 'POST', {
@@ -211,28 +390,70 @@
                 });
                 
                 document.getElementById('results-area').innerHTML = `
-                    <h4>Search Results (${result.resultCount} found)</h4>
-                    <small>Query ID: ${result.queryId} | Timestamp: ${new Date(result.timestamp).toLocaleString()}</small>
-                    <div style="margin-top: 1rem;">
-                        ${result.results && result.results.length > 0 ? result.results.map((res, i) => `
-                            <div style="border: 1px solid #e5e7eb; padding: 0.75rem; margin: 0.5rem 0; border-radius: 0.25rem; background: #f9fafb;">
-                                <div style="display: flex; justify-content: between; align-items: center; margin-bottom: 0.5rem;">
-                                    <strong>Result ${i + 1}</strong>
-                                    <span style="color: #6b7280; font-size: 0.8rem;">Score: ${res.score?.toFixed(3) || 'N/A'}</span>
-                                </div>
-                                <div style="margin-bottom: 0.5rem;"><strong>ID:</strong> ${res.id}</div>
-                                <div style="margin-bottom: 0.5rem;"><strong>Text:</strong> ${res.text || 'No text available'}</div>
-                                ${res.metadata ? `<div style="font-size: 0.8rem; color: #6b7280;"><strong>Metadata:</strong> ${JSON.stringify(res.metadata)}</div>` : ''}
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center space-x-2">
+                            <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                            </svg>
+                            <h3 class="text-lg font-semibold text-white">Search Results</h3>
+                        </div>
+                        <span class="text-sm text-gray-400">${result.resultCount} found</span>
+                    </div>
+                    <div class="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 mb-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                            <div>
+                                <span class="text-gray-400">Query ID:</span>
+                                <div class="text-blue-400 font-mono">${result.queryId}</div>
                             </div>
-                        `).join('') : '<div style="color: #6b7280; padding: 1rem;">No results found</div>'}
+                            <div>
+                                <span class="text-gray-400">Timestamp:</span>
+                                <div class="text-white">${new Date(result.timestamp).toLocaleString()}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="space-y-4">
+                        ${result.results && result.results.length > 0 ? result.results.map((res, i) => `
+                            <div class="bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 transition-colors">
+                                <div class="flex items-start justify-between mb-3">
+                                    <div class="flex items-center space-x-2">
+                                        <span class="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs font-bold">${i + 1}</span>
+                                        <span class="text-white font-semibold">Result ${i + 1}</span>
+                                    </div>
+                                    <div class="text-xs text-gray-400">
+                                        Score: <span class="text-blue-400 font-mono">${res.score?.toFixed(3) || 'N/A'}</span>
+                                    </div>
+                                </div>
+                                <div class="space-y-2">
+                                    <div>
+                                        <span class="text-xs text-gray-400">ID:</span>
+                                        <div class="text-gray-200 font-mono text-sm">${res.id}</div>
+                                    </div>
+                                    <div>
+                                        <span class="text-xs text-gray-400">Text:</span>
+                                        <div class="text-white mt-1 p-3 bg-slate-800 rounded-lg text-sm">${res.text || 'No text available'}</div>
+                                    </div>
+                                    ${res.metadata ? `
+                                        <div>
+                                            <span class="text-xs text-gray-400">Metadata:</span>
+                                            <div class="text-purple-300 font-mono text-xs mt-1">${JSON.stringify(res.metadata)}</div>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        `).join('') : '<div class="text-center py-8 text-gray-400">No results found for your query.</div>'}
                     </div>
                 `;
             } catch (error) {
                 console.error('Search error:', error);
                 document.getElementById('results-area').innerHTML = `
-                    <div style="color: #ef4444;">
-                        <strong>Search failed</strong><br>
-                        ${error.message}
+                    <div class="flex items-center space-x-2 mb-4">
+                        <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                        </svg>
+                        <h3 class="text-lg font-semibold text-white">Search Failed</h3>
+                    </div>
+                    <div class="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
+                        <p class="text-red-400">${error.message}</p>
                     </div>
                 `;
             }
@@ -240,17 +461,22 @@
 
         async function addTestDocument() {
             if (!currentIndexId) {
-                alert('Please select an index first');
+                showNotification('Please select an index first', 'warning');
                 return;
             }
             
             const text = document.getElementById('test-document').value.trim();
             if (!text) {
-                alert('Please enter document text');
+                showNotification('Please enter document text', 'warning');
                 return;
             }
             
-            document.getElementById('results-area').innerHTML = '<div style="color: #6b7280;">Adding document...</div>';
+            document.getElementById('results-area').innerHTML = `
+                <div class="flex items-center space-x-2 mb-4">
+                    <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-purple-400"></div>
+                    <h3 class="text-lg font-semibold text-white">Adding document...</h3>
+                </div>
+            `;
             
             try {
                 const result = await makeRequest('addDocuments', 'POST', {
@@ -266,27 +492,63 @@
                 });
                 
                 document.getElementById('results-area').innerHTML = `
-                    <div style="color: #10b981; background: #f0fdf4; padding: 1rem; border-radius: 0.5rem;">
-                        <strong>Document added successfully!</strong><br>
-                        Added: ${result.addedCount} document(s)<br>
-                        Timestamp: ${new Date(result.timestamp).toLocaleString()}
+                    <div class="flex items-center space-x-2 mb-4">
+                        <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <h3 class="text-lg font-semibold text-white">Document Added Successfully!</h3>
+                    </div>
+                    <div class="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                            <div>
+                                <span class="text-gray-400">Documents Added:</span>
+                                <div class="text-green-400 font-bold">${result.addedCount}</div>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">Timestamp:</span>
+                                <div class="text-white">${new Date(result.timestamp).toLocaleString()}</div>
+                            </div>
+                        </div>
                     </div>
                 `;
                 
                 document.getElementById('test-document').value = '';
-                
-                // Refresh the index list to show updated document count
                 await loadIndices();
+                showNotification('Document added successfully!', 'success');
                 
             } catch (error) {
                 console.error('Add document error:', error);
                 document.getElementById('results-area').innerHTML = `
-                    <div style="color: #ef4444; background: #fef2f2; padding: 1rem; border-radius: 0.5rem;">
-                        <strong>Failed to add document</strong><br>
-                        ${error.message}
+                    <div class="flex items-center space-x-2 mb-4">
+                        <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                        </svg>
+                        <h3 class="text-lg font-semibold text-white">Failed to Add Document</h3>
+                    </div>
+                    <div class="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
+                        <p class="text-red-400">${error.message}</p>
                     </div>
                 `;
             }
+        }
+
+        function showNotification(message, type = 'info') {
+            const colors = {
+                success: 'bg-green-500',
+                error: 'bg-red-500',
+                warning: 'bg-yellow-500',
+                info: 'bg-blue-500'
+            };
+            
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 ${colors[type]} text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in`;
+            notification.textContent = message;
+            
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
         }
 
         document.addEventListener('DOMContentLoaded', () => {

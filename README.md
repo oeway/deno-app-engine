@@ -568,9 +568,9 @@ const tsAgentId = await agentManager.createAgent({
   startupScript: `
 // Initialize development environment
 const config = {
-  apiUrl: (globalThis as any).ENVIRONS?.API_ENDPOINT,
-  environment: (globalThis as any).ENVIRONS?.NODE_ENV,
-  version: (globalThis as any).ENVIRONS?.VERSION
+  apiUrl: Deno.env.get("API_ENDPOINT"),
+  environment: Deno.env.get("NODE_ENV"),
+  version: Deno.env.get("VERSION")
 };
 console.log("Development environment initialized:", config);
 `,
@@ -852,7 +852,7 @@ for key, value in os.environ.items():
         print(f"  {key}: {value}")
 `);
 
-// For TypeScript/JavaScript kernels, environment variables are available via globalThis.ENVIRONS
+// For TypeScript/JavaScript kernels, environment variables are available via Deno.env
 const tsKernelId = await manager.createKernel({
   mode: KernelMode.WORKER,
   lang: KernelLanguage.TYPESCRIPT,
@@ -865,30 +865,27 @@ const tsKernelId = await manager.createKernel({
 });
 
 const tsResult = await manager.execute(tsKernelId, `
-// Access environment variables
-const env = (globalThis as any).ENVIRONS;
-const nodeEnv = env?.NODE_ENV || 'production';
-const apiEndpoint = env?.API_ENDPOINT;
-const version = env?.VERSION;
+// Access environment variables using Deno.env
+const nodeEnv = Deno.env.get("NODE_ENV") || 'production';
+const apiEndpoint = Deno.env.get("API_ENDPOINT");
+const version = Deno.env.get("VERSION");
 
 // Parse JSON features
-const features = env?.FEATURES ? JSON.parse(env.FEATURES) : [];
+const featuresJson = Deno.env.get("FEATURES");
+const features = featuresJson ? JSON.parse(featuresJson) : [];
 
 console.log('Environment:', nodeEnv);
 console.log('API Endpoint:', apiEndpoint);
 console.log('Version:', version);
 console.log('Features:', features);
 
-// Type-safe environment access
-interface AppEnvironment {
-  NODE_ENV: string;
-  API_ENDPOINT: string;
-  VERSION: string;
-  FEATURES: string;
-}
+// Check if environment variables exist
+console.log('Has NODE_ENV:', Deno.env.has("NODE_ENV"));
+console.log('Has API_ENDPOINT:', Deno.env.has("API_ENDPOINT"));
 
-const typedEnv = env as AppEnvironment;
-console.log('Typed environment access:', typedEnv.NODE_ENV);
+// Get all environment variables as object
+const allEnv = Deno.env.toObject();
+console.log('All env keys:', Object.keys(allEnv).filter(key => key.startsWith('NODE_') || key.startsWith('API_') || key.startsWith('VERSION') || key.startsWith('FEATURES')));
 `);
 ```
 
@@ -956,7 +953,7 @@ const agent = await agentManager.createAgent({
 
 // Environment variables are automatically available in kernel execution context
 // Python kernels: os.environ['API_CREDENTIALS']
-// TypeScript kernels: globalThis.ENVIRONS.API_CREDENTIALS
+// TypeScript kernels: Deno.env.get('API_CREDENTIALS')
 ```
 
 ### KernelManager

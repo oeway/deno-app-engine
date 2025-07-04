@@ -1,68 +1,167 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Kernel Playground - HyphaCore</title>
-    <style>
-        body { font-family: system-ui; margin: 0; height: 100vh; display: flex; flex-direction: column; background: #f9fafb; }
-        .demo-banner { background: #10b981; color: white; padding: 0.5rem; text-align: center; font-weight: 500; }
-        .header { background: white; padding: 1rem 2rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
-        .nav-tabs { display: flex; gap: 1rem; }
-        .nav-tab { text-decoration: none; color: #6b7280; padding: 0.5rem 1rem; border-radius: 0.5rem; }
-        .nav-tab.active { color: #4f46e5; background: rgba(79, 70, 229, 0.1); }
-        .main { flex: 1; display: grid; grid-template-columns: 300px 1fr; }
-        .sidebar { background: white; border-right: 1px solid #e5e7eb; padding: 1.5rem; }
-        .workspace { display: flex; flex-direction: column; }
-        .toolbar { background: white; padding: 1rem; border-bottom: 1px solid #e5e7eb; display: flex; gap: 0.75rem; }
-        .code-editor { flex: 1; padding: 1rem; border: none; font-family: Monaco, monospace; font-size: 0.9rem; background: #1e1e1e; color: #d4d4d4; resize: none; outline: none; min-height: 300px; }
-        .output-container { background: white; border-top: 1px solid #e5e7eb; height: 300px; display: flex; flex-direction: column; }
-        .output-header { padding: 0.75rem 1rem; background: #f8f9fa; border-bottom: 1px solid #e5e7eb; font-weight: 500; }
-        .output-content { flex: 1; padding: 1rem; font-family: Monaco, monospace; font-size: 0.85rem; overflow-y: auto; background: #1f2937; color: #f9fafb; white-space: pre-wrap; }
-        button { background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.375rem; cursor: pointer; font-weight: 500; }
-        button:hover { background: #4338ca; }
-        .kernel-list { display: flex; flex-direction: column; gap: 0.5rem; }
-        .kernel-item { padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; cursor: pointer; background: white; }
-        .kernel-item:hover { border-color: #4f46e5; }
-        .kernel-item.active { border-color: #4f46e5; background: rgba(79, 70, 229, 0.05); }
-    </style>
+    <title>Kernel Playground - Deno App Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-in-out',
+                        'slide-in': 'slideIn 0.3s ease-out',
+                        'pulse-dot': 'pulseDot 2s infinite',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' }
+                        },
+                        slideIn: {
+                            '0%': { transform: 'translateX(-10px)', opacity: '0' },
+                            '100%': { transform: 'translateX(0)', opacity: '1' }
+                        },
+                        pulseDot: {
+                            '0%, 100%': { opacity: '0.4', transform: 'scale(1)' },
+                            '50%': { opacity: '1', transform: 'scale(1.1)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
 </head>
-<body>
-    <div class="demo-banner">🚀 HyphaCore ASGI - Connected to Deno App Engine Service</div>
-    <div class="header">
-        <h1>⚡ Kernel Playground</h1>
-        <nav class="nav-tabs">
-            <a href="../" class="nav-tab">🏠 Home</a>
-            <a href="./kernels" class="nav-tab active">⚡ Kernels</a>
-            <a href="./agents" class="nav-tab">🤖 Agents</a>
-            <a href="./vectordb" class="nav-tab">🗄️ VectorDB</a>
-        </nav>
-    </div>
-    <div class="main">
-        <div class="sidebar">
-            <h3>Kernels <button onclick="createKernel()" style="float: right; padding: 0.25rem 0.5rem; font-size: 0.8rem;">+ New</button></h3>
-            <div id="kernel-list" class="kernel-list">
-                <div style="text-align: center; padding: 2rem; color: #6b7280;">Loading kernels...</div>
-            </div>
-        </div>
-        <div class="workspace">
-            <div class="toolbar">
-                <select id="language-select" title="Select programming language" onchange="onLanguageChange()">
-                    <option value="python">🐍 Python</option>
-                    <option value="typescript">📘 TypeScript</option>
-                    <option value="javascript">📙 JavaScript</option>
-                </select>
-                <button onclick="runCode()">▶️ Run</button>
-                <button onclick="interruptKernel()">⏹️ Interrupt</button>
-                <button onclick="restartKernel()">🔄 Restart</button>
-            </div>
-            <textarea id="code-editor" class="code-editor" placeholder="🐍 Select or create a Python kernel to start coding..."></textarea>
-            <div class="output-container">
-                <div class="output-header">Output</div>
-                <div id="output-content" class="output-content">Ready to execute code...</div>
-            </div>
+<body class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-gray-100">
+    <!-- Status Banner -->
+    <div class="bg-emerald-500 text-white px-4 py-2 text-center font-medium text-sm">
+        <div class="flex items-center justify-center space-x-2">
+            <div class="w-2 h-2 bg-white rounded-full animate-pulse-dot"></div>
+            <span>HyphaCore ASGI Connected - Deno App Engine Service</span>
         </div>
     </div>
+
+    <!-- Header -->
+    <header class="bg-white/5 backdrop-blur-sm border-b border-white/10">
+        <div class="px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <h1 class="text-2xl font-bold bg-gradient-to-r from-yellow-400 to-orange-400 bg-clip-text text-transparent flex items-center">
+                        <span class="text-3xl mr-2">⚡</span>
+                        Kernel Playground
+                    </h1>
+                </div>
+                <nav class="flex space-x-1">
+                    <a href="./" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/10 transition-all duration-200 flex items-center space-x-2">
+                        <span class="text-lg">🏠</span>
+                        <span class="hidden sm:inline">Home</span>
+                    </a>
+                    <a href="./kernels" class="px-4 py-2 rounded-xl bg-yellow-500/20 text-yellow-300 flex items-center space-x-2">
+                        <span class="text-lg">⚡</span>
+                        <span class="hidden sm:inline">Kernels</span>
+                    </a>
+                    <a href="./agents" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/10 transition-all duration-200 flex items-center space-x-2">
+                        <span class="text-lg">🤖</span>
+                        <span class="hidden sm:inline">Agents</span>
+                    </a>
+                    <a href="./vectordb" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/10 transition-all duration-200 flex items-center space-x-2">
+                        <span class="text-lg">🗄️</span>
+                        <span class="hidden sm:inline">VectorDB</span>
+                    </a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="flex h-[calc(100vh-120px)]">
+        <!-- Sidebar -->
+        <aside class="w-80 bg-white/5 backdrop-blur-sm border-r border-white/10 flex flex-col">
+            <div class="p-6 border-b border-white/10">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-white">Kernels</h2>
+                    <button onclick="createKernel()" class="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-600 text-black font-medium rounded-lg transition-colors duration-200 text-sm flex items-center space-x-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                        </svg>
+                        <span>New</span>
+                    </button>
+                </div>
+                <div id="kernel-list" class="space-y-2">
+                    <div class="text-center py-8 text-gray-400 animate-fade-in">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-400 mx-auto mb-3"></div>
+                        <p>Loading kernels...</p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="flex-1 flex flex-col">
+            <!-- Toolbar -->
+            <div class="bg-white/5 backdrop-blur-sm border-b border-white/10 px-6 py-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-4">
+                        <select id="language-select" title="Select programming language" onchange="onLanguageChange()" class="bg-slate-800 border border-slate-600 text-gray-200 px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
+                            <option value="python">🐍 Python</option>
+                            <option value="typescript">📘 TypeScript</option>
+                            <option value="javascript">📙 JavaScript</option>
+                        </select>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button onclick="runCode()" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-all duration-200 flex items-center space-x-2 shadow-lg">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1m4 0h1m-6 4h8m2-10V5a2 2 0 00-2-2H9a2 2 0 00-2 2v1m12 4V9a2 2 0 00-2-2h-3V5a2 2 0 00-2-2H9a2 2 0 00-2 2v2H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"></path>
+                            </svg>
+                            <span>Run</span>
+                        </button>
+                        <button onclick="interruptKernel()" class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-all duration-200 flex items-center space-x-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10l6 6m0-6l-6 6"></path>
+                            </svg>
+                            <span>Stop</span>
+                        </button>
+                        <button onclick="restartKernel()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all duration-200 flex items-center space-x-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            <span>Restart</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Code Editor -->
+            <div class="flex-1 flex flex-col">
+                <div class="flex-1 relative">
+                    <textarea id="code-editor" placeholder="🐍 Select or create a Python kernel to start coding..." class="w-full h-full bg-slate-900 text-gray-100 font-mono text-sm p-6 border-none outline-none resize-none placeholder-gray-500 focus:ring-2 focus:ring-yellow-500/20"></textarea>
+                </div>
+
+                <!-- Output Panel -->
+                <div class="h-80 bg-slate-900 border-t border-slate-700 flex flex-col">
+                    <div class="bg-slate-800 px-4 py-3 border-b border-slate-700">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-sm font-semibold text-gray-200 flex items-center space-x-2">
+                                <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                                <span>Output</span>
+                            </h3>
+                            <button onclick="clearOutput()" class="text-xs text-gray-400 hover:text-gray-200 transition-colors">
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                    <div id="output-content" class="flex-1 p-4 font-mono text-sm overflow-y-auto text-green-400 bg-slate-900">
+                        <div class="text-gray-400 italic">Ready to execute code...</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
     <script>
         // Use HyphaCore service API endpoints
         const API_BASE = '/default/services/root:deno-app-engine';
@@ -146,36 +245,89 @@ console.log(\`Squares: \${squares}\`);`,
             try {
                 const result = await makeRequest('listKernels');
                 kernels = result || [];
+                console.log('Loaded kernels:', kernels);
+                
+                // If current kernel is no longer in the list, clear it
+                if (currentKernelId && !kernels.find(k => k.id === currentKernelId)) {
+                    console.log('Current kernel no longer exists, clearing selection');
+                    currentKernelId = null;
+                    // Clear status display
+                    const statusElement = document.getElementById('kernel-status');
+                    if (statusElement) {
+                        statusElement.remove();
+                    }
+                }
+                
                 renderKernelList();
             } catch (error) {
                 console.error('Failed to load kernels:', error);
                 document.getElementById('kernel-list').innerHTML = 
-                    `<div style="text-align: center; color: #ef4444; padding: 2rem;">Failed to load kernels<br><small>${error.message}</small></div>`;
+                    `<div class="text-center py-8 text-red-400 animate-fade-in">
+                        <svg class="w-8 h-8 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                        </svg>
+                        <p class="font-medium">Failed to load kernels</p>
+                        <p class="text-sm text-gray-500 mt-1">${error.message}</p>
+                    </div>`;
             }
         }
 
         function renderKernelList() {
             const container = document.getElementById('kernel-list');
             if (kernels.length === 0) {
-                container.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 2rem;">No kernels available<br><button onclick="createKernel()">Create First Kernel</button></div>';
+                container.innerHTML = `
+                    <div class="text-center py-8 text-gray-400 animate-fade-in">
+                        <svg class="w-12 h-12 mx-auto mb-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                        </svg>
+                        <p class="font-medium mb-2">No kernels available</p>
+                        <button onclick="createKernel()" class="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black font-medium rounded-lg transition-colors text-sm">
+                            Create First Kernel
+                        </button>
+                    </div>
+                `;
                 return;
             }
             container.innerHTML = kernels.map(kernel => {
                 const langConfig = LANGUAGE_CONFIG[kernel.language] || LANGUAGE_CONFIG.python;
+                const isActive = kernel.id === currentKernelId;
                 return `
-                    <div class="kernel-item ${kernel.id === currentKernelId ? 'active' : ''}" onclick="selectKernel('${kernel.id}')">
-                        <div><strong>${langConfig.icon} ${kernel.name || kernel.id}</strong></div>
-                        <small>${kernel.mode} (${langConfig.name})</small>
-                        <small style="color: #6b7280;">Created: ${new Date(kernel.created).toLocaleDateString()}</small>
+                    <div onclick="selectKernel('${kernel.id}')" data-kernel-id="${kernel.id}" class="p-4 rounded-xl cursor-pointer transition-all duration-200 ${isActive ? 'bg-white/20 border border-yellow-500/50' : 'bg-white/5 hover:bg-white/10 border border-transparent'} animate-slide-in">
+                        <div class="flex items-start justify-between mb-2">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-lg">${langConfig.icon}</span>
+                                <span class="font-semibold text-white text-sm">${kernel.name || kernel.id}</span>
+                            </div>
+                            ${isActive ? '<div class="w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></div>' : ''}
+                        </div>
+                        <p class="text-xs text-gray-400 mb-1">${kernel.mode} (${langConfig.name})</p>
+                        <p class="text-xs text-gray-500">Created: ${new Date(kernel.created).toLocaleDateString()}</p>
+                        <p class="text-xs text-purple-400 font-mono">ID: ${kernel.id}</p>
                     </div>
                 `;
             }).join('');
         }
 
         async function createKernel() {
+            const createButton = document.querySelector('button[onclick="createKernel()"]');
+            const originalButtonContent = createButton.innerHTML;
+            
             try {
+                // Show loading state
+                createButton.disabled = true;
+                createButton.innerHTML = `
+                    <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-white mx-auto"></div>
+                `;
+                
+                // Show loading in kernel list
+                document.getElementById('kernel-list').innerHTML = `
+                    <div class="text-center py-8 text-yellow-400 animate-fade-in">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-400 mx-auto mb-3"></div>
+                        <p>Creating kernel...</p>
+                    </div>
+                `;
+                
                 const language = document.getElementById('language-select').value;
-                // Use correct format: "worker-python", "worker-typescript", "worker-javascript"
                 const mode = `worker-${language}`;
                 
                 console.log(`Creating ${language} kernel with mode: ${mode}`);
@@ -187,34 +339,43 @@ console.log(\`Squares: \${squares}\`);`,
                 console.log('Kernel created:', result);
                 await loadKernels();
                 selectKernel(result.id);
-                
-                // Set example code for the selected language
                 setExampleCode(language);
+                showNotification('Kernel created successfully!', 'success');
                 
             } catch (error) {
                 console.error('Create kernel error:', error);
-                alert('Failed to create kernel: ' + error.message);
+                showNotification('Failed to create kernel: ' + error.message, 'error');
+                // Reload kernels list to show current state
+                await loadKernels();
+            } finally {
+                // Restore button state
+                createButton.disabled = false;
+                createButton.innerHTML = originalButtonContent;
             }
         }
 
         function selectKernel(kernelId) {
+            console.log('Selecting kernel:', kernelId);
             currentKernelId = kernelId;
             renderKernelList();
             
-            // Find the selected kernel to get its language
             const selectedKernel = kernels.find(k => k.id === kernelId);
             if (selectedKernel) {
                 const langConfig = LANGUAGE_CONFIG[selectedKernel.language] || LANGUAGE_CONFIG.python;
                 document.getElementById('code-editor').placeholder = `${langConfig.icon} ${langConfig.name} kernel selected. Ready to execute code...`;
-                
-                // Update language selector to match kernel language
                 document.getElementById('language-select').value = selectedKernel.language;
                 
-                // If code editor is empty, set example code
                 const editor = document.getElementById('code-editor');
                 if (!editor.value.trim()) {
                     setExampleCode(selectedKernel.language);
                 }
+                
+                // Update toolbar to show selected kernel info
+                updateToolbarStatus(selectedKernel);
+                showNotification(`Selected kernel: ${selectedKernel.name || selectedKernel.id}`, 'info');
+            } else {
+                console.error('Kernel not found:', kernelId);
+                showNotification('Error: Kernel not found', 'error');
             }
         }
 
@@ -228,10 +389,8 @@ console.log(\`Squares: \${squares}\`);`,
             const language = document.getElementById('language-select').value;
             const langConfig = LANGUAGE_CONFIG[language];
             
-            // Update placeholder to reflect selected language
             document.getElementById('code-editor').placeholder = `Select or create a ${langConfig.icon} ${langConfig.name} kernel to start coding...`;
             
-            // If no kernel is selected, update example code
             if (!currentKernelId) {
                 setExampleCode(language);
             }
@@ -239,21 +398,20 @@ console.log(\`Squares: \${squares}\`);`,
 
         async function runCode() {
             if (!currentKernelId) {
-                alert('Please create and select a kernel first');
+                showNotification('Please create and select a kernel first', 'warning');
                 return;
             }
             
             const code = document.getElementById('code-editor').value;
             if (!code.trim()) {
-                alert('Please enter some code to execute');
+                showNotification('Please enter some code to execute', 'warning');
                 return;
             }
             
             const outputContainer = document.getElementById('output-content');
-            outputContainer.textContent = 'Executing...\n';
+            outputContainer.innerHTML = '<div class="text-blue-400 animate-pulse">Executing...</div>';
 
             try {
-                // Try streaming execution first
                 const response = await fetch(`${API_BASE}/streamExecution`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -270,31 +428,29 @@ console.log(\`Squares: \${squares}\`);`,
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-                outputContainer.textContent = '';
+                outputContainer.innerHTML = '';
                 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
                     
                     const chunk = decoder.decode(value);
-                    // Parse JSON lines from streaming response
                     const lines = chunk.split('\n').filter(line => line.trim());
                     
                     for (const line of lines) {
                         try {
                             const data = JSON.parse(line);
                             if (data.type === 'stream' && data.data) {
-                                outputContainer.textContent += data.data.text || '';
+                                outputContainer.innerHTML += `<div class="text-green-400">${escapeHtml(data.data.text || '')}</div>`;
                             } else if (data.type === 'execute_error') {
-                                outputContainer.textContent += `ERROR: ${data.data.traceback || 'Unknown error'}\n`;
+                                outputContainer.innerHTML += `<div class="text-red-400">ERROR: ${escapeHtml(data.data.traceback || 'Unknown error')}</div>`;
                             } else if (data.type === 'error') {
-                                outputContainer.textContent += `ERROR: ${data.message || 'Unknown error'}\n`;
+                                outputContainer.innerHTML += `<div class="text-red-400">ERROR: ${escapeHtml(data.message || 'Unknown error')}</div>`;
                             } else if (data.type === 'complete') {
-                                outputContainer.textContent += `\n--- Execution ${data.status || 'completed'} ---\n`;
+                                outputContainer.innerHTML += `<div class="text-gray-400 mt-2">--- Execution ${data.status || 'completed'} ---</div>`;
                             }
                         } catch (parseError) {
-                            // If not JSON, treat as plain text
-                            outputContainer.textContent += chunk;
+                            outputContainer.innerHTML += `<div class="text-gray-300">${escapeHtml(chunk)}</div>`;
                         }
                     }
                     
@@ -303,45 +459,120 @@ console.log(\`Squares: \${squares}\`);`,
                 
             } catch (error) {
                 console.error('Streaming execution failed:', error);
-                outputContainer.textContent = `ERROR: ${error.message}\n\nTrying fallback execution method...`;
+                outputContainer.innerHTML = `<div class="text-red-400">ERROR: ${escapeHtml(error.message)}</div><div class="text-yellow-400 mt-2">Trying fallback execution method...</div>`;
                 
-                // Fallback to regular execution
                 try {
                     const result = await makeRequest('executeCode', 'POST', {
                         kernelId: currentKernelId,
                         code: code
                     });
-                    outputContainer.textContent += `\nExecution started with ID: ${result.execution_id}`;
+                    outputContainer.innerHTML += `<div class="text-blue-400 mt-2">Execution started with ID: ${result.execution_id}</div>`;
                 } catch (fallbackError) {
-                    outputContainer.textContent += `\nFallback execution also failed: ${fallbackError.message}`;
+                    outputContainer.innerHTML += `<div class="text-red-400 mt-2">Fallback execution also failed: ${escapeHtml(fallbackError.message)}</div>`;
                 }
             }
         }
 
         async function interruptKernel() {
-            if (!currentKernelId) return;
+            console.log('Interrupt kernel called, currentKernelId:', currentKernelId);
+            if (!currentKernelId) {
+                showNotification('Please select a kernel first', 'warning');
+                return;
+            }
             try {
+                console.log('Sending interrupt request for kernel:', currentKernelId);
                 await makeRequest('interruptKernel', 'POST', { kernelId: currentKernelId });
-                document.getElementById('output-content').textContent += '\nExecution interrupted.\n';
+                document.getElementById('output-content').innerHTML += '<div class="text-yellow-400 mt-2">Execution interrupted.</div>';
+                showNotification('Execution interrupted', 'success');
             } catch (error) {
-                alert('Failed to interrupt: ' + error.message);
+                console.error('Interrupt kernel error:', error);
+                showNotification('Failed to interrupt: ' + error.message, 'error');
             }
         }
 
-        async function restartKernel() {
-            if (!currentKernelId) return;
-            try {
-                await makeRequest('restartKernel', 'POST', { kernelId: currentKernelId });
-                document.getElementById('output-content').textContent = 'Kernel restarted.\n';
-            } catch (error) {
-                alert('Failed to restart: ' + error.message);
+        function updateToolbarStatus(kernel) {
+            // Find the toolbar by looking for the element that contains the language selector
+            const languageSelect = document.getElementById('language-select');
+            if (!languageSelect) {
+                console.error('Language select not found');
+                return;
             }
+            
+            const toolbarContainer = languageSelect.closest('div');
+            if (!toolbarContainer) {
+                console.error('Toolbar container not found');
+                return;
+            }
+            
+            let statusElement = document.getElementById('kernel-status');
+            
+            if (!statusElement) {
+                statusElement = document.createElement('div');
+                statusElement.id = 'kernel-status';
+                statusElement.className = 'flex items-center space-x-2 text-sm ml-4';
+                
+                // Insert it after the language selector
+                languageSelect.parentNode.insertBefore(statusElement, languageSelect.nextSibling);
+            }
+            
+            const langConfig = LANGUAGE_CONFIG[kernel.language] || LANGUAGE_CONFIG.python;
+            statusElement.innerHTML = `
+                <div class="flex items-center space-x-2 bg-green-500/20 text-green-300 px-3 py-1 rounded-lg border border-green-500/30">
+                    <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                    <span>${langConfig.icon} ${kernel.name || kernel.id}</span>
+                </div>
+            `;
+        }
+
+        async function restartKernel() {
+            console.log('Restart kernel called, currentKernelId:', currentKernelId);
+            if (!currentKernelId) {
+                showNotification('Please select a kernel first', 'warning');
+                return;
+            }
+            try {
+                console.log('Sending restart request for kernel:', currentKernelId);
+                await makeRequest('restartKernel', 'POST', { kernelId: currentKernelId });
+                document.getElementById('output-content').innerHTML = '<div class="text-green-400">Kernel restarted.</div>';
+                showNotification('Kernel restarted successfully', 'success');
+            } catch (error) {
+                console.error('Restart kernel error:', error);
+                showNotification('Failed to restart: ' + error.message, 'error');
+            }
+        }
+
+        function clearOutput() {
+            document.getElementById('output-content').innerHTML = '<div class="text-gray-400 italic">Ready to execute code...</div>';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showNotification(message, type = 'info') {
+            const colors = {
+                success: 'bg-green-500',
+                error: 'bg-red-500',
+                warning: 'bg-yellow-500',
+                info: 'bg-blue-500'
+            };
+            
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 ${colors[type]} text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in`;
+            notification.textContent = message;
+            
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
         }
 
         // Initialize page when DOM is loaded
         document.addEventListener('DOMContentLoaded', function() {
             loadKernels();
-            // Set default Python example code
             setExampleCode('python');
         });
     </script>

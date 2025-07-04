@@ -1,22 +1,115 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>404 - Not Found</title>
-    <style>
-        body { font-family: system-ui; margin: 0; padding: 2rem; text-align: center; background: #f9fafb; }
-        .container { max-width: 600px; margin: 2rem auto; padding: 2rem; background: white; border-radius: 1rem; }
-        .error-code { font-size: 4rem; font-weight: 700; color: #ef4444; margin-bottom: 1rem; }
-        .error-message { font-size: 1.25rem; color: #6b7280; margin-bottom: 2rem; }
-        .back-link { color: #4f46e5; text-decoration: none; font-weight: 500; }
-    </style>
+    <title>404 - Page Not Found | Deno App Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: {
+                        'fade-in': 'fadeIn 0.8s ease-in-out',
+                        'bounce-slow': 'bounce 3s infinite',
+                        'pulse-glow': 'pulseGlow 2s ease-in-out infinite',
+                        'float': 'float 6s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(20px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        },
+                        pulseGlow: {
+                            '0%, 100%': { opacity: '0.5', transform: 'scale(1)' },
+                            '50%': { opacity: '1', transform: 'scale(1.05)' }
+                        },
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0px)' },
+                            '50%': { transform: 'translateY(-20px)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
 </head>
-<body>
-    <div class="container">
-        <div class="error-code">404</div>
-        <div class="error-message">Page not found</div>
-        <a href="../" class="back-link">← Back to Dashboard</a>
+<body class="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-gray-100 flex items-center justify-center">
+    <!-- Animated Background -->
+    <div class="fixed inset-0 overflow-hidden pointer-events-none">
+        <div class="absolute -top-40 -right-40 w-80 h-80 bg-red-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse-glow"></div>
+        <div class="absolute -bottom-40 -left-40 w-80 h-80 bg-pink-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse-glow" style="animation-delay: 1s;"></div>
+        <div class="absolute top-1/2 left-1/2 w-80 h-80 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse-glow" style="animation-delay: 2s;"></div>
+    </div>
+
+    <div class="relative z-10 text-center px-6 max-w-2xl mx-auto animate-fade-in">
+        <!-- 404 Icon with Animation -->
+        <div class="mb-8 animate-float">
+            <div class="text-8xl sm:text-9xl font-bold bg-gradient-to-r from-red-400 via-pink-400 to-purple-400 bg-clip-text text-transparent mb-4">
+                404
+            </div>
+            <div class="text-4xl mb-6 animate-bounce-slow">🔍</div>
+        </div>
+
+        <!-- Error Message -->
+        <div class="mb-8">
+            <h1 class="text-3xl sm:text-4xl font-bold text-white mb-4">
+                Oops! Page Not Found
+            </h1>
+            <p class="text-lg text-gray-300 mb-6 leading-relaxed">
+                The page you're looking for seems to have wandered off into the digital void. 
+                Don't worry, it happens to the best of us!
+            </p>
+            <div class="text-sm text-gray-400 italic">
+                "Not all those who wander are lost... but this page definitely is."
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="space-y-4 sm:space-y-0 sm:space-x-4 sm:flex sm:justify-center mb-8">
+            <a href="../" class="block sm:inline-block px-8 py-4 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-lg">
+                <div class="flex items-center justify-center space-x-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+                    </svg>
+                    <span>Return Home</span>
+                </div>
+            </a>
+            <button onclick="history.back()" class="block sm:inline-block px-8 py-4 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-2xl transition-all duration-300 backdrop-blur-sm border border-white/20">
+                <div class="flex items-center justify-center space-x-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Go Back</span>
+                </div>
+            </button>
+        </div>
+
+        <!-- Quick Links -->
+        <div class="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6">
+            <h2 class="text-xl font-semibold text-white mb-4">Quick Navigation</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <a href="./kernels" class="group flex flex-col items-center p-4 rounded-xl bg-white/5 hover:bg-white/10 transition-all duration-200 border border-transparent hover:border-yellow-500/30">
+                    <div class="text-2xl mb-2 group-hover:scale-110 transition-transform">⚡</div>
+                    <span class="text-sm font-medium text-gray-300 group-hover:text-white">Kernels</span>
+                </a>
+                <a href="./agents" class="group flex flex-col items-center p-4 rounded-xl bg-white/5 hover:bg-white/10 transition-all duration-200 border border-transparent hover:border-cyan-500/30">
+                    <div class="text-2xl mb-2 group-hover:scale-110 transition-transform">🤖</div>
+                    <span class="text-sm font-medium text-gray-300 group-hover:text-white">Agents</span>
+                </a>
+                <a href="./vectordb" class="group flex flex-col items-center p-4 rounded-xl bg-white/5 hover:bg-white/10 transition-all duration-200 border border-transparent hover:border-pink-500/30">
+                    <div class="text-2xl mb-2 group-hover:scale-110 transition-transform">🗄️</div>
+                    <span class="text-sm font-medium text-gray-300 group-hover:text-white">VectorDB</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="fixed bottom-4 left-1/2 transform -translate-x-1/2 text-center">
+        <p class="text-gray-500 text-sm">
+            Powered by Deno App Engine
+        </p>
     </div>
 </body>
 </html> 

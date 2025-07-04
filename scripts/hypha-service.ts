@@ -386,12 +386,16 @@ async function loadDenoApps(server: any, kernelManager: KernelManager) {
         
         console.log(`🔧 Creating ${artifactData.manifest.lang || 'python'} kernel for app ${artifact.id}`);
         
+        // Generate environment variables for Hypha connection
+        const hyphaEnv = await generateHyphaEnvVars(server, "deno-apps");
+        
         // Create a kernel with the artifact ID as kernel ID
         const kernelId = await kernelManager.createKernel({
           id: artifact.id,
           mode: KernelMode.WORKER,
           lang: kernelLanguage,
           namespace: "deno-apps", // Use a special namespace for deno apps
+          env: hyphaEnv, // Pass Hypha connection environment variables
           inactivityTimeout: 1000 * 60 * 60 * 24, // 24 hours - apps should run long
           maxExecutionTime: 1000 * 60 * 60 * 24 * 365 // 1 year - essentially unlimited
         });
@@ -444,6 +448,16 @@ async function loadDenoApps(server: any, kernelManager: KernelManager) {
     console.error("❌ Failed to load deno-apps:", error);
     throw error;
   }
+}
+
+// Helper function to generate Hypha environment variables for kernels
+async function generateHyphaEnvVars(server: any, workspace: string): Promise<Record<string, string>> {
+  const hyphaToken = await server.generateToken();
+  return {
+    "HYPHA_SERVER_URL": server.config.server_url || Deno.env.get("HYPHA_SERVER_URL") || "https://hypha.aicell.io",
+    "HYPHA_TOKEN": hyphaToken,
+    "HYPHA_WORKSPACE": workspace
+  };
 }
 
 async function startHyphaService(options: {
@@ -685,11 +699,21 @@ async function registerService(server: any) {
         const existingKernels = kernelManager.getKernelIds();
         console.log(`Existing kernels before creation: ${existingKernels.length}`);
         
+        // Generate environment variables for Hypha connection
+        const hyphaEnv = await generateHyphaEnvVars(server, context.ws || "default");
+        
+        console.log(`🔗 Setting Hypha connection environment for kernel:`, {
+          server_url: hyphaEnv.HYPHA_SERVER_URL,
+          workspace: hyphaEnv.HYPHA_WORKSPACE,
+          token_prefix: hyphaEnv.HYPHA_TOKEN.substring(0, 10) + "..."
+        });
+
         const kernelId = await kernelManager.createKernel({
           id: id || crypto.randomUUID(),
           mode: parsedMode,
           lang: parsedLanguage,
           namespace: namespace, // Use workspace as namespace for isolation
+          env: hyphaEnv, // Pass Hypha connection environment variables
           inactivityTimeout: inactivity_timeout || 1000 * 60 * 10, // 10 minutes default
           maxExecutionTime: max_execution_time || 1000 * 60 * 60 * 24 * 10 // 10 days default
         });
@@ -2421,12 +2445,16 @@ async function registerService(server: any) {
             
             console.log(`🔧 Creating ${artifactData.manifest.lang || 'python'} kernel for app ${artifact.id}`);
             
+            // Generate environment variables for Hypha connection
+            const hyphaEnv = await generateHyphaEnvVars(server, "deno-apps");
+            
             // Create a kernel with the artifact ID as kernel ID
             const kernelId = await kernelManager.createKernel({
               id: artifact.id,
               mode: KernelMode.WORKER,
               lang: kernelLanguage,
               namespace: "deno-apps", // Use a special namespace for deno apps
+              env: hyphaEnv, // Pass Hypha connection environment variables
               inactivityTimeout: 1000 * 60 * 60 * 24, // 24 hours - apps should run long
               maxExecutionTime: 1000 * 60 * 60 * 24 * 365 // 1 year - essentially unlimited
             });

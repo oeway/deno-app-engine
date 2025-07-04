@@ -288,10 +288,10 @@ const tsAgentId = await manager.createAgent({
   autoAttachKernel: true
 });
 
-// In TypeScript kernels, environment variables are available via globalThis.ENVIRONS
+// In TypeScript kernels, environment variables are available via Deno.env
 // The agent can execute code like:
-// const env = (globalThis as any).ENVIRONS?.NODE_ENV || 'production';
-// const endpoint = (globalThis as any).ENVIRONS?.API_ENDPOINT;
+// const env = Deno.env.get("NODE_ENV") || 'production';
+// const endpoint = Deno.env.get("API_ENDPOINT");
 // console.log(`Environment: ${env}, Endpoint: ${endpoint}`);
 ```
 

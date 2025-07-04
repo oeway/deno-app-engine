@@ -134,22 +134,30 @@ print("Max retries as int:", max_retries_int)
 
     try {
       const tsEnvResult = await manager.execute(tsKernelId, `
-const environs = (globalThis as any).ENVIRONS;
-console.log("TS API Key:", environs?.TS_API_KEY);
-console.log("App Name:", environs?.APP_NAME);
-console.log("Version:", environs?.VERSION);
-console.log("Config JSON:", environs?.CONFIG_JSON);
+// Access environment variables using Deno.env
+console.log("TS API Key:", Deno.env.get("TS_API_KEY"));
+console.log("App Name:", Deno.env.get("APP_NAME"));
+console.log("Version:", Deno.env.get("VERSION"));
+console.log("Config JSON:", Deno.env.get("CONFIG_JSON"));
 
 // Test parsing JSON from environment
 try {
-  const config = JSON.parse(environs?.CONFIG_JSON || '{}');
+  const configJson = Deno.env.get("CONFIG_JSON");
+  const config = JSON.parse(configJson || '{}');
   console.log("Parsed config enabled:", config.enabled);
   console.log("Parsed config timeout:", config.timeout);
 } catch (e) {
   console.log("Failed to parse config:", e);
 }
 
-console.log("All environment variables:", JSON.stringify(environs, null, 2));
+// Show all environment variables
+const allEnv = Deno.env.toObject();
+const relevantEnv = Object.fromEntries(
+  Object.entries(allEnv).filter(([key]) => 
+    key.startsWith('TS_') || key.startsWith('APP_') || key.startsWith('VERSION') || key.startsWith('CONFIG_')
+  )
+);
+console.log("Relevant environment variables:", JSON.stringify(relevantEnv, null, 2));
 `);
 
       // Wait for events to be processed
@@ -551,11 +559,10 @@ class Calculator {
   console.log("10 + 7 =", calc.add(10, 7));
   console.log("Calculator history:", calc.getHistory());
   
-  // Test environment variables
-  const env = (globalThis as any).ENVIRONS;
+  // Test environment variables using Deno.env
   console.log("Environment:", {
-    NODE_ENV: env?.NODE_ENV,
-    API_BASE_URL: env?.API_BASE_URL
+    NODE_ENV: Deno.env.get("NODE_ENV"),
+    API_BASE_URL: Deno.env.get("API_BASE_URL")
   });
   
   console.log("All tests completed successfully!");

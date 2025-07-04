@@ -105,8 +105,7 @@ class TypeScriptKernel {
   private _status: "active" | "busy" | "unknown" = "unknown";
   private executionCount = 0;
   
-  // Environment variables
-  private environmentVariables: Record<string, string> = {};
+
   
   constructor() {
     this.setupEventForwarding();
@@ -223,18 +222,14 @@ class TypeScriptKernel {
     }
     
     // Handle environment variables if provided
-    if (options?.env) {
-      this.environmentVariables = { ...options.env };
-      // Set up global ENVIRONS object for TypeScript/JavaScript and add to context
-      (globalThis as any).ENVIRONS = { ...this.environmentVariables };
-      
-      // Add environment variables to tseval context
-      await this.tseval(`
-        globalThis.ENVIRONS = ${JSON.stringify(this.environmentVariables)};
-        const ENVIRONS = globalThis.ENVIRONS;
-      `);
-      
-      console.log(`[TS_WORKER] Set ${Object.keys(this.environmentVariables).length} environment variables in ENVIRONS`);
+    if (options?.env && typeof options.env === 'object') {
+      console.log(`[TS_WORKER] Setting environment variables: ${JSON.stringify(options.env)}`);
+      // Set environment variables directly on Deno.env
+      for (const [key, value] of Object.entries(options.env)) {
+        if (typeof value === 'string') {
+          Deno.env.set(key, value);
+        }
+      }
     }
     
     this.initialized = true;
