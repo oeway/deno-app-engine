@@ -771,9 +771,8 @@ except Exception as e:
         // Set up message collector that captures ALL output before completion
         const messageCollector = (eventData: IEventData) => {
           executionState.allMessages.push(eventData);
-          
           // Debug logging to trace message flow
-          console.log(`[KERNEL] Captured message: ${eventData.type}`, eventData.data);
+          // console.log(`[KERNEL] Captured message: ${eventData.type}`, eventData.data);
         };
 
         // Set up completion detector

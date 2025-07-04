@@ -1771,10 +1771,6 @@ export class KernelManager extends EventEmitter {
           eventHandlers.set('execute_error_completion', handleExecutionError);
           super.on(KernelEvents.EXECUTE_ERROR, handleExecutionError);
           
-          // Set up timeout to prevent hanging executions
-          const timeoutMs = 300000; // 5 minutes
-          let timeoutId: number | null = null;
-          
           // Check if already aborted
           if (abortController.signal.aborted) {
             executionComplete = true;
@@ -1791,11 +1787,6 @@ export class KernelManager extends EventEmitter {
               console.log(`🚫 Execution ${executionId} aborted`);
               executionComplete = true;
               
-              // Clear timeout if set
-              if (timeoutId !== null) {
-                clearTimeout(timeoutId);
-              }
-              
               resolve({
                 success: false,
                 error: new Error('Execution was aborted')
@@ -1805,30 +1796,12 @@ export class KernelManager extends EventEmitter {
           
           abortController.signal.addEventListener('abort', abortHandler);
           
-          // Set up timeout timer
-          timeoutId = setTimeout(() => {
-            if (!executionComplete) {
-              console.warn(`Execution ${executionId} timed out after ${timeoutMs}ms`);
-              executionComplete = true;
-              
-              const timeoutError = {
-                success: false,
-                error: new Error(`Execution timed out after ${timeoutMs}ms`)
-              };
-              
-              resolve(timeoutError);
-            }
-          }, timeoutMs);
-          
           // Execute the code
           // We know the execute method is available directly on the kernel object
           try {
             const executePromise = instance.kernel.execute(code, parent);
             
             executePromise.then((result) => {
-              // Clear timeout on completion
-              clearTimeout(timeoutId);
-              
               // Only process if execution hasn't been marked complete already
               if (!executionComplete) {
                 // Check if the execution result indicates an error (for Python kernels)
@@ -1866,9 +1839,6 @@ export class KernelManager extends EventEmitter {
                 resolve(executionResult);
               }
             }).catch((error) => {
-              // Clear timeout on error
-              clearTimeout(timeoutId);
-              
               // Only process if execution hasn't been marked complete already
               if (!executionComplete) {
                 console.error(`Error in execute for kernel ${kernelId}:`, error);
@@ -1903,9 +1873,6 @@ export class KernelManager extends EventEmitter {
               }
             });
           } catch (error) {
-            // Clear timeout on direct error
-            clearTimeout(timeoutId);
-            
             // Only process if execution hasn't been marked complete already
             if (!executionComplete) {
               console.error(`Error calling execute for kernel ${kernelId}:`, error);
@@ -1929,14 +1896,9 @@ export class KernelManager extends EventEmitter {
         
         // Use try/finally to guarantee cleanup
         try {
-          // Setup timeout for the streaming loop
-          const startTime = Date.now();
-          const streamTimeout = 60000; // 60 second timeout for stream monitoring
-          
           // Monitor the stream queue and yield results
-          while ((!executionComplete || streamQueue.length > 0) && 
-                 (Date.now() - startTime < streamTimeout) &&
-                 !abortController.signal.aborted) {
+          // Continue until execution is complete AND all queued events have been yielded
+          while ((!executionComplete || streamQueue.length > 0) && !abortController.signal.aborted) {
             // If there are items in the queue, yield them
             if (streamQueue.length > 0) {
               const event = streamQueue.shift();
@@ -1964,19 +1926,14 @@ export class KernelManager extends EventEmitter {
             }
           }
           
-          // Handle timeout
-          if (!executionComplete && Date.now() - startTime >= streamTimeout) {
-            console.warn(`Stream monitoring timed out for execution ${executionId}`);
-            return {
-              success: false,
-              error: new Error("Stream monitoring timed out")
-            };
+          // Check if execution was aborted during stream monitoring
+          if (abortController.signal.aborted && !executionComplete) {
+            throw new Error('Execution was aborted during stream monitoring');
           }
           
           // Wait for the final result
           const result = await executionPromise;
           return result;
-          
         } finally {
           // ALWAYS clean up event handlers regardless of how execution ends
           cleanupHandlers();
