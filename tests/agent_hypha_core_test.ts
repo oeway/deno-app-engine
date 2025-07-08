@@ -144,7 +144,7 @@ print("✅ Python math service registered successfully")
       console.log("📘 Connecting TypeScript agent to HyphaCore...");
       const tsConnectResult = await tsAgent.execute(`
 // Import hypha-rpc WebSocket client  
-const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.60/dist/hypha-rpc-websocket.mjs");
+const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.65/dist/hypha-rpc-websocket.mjs");
 
 // Connect to HyphaCore server with authentication token
 const _hypha_server = await hyphaWebsocketClient.connectToServer({
@@ -225,7 +225,7 @@ console.log("✅ TypeScript utils service registered successfully");
       console.log("📗 Connecting JavaScript agent to HyphaCore...");
       const jsConnectResult = await jsAgent.execute(`
 // Import hypha-rpc WebSocket client
-const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.60/dist/hypha-rpc-websocket.mjs");
+const hyphaWebsocketClient = await import("https://cdn.jsdelivr.net/npm/hypha-rpc@0.20.65/dist/hypha-rpc-websocket.mjs");
 
 // Connect to HyphaCore server with authentication token
 const _hypha_server = await hyphaWebsocketClient.connectToServer({
