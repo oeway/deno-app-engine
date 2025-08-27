@@ -25,6 +25,7 @@
     "test-hypha": "deno test -A --no-check tests/hypha-service-comprehensive.test.ts",
     "test-hypha-client": "deno run -A --no-check scripts/hypha-service-client.ts",
     "test-hypha-core-minimal": "deno test -A --no-check tests/hypha-core-minimal.test.ts",
+    "claudecode-service": "deno run -A --no-check claudecode/hypha-service.ts",
     "example": "deno run -A examples/main.ts",
     "example-ollama": "deno run -A --no-check examples/vectordb-ollama-example.ts",
     "demo-hypha-core": "deno run -A --no-check examples/hypha-core-concept-demo.ts",
