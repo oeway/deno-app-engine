@@ -637,6 +637,19 @@ async function registerService(server: any) {
       "require_context": true
     },
     
+    // Health check endpoint - simple and lightweight
+    async health() {
+      return {
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        uptime: Math.round((Date.now() - serviceStartTime) / 1000),
+        memoryUsage: {
+          rss: Deno.memoryUsage().rss,
+          heapUsed: Deno.memoryUsage().heapUsed
+        }
+      };
+    },
+    
     // Service methods
     async createKernel(params: any, context: {user: any, ws: string}) {
       try {
@@ -978,14 +991,16 @@ async function registerService(server: any) {
       };
     },
 
-    async getStatus(context: {user: any, ws: string}) {
+    async getStatus(context?: {user?: any, ws?: string}) {
       // Get total kernels across all namespaces
       const allKernels = kernelManager.getKernelIds();
       const totalKernels = allKernels.length;
       
       // Get kernels in current namespace - use a more robust approach
       // to avoid errors with partially initialized kernels
-      const userKernelIds = allKernels.filter(id => id.startsWith(context.ws + ':'));
+      // Handle case where context or workspace might be undefined (health checks)
+      const namespace = context?.ws || 'default';
+      const userKernelIds = namespace ? allKernels.filter(id => id.startsWith(namespace + ':')) : [];
       const namespaceKernelCount = userKernelIds.length;
       
       // Get active executions counts across all kernels
@@ -1013,7 +1028,7 @@ async function registerService(server: any) {
           }
           
           // Check if this kernel belongs to the user's namespace
-          if (kernelId.startsWith(context.ws + ':')) {
+          if (namespace && kernelId.startsWith(namespace + ':')) {
             namespaceActiveExecutions += execInfo.count;
             
             if (execInfo.isStuck) {

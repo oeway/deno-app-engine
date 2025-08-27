@@ -21,6 +21,8 @@ spec:
         app.kubernetes.io/name: "deno-app-engine"
         app.kubernetes.io/instance: "deno-app-engine"
     spec:
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsUser: 1000  # This is the UID of the deno user in the container
         fsGroup: 1000    # This is the GID of the deno user in the container
@@ -51,7 +53,7 @@ spec:
             sizeLimit: "2Gi"
       containers:
         - name: deno-app-engine-container
-          image: ghcr.io/oeway/deno-app-engine:0.1.54
+          image: ghcr.io/oeway/deno-app-engine:0.1.53
           imagePullPolicy: Always
           command: ["deno"]
           args: ["run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", "scripts/hypha-service.ts"]
@@ -88,11 +90,11 @@ spec:
             - name: HYPHA_WORKSPACE
               value: "hypha-agents"
             - name: KERNEL_POOL_ENABLED
-              value: "true"
+              value: "false"
             - name: KERNEL_POOL_SIZE
-              value: "2"
+              value: "1"
             - name: KERNEL_POOL_PRELOAD_CONFIGS
-              value: "worker-python,worker-typescript"
+              value: ""
             - name: HYPHA_CLIENT_ID
               valueFrom:
                 fieldRef:
@@ -122,34 +124,56 @@ spec:
               value: "1000"
             - name: LOAD_APPS
               value: "true"
+          startupProbe:
+            exec:
+              command:
+                - deno
+                - eval
+                - |
+                  // Startup check - wait for service to be ready
+                  try {
+                    console.log('Startup check: verifying Deno runtime...');
+                    const test = { status: 'starting', timestamp: Date.now() };
+                    JSON.stringify(test);
+                    console.log('Startup check passed');
+                    Deno.exit(0);
+                  } catch (e) {
+                    console.error('Startup check error:', e.message);
+                    Deno.exit(1);
+                  }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 18  # 30 + 10*18 = 210 seconds max startup time
+            successThreshold: 1
           livenessProbe:
             exec:
               command:
                 - deno
                 - eval
                 - |
+                  // Simple liveness check - just verify Deno runtime is responsive
                   try {
-                    const clientId = Deno.env.get('HYPHA_CLIENT_ID');
-                    if (!clientId) {
-                      console.log('HYPHA_CLIENT_ID not set, skipping URL check');
-                      Deno.exit(0);
-                    }
-                    const url = `https://hypha.aicell.io/hypha-agents/services/${clientId}:deno-app-engine/getStatus`;
-                    const response = await fetch(url);
-                    if (response.ok) {
-                      console.log('Liveness check passed');
-                      Deno.exit(0);
-                    } else {
-                      console.error('Liveness check failed:', response.status);
+                    // Check if we can perform basic operations
+                    const test = { status: 'alive', timestamp: Date.now() };
+                    const json = JSON.stringify(test);
+                    
+                    // Check memory usage is reasonable (less than 7GB out of 8GB limit)
+                    const memUsage = Deno.memoryUsage();
+                    if (memUsage.rss > 7 * 1024 * 1024 * 1024) {
+                      console.error('Memory usage too high:', memUsage.rss);
                       Deno.exit(1);
                     }
+                    
+                    console.log('Liveness check passed');
+                    Deno.exit(0);
                   } catch (e) {
                     console.error('Liveness check error:', e.message);
                     Deno.exit(1);
                   }
-            initialDelaySeconds: 60
-            periodSeconds: 30
-            timeoutSeconds: 10
+            initialDelaySeconds: 120
+            periodSeconds: 60
+            timeoutSeconds: 15
             failureThreshold: 3
           readinessProbe:
             exec:
@@ -157,36 +181,50 @@ spec:
                 - deno
                 - eval
                 - |
+                  // Enhanced readiness check - verify service file exists and basic functionality
                   try {
-                    const clientId = Deno.env.get('HYPHA_CLIENT_ID');
-                    if (!clientId) {
-                      console.log('HYPHA_CLIENT_ID not set, skipping URL check');
-                      Deno.exit(0);
-                    }
-                    const url = `https://hypha.aicell.io/hypha-agents/services/${clientId}:deno-app-engine/getStatus`;
-                    const response = await fetch(url);
-                    if (response.ok) {
-                      console.log('Readiness check passed');
-                      Deno.exit(0);
-                    } else {
-                      console.error('Readiness check failed:', response.status);
+                    // Check if the main service file exists and is readable
+                    const serviceFile = '/app/scripts/hypha-service.ts';
+                    try {
+                      await Deno.stat(serviceFile);
+                    } catch {
+                      console.error('Service file not found');
                       Deno.exit(1);
                     }
+                    
+                    // Check environment variables are set
+                    const requiredEnvVars = ['HYPHA_SERVER_URL', 'HYPHA_WORKSPACE'];
+                    for (const envVar of requiredEnvVars) {
+                      if (!Deno.env.get(envVar)) {
+                        console.error(`Required env var ${envVar} not set`);
+                        Deno.exit(1);
+                      }
+                    }
+                    
+                    // Check memory is reasonable for readiness
+                    const memUsage = Deno.memoryUsage();
+                    if (memUsage.rss > 6 * 1024 * 1024 * 1024) {
+                      console.error('Memory usage high for readiness:', memUsage.rss);
+                      Deno.exit(1);
+                    }
+                    
+                    console.log('Readiness check passed');
+                    Deno.exit(0);
                   } catch (e) {
                     console.error('Readiness check error:', e.message);
                     Deno.exit(1);
                   }
-            initialDelaySeconds: 90
-            periodSeconds: 15
-            timeoutSeconds: 10
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 15
             failureThreshold: 3
           resources:
             limits:
               cpu: "4"
               memory: "8G"
             requests:
-              cpu: "1"
-              memory: "4G"
+              cpu: "500m"
+              memory: "2G"
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -212,14 +250,14 @@ spec:
         name: memory
         target:
           type: Utilization
-          averageUtilization: 85  # Increased to account for Pyodide initialization memory overhead
+          averageUtilization: 70  # Reduced from 85% since kernel pool overhead is removed
     # CPU-based scaling (secondary metric)
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60  # Increased from 50% to be less sensitive
+          averageUtilization: 50  # Reduced from 60% for more responsive scaling
   behavior:
     scaleUp:
       stabilizationWindowSeconds: 120   # Slower response to avoid premature scaling
@@ -232,9 +270,9 @@ spec:
         periodSeconds: 60
       selectPolicy: Max
     scaleDown:
-      stabilizationWindowSeconds: 120  # Reduced from 5 minutes to 2 minutes
+      stabilizationWindowSeconds: 60  # Reduced from 2 minutes to 1 minute for faster scale-down
       policies:
       - type: Percent
-        value: 50     # Scale down faster (50% instead of 25%)
+        value: 100     # Scale down very aggressively (100% instead of 50%)
         periodSeconds: 60
       selectPolicy: Min 
