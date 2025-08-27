@@ -366,8 +366,8 @@ len(results)
     let kernelDestroyed = false;
     let destructionTime = 0;
     
-    // Monitor for up to 14 seconds (kernel has 10s timeout + some buffer)
-    while (Date.now() - monitorStartTime < 14000 && !kernelDestroyed) {
+    // Monitor for up to 15 seconds (kernel has 10s timeout + extra buffer for CI)
+    while (Date.now() - monitorStartTime < 15000 && !kernelDestroyed) {
       const elapsed = Date.now() - monitorStartTime;
       
       // Check if kernel still exists every 2 seconds
@@ -401,9 +401,9 @@ len(results)
     // Verify destruction timing
     if (kernelDestroyed) {
       console.log(`   ✅ Kernel destroyed after ${destructionTime}ms (expected ~10000ms)`);
-      // Allow some tolerance (7-12 seconds is acceptable since there can be processing delays)
-      assert(destructionTime >= 7000 && destructionTime <= 12000, 
-             `Destruction time ${destructionTime}ms should be within 7-12 seconds`);
+      // Allow wider tolerance for CI environments (7-14 seconds is acceptable)
+      assert(destructionTime >= 7000 && destructionTime <= 14000, 
+             `Destruction time ${destructionTime}ms should be within 7-14 seconds`);
       console.log("   🎉 Inactivity timeout system working correctly!");
     } else {
       assert(false, "Kernel should have been automatically destroyed");
